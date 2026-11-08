@@ -486,6 +486,23 @@ export function healthCard({ health = null, problems = [], reachable = true } = 
   return card({ kind: 'health-card', title: 'System health', icon: 'health', body, action: '<a class="link" href="/health" data-nav="health">Health</a>' });
 }
 
+// A playbook's "What Nova did" (Health, M7b), from its repairs as the core records them
+// ({ at, name, by, ok, said }), oldest first. A run of the same event in a row is one entry with
+// its count and its latest time (owner, 2026-11-08: the same line three times on the Duo cover).
+// The same event: the same repair (`name`), the same outcome (`ok`) and the same words (`said`),
+// all for this one problem. When it happened (`at`) is not part of it, and neither is who asked
+// (`by`): the line doesn't say who, so a person's retry that ended the same way reads the same.
+// Only neighbours merge; the same event after a different one is a new entry. The last `keep`.
+export function playbookEvents(repairs = [], keep = 3) {
+  const out = [];
+  for (const r of repairs ?? []) {
+    const last = out.at(-1);
+    if (last && last.name === r.name && last.ok === r.ok && last.said === r.said) { last.count++; last.at = r.at; continue; }
+    out.push({ name: r.name, ok: r.ok, said: r.said, at: r.at, count: 1 });
+  }
+  return out.slice(-keep);
+}
+
 // The Caps.view() shape, supplied by the caller. No fetching or defaults here: an absent view
 // must never turn into an editable set of guessed limits. The styleguide uses synthetic views.
 export function workCosts({ view = null, state = 'ready', error = '', invalid = {} } = {}) {

@@ -603,13 +603,14 @@ details.record { display: block; }
 .record[open] > summary::after { rotate: 90deg; }
 .record > summary:hover .record-label { color: var(--text-primary); }
 .record.is-failed .record-label, .record.is-skipped .record-label { color: var(--text-secondary); font-style: italic; }
-/* A turn's finished steps, folded into one line ("2 steps · 3 s", the frame's uc-steps). */
-.steps { border-left: 1px solid var(--border-subtle); padding-left: var(--space-3); }
-.steps > summary { display: flex; align-items: center; gap: var(--space-2); width: fit-content; list-style: none; cursor: pointer; border-radius: var(--radius-input); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
-.steps > summary::-webkit-details-marker { display: none; }
-.steps > summary::after { content: "›"; color: var(--text-faint); transition: rotate var(--motion-duration-fast) var(--motion-ease); }
-.steps[open] > summary::after { rotate: 90deg; }
-.steps > summary:hover { color: var(--text-primary); }
+/* A turn's finished steps, folded into one line ("2 steps · 3 s", the frame's uc-steps). Only the
+   folded group (renderSteps' <details>): an ordinary ol/ul.steps list keeps its marker room, no rule. */
+details.steps { border-left: 1px solid var(--border-subtle); padding-left: var(--space-3); }
+details.steps > summary { display: flex; align-items: center; gap: var(--space-2); width: fit-content; list-style: none; cursor: pointer; border-radius: var(--radius-input); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+details.steps > summary::-webkit-details-marker { display: none; }
+details.steps > summary::after { content: "›"; color: var(--text-faint); transition: rotate var(--motion-duration-fast) var(--motion-ease); }
+details.steps[open] > summary::after { rotate: 90deg; }
+details.steps > summary:hover { color: var(--text-primary); }
 .steps-list { display: flex; flex-direction: column; gap: var(--space-1); }
 .record-time { color: var(--text-secondary); }
 .record-time::before { content: "· "; }
@@ -819,6 +820,10 @@ kbd {
 .playbook { margin-top: var(--space-2); }
 .playbook .steps { margin-top: var(--space-1); }
 .playbook .settings-note + .steps { margin-bottom: var(--space-2); }
+.playbook-when { white-space: nowrap; }
+/* A problem is one column at every width; its actions are a row inside it, under its steps. */
+.problem-row .settings-text { flex-basis: 100%; }
+.problem-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
 
 /* ---- Settings: one structure, two layouts (Amendment 2026-10-30-C Part 1 §4) ------------------
    The grouped list of categories and the open category are the same DOM in every layout. On a

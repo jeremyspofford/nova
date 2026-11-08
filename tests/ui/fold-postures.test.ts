@@ -16,6 +16,7 @@ import { ROOT, browser, device, shotsDir, webkitBrowser } from './support.ts';
 import { foldDesignReady, openFoldView as open } from './fold-navigation.ts';
 import { POSTURES, VIEWS, reviewProfile } from './axe-support.ts';
 import { audit, problems, summary, withMesh, type FoldAudit } from './fold-support.ts';
+import { HEALTH_PROBLEM_ID, withHealthProblem } from './health-problem-fixture.ts';
 
 const record = (what: string, v: unknown) => console.log(`FOLD ${what} ${JSON.stringify(v)}`);
 const DESIGNS = ['orb-teal', 'companion-light', 'nova', 'obsidian', 'aurora', 'paper'];
@@ -229,6 +230,107 @@ test('F8/F9 gate: the fold postures match their baselines (Chromium and WebKit)'
       }
     }
     assert.deepEqual(bad, [], 'the fold postures match their baselines');
+  } finally {
+    for (const [, b] of bs) await b.close();
+    await stop(nova);
+  }
+});
+
+// ---- Health on the Duo cover (owner, 2026-11-08) ------------------------------------------------
+
+// The owner's screenshot: a problem card squeezed into ~60% of the cover screen beside a column
+// holding only "Mark as dealt with", the same event three times, and "1." and "2." cut at the
+// edge. The matrix above opens Health at duo-cover, but its audit measures overflow, crushed
+// lines, overlaps and card minimums, none of which a dead column or a ::marker trips, and the
+// baselines held no Health. So: the card's geometry at every width the postures span, both
+// engines, with a problem shaped like the owner's (health-problem-fixture.ts), and its baseline.
+const HEALTH_WIDTHS = [320, 380, 412, 600, 832, 1024, 1440];
+
+async function healthCard(page: Page) {
+  return page.evaluate((id) => {
+    const row = document.getElementById(`pr-${id}`)!;
+    const card = row.querySelector<HTMLElement>('.settings-text')!;
+    const view = document.getElementById('health-view')!;
+    const content = (e: Element) => { const r = e.getBoundingClientRect(); const cs = getComputedStyle(e); return { left: r.left + parseFloat(cs.paddingLeft) + parseFloat(cs.borderLeftWidth), right: r.right - parseFloat(cs.paddingRight) - parseFloat(cs.borderRightWidth) }; };
+    const c = content(card);
+    const v = content(view);
+    // What sits beside the card in its row: a second column, if anything.
+    const beside = [...row.children].filter((k) => k !== card && (k as HTMLElement).checkVisibility()).map((k) => k.className);
+    // Each list marker's left edge: drawn outside its item, it is as wide as its text in the item's font.
+    const probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
+    document.body.append(probe);
+    const markers = [...card.querySelectorAll('li')].map((li, i) => {
+      const cs = getComputedStyle(li);
+      const r = li.getBoundingClientRect();
+      if (cs.listStyleType === 'none' && getComputedStyle(li, '::marker').content === 'normal') return { text: '', left: r.left };
+      if (cs.listStylePosition === 'inside') return { text: '', left: r.left };
+      probe.style.font = cs.font;
+      probe.textContent = cs.listStyleType === 'decimal' ? `${i + 1}. ` : '• ';
+      return { text: (li.textContent ?? '').trim().slice(0, 24), left: r.left - probe.getBoundingClientRect().width };
+    });
+    probe.remove();
+    const resolve = card.querySelector('[data-action="resolve-problem"]');
+    const repair = card.querySelector('[data-action="repair-problem"]');
+    return {
+      share: (c.right - c.left) / (v.right - v.left), cardLeft: c.left, beside, markers,
+      // An ordinary ol/ul.steps (not the chat's folded <details class="steps">): no rule down its left.
+      ruled: [...card.querySelectorAll('ol.steps, ul.steps')].filter((l) => parseFloat(getComputedStyle(l).borderLeftWidth) > 0).map((l) => l.tagName.toLowerCase()),
+      resolveInCard: !!resolve, sameRow: !!resolve && !!repair && resolve.parentElement === repair.parentElement,
+      entries: [...card.querySelectorAll('.playbook ul.steps > li')].map((li) => (li.textContent ?? '').replace(/\s+/g, ' ').trim()),
+    };
+  }, HEALTH_PROBLEM_ID);
+}
+
+test('Health at the Duo cover: one full-width column, its actions in the card, markers inside it, events once (Chromium and WebKit)', { timeout: 600_000 }, async (t) => {
+  const bs = await engines();
+  if (typeof bs === 'string') return t.skip(bs);
+  const { m, nova } = await reviewProfile('nova-fold-health-');
+  const update = process.env.NOVA_UPDATE_BASELINES === '1';
+  mkdirSync(BASELINES, { recursive: true });
+  const bad: string[] = [];
+  try {
+    for (const [engine, b] of bs) {
+      for (const width of HEALTH_WIDTHS) {
+        const cover = width === POSTURES['duo-cover']!.width;
+        const d = await folded(b, { width, height: 900, touch: width < 600 });
+        try {
+          await d.page.clock.setFixedTime(new Date('2026-10-31T12:00:00.000Z'));
+          await withHealthProblem(d.ctx);
+          await open(d.page, `${m.base}/health`);
+          await d.page.locator(`#pr-${HEALTH_PROBLEM_ID} .playbook`).waitFor();
+          const at = `${engine} ${width}px /health`;
+          const g = await healthCard(d.page);
+          record(`health ${engine} ${width}`, { share: Math.round(g.share * 100) / 100, beside: g.beside, entries: g.entries.length });
+          if (g.share < 0.9) bad.push(`${at}: the problem card spans ${Math.round(g.share * 100)}% of the Health column (90% at least)`);
+          if (g.beside.length) bad.push(`${at}: a column beside the problem card: ${g.beside.join(', ')}`);
+          for (const mk of g.markers) if (mk.left < g.cardLeft - 0.5) bad.push(`${at}: the marker of “${mk.text}” starts ${Math.round(g.cardLeft - mk.left)}px left of the card`);
+          if (g.ruled.length) bad.push(`${at}: the chat's folded-steps rule draws a left rule on ${g.ruled.join(', ')}.steps`);
+          if (!g.resolveInCard || !g.sameRow) bad.push(`${at}: “Mark as dealt with” isn't in the card's action row beside “Try the repair now”`);
+          if (g.entries.length !== 2 || !/3 times/.test(g.entries[1] ?? '')) bad.push(`${at}: What Nova did is ${JSON.stringify(g.entries)}, not the two events with the repeated one counted`);
+          for (const pr of problems(await audit(d.page))) bad.push(`${at}: ${pr}`);
+          if (cover) {
+            // The backup folder's path (the profile's temporary home) differs each run: masked.
+            const file = join(BASELINES, `${engine}-duo-cover-health.png`);
+            const png = await d.page.screenshot({ animations: 'disabled', caret: 'hide', mask: [d.page.locator(`${MASK}, [data-resilience]`)] });
+            if (update || !existsSync(file)) {
+              if (!update && process.env.CI) bad.push(`${file}: no baseline (run with NOVA_UPDATE_BASELINES=1 and commit it)`);
+              else { writeFileSync(file, png); record(`baseline written ${engine} duo-cover /health`, file.slice(ROOT.length + 1)); }
+            } else {
+              const diff = differs(readFileSync(file), png);
+              record(`baseline ${engine} duo-cover /health`, { share: Math.round(diff.share * 10000) / 100 });
+              if (diff.size || diff.share > SHARE) {
+                bad.push(`${engine} duo-cover /health: ${diff.size ? 'a different size' : `${(diff.share * 100).toFixed(2)}% of pixels differ (at most ${SHARE * 100}%)`}`);
+                const dir = shotsDir();
+                if (dir) writeFileSync(join(dir, `fold-actual-${engine}-duo-cover-health.png`), png);
+              }
+            }
+          }
+          bad.push(...d.errors.map((e) => `${at}: page error ${e}`));
+        } finally { await d.ctx.close(); }
+      }
+    }
+    assert.deepEqual(bad, [], 'Health at the fold postures');
   } finally {
     for (const [, b] of bs) await b.close();
     await stop(nova);

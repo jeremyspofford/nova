@@ -2,7 +2,7 @@
 // automation rules, and Settings' identity, privacy, appearance and devices. Era 2's views
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request, Unreachable } from './core.js';
-import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, promotionActionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard, workCosts, diagnosticsDownload } from './components.js';
+import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, playbookEvents, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, promotionActionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard, workCosts, diagnosticsDownload } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
@@ -453,12 +453,17 @@ export function renderHealth(el) {
   const retained = el.querySelector('[data-work-limits]');
   const opened = [...el.querySelectorAll('.work-costs details, .diagnostics-download details')].map(d => d.open);
   const h = store.health;
-  const problem = (p, open) => `<li class="settings-row" id="pr-${esc(String(p.id))}">
+  // One column at every width: the problem's actions sit in its own card, under the steps they
+  // finish, never in a column of their own beside it (owner, 2026-11-08, the Duo cover screen).
+  const problem = (p, open) => {
+    const resolve = open ? `<button type="button" class="btn small" data-action="resolve-problem" data-problem="${esc(String(p.id))}">Mark as dealt with</button>` : '';
+    const pb = open ? playbookBlock(p, resolve) : '';
+    return `<li class="settings-row problem-row" id="pr-${esc(String(p.id))}">
   <div class="settings-text"><p class="settings-label">${esc(p.message)}</p><p class="settings-note">${open ? `${status(p.stops ? 'failed' : 'needs-you')} ` : ''}${esc(p.source)} · ${esc(ago(p.at))}${p.task_id ? ` · <a class="link" href="/tasks" data-action="open-task" data-task="${esc(p.task_id)}">the task</a>` : ''}</p>
-  ${open ? playbookBlock(p) : ''}
+  ${pb || (resolve ? `<div class="problem-actions">${resolve}</div>` : '')}
   ${p.detail ? `<details class="raw"><summary>Technical detail</summary><pre tabindex="0">${esc(p.detail)}</pre></details>` : ''}</div>
-  ${open ? `<div class="settings-control"><button type="button" class="btn small" data-action="resolve-problem" data-problem="${esc(String(p.id))}">Mark as dealt with</button></div>` : ''}
 </li>`;
+  };
   const fine = (k, c) => c.ok && !(k === 'passkeys' && !c.complete) && !(k === 'mesh' && (c.standby?.lag?.behind || c.replica?.sync?.unreachable_since || c.replica?.sync?.refused));
   const checks = h ? Object.entries(h.checks).map(([k, c]) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(CHECK_NAMES[k] ?? k)}</p><p class="settings-note">${esc(checkLine(k, c))}${k === 'mesh' ? ' <a class="link" href="/topology">View machines and services</a>' : ''}</p></div>${fine(k, c) ? '<span class="pill is-on">Fine</span>' : '<span class="pill is-warn">Needs a look</span>'}</li>`).join('') : '';
   const next = document.createElement('div');
@@ -488,15 +493,18 @@ ${store.resolved.length ? `<details class="panel raw"><summary>Dealt with recent
   [...el.querySelectorAll('.work-costs details, .diagnostics-download details')].forEach((d, i) => { d.open = opened[i] ?? false; });
 }
 
-// A problem's playbook (M7b): what Nova already did about it, and the steps that are the person's.
-function playbookBlock(p) {
+// A problem's playbook (M7b): what Nova already did about it, and the steps that are the person's,
+// then its actions in one row: the repair, and `resolve` (Mark as dealt with) beside it.
+// The same event several times in a row is one line with its count (playbookEvents).
+function playbookBlock(p, resolve = '') {
   const pb = store.resilience?.playbooks?.[p.id];
   if (!pb) return '';
-  const did = (pb.repairs ?? []).slice(-3).map((r) => `<li>${esc(r.said)} <time class="playbook-when" datetime="${esc(r.at)}">${esc(ago(r.at))}</time></li>`).join('');
+  const did = playbookEvents(pb.repairs).map((r) => `<li>${esc(r.said)} <span class="playbook-when">${r.count > 1 ? `${r.count} times, last ` : ''}<time datetime="${esc(r.at)}">${esc(ago(r.at))}</time></span></li>`).join('');
+  const repair = pb.repair ? `<button type="button" class="btn small" data-action="repair-problem" data-problem="${esc(String(p.id))}">Try the repair now</button>` : '';
   return `<div class="playbook" data-playbook="${esc(pb.id)}">
   ${did ? `<p class="settings-note"><b>What Nova did</b></p><ul class="steps">${did}</ul>` : pb.automatic ? `<p class="settings-note">${esc(pb.automatic)}</p>` : ''}
   <p class="settings-note"><b>What you can do</b></p><ol class="steps">${pb.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
-  ${pb.repair ? `<p><button type="button" class="btn small" data-action="repair-problem" data-problem="${esc(String(p.id))}">Try the repair now</button></p>` : ''}
+  ${repair || resolve ? `<div class="problem-actions">${repair}${resolve}</div>` : ''}
 </div>`;
 }
 
