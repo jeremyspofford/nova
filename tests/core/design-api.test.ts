@@ -52,7 +52,7 @@ test('list, one, and the schema the UI reads instead of keeping a copy', async (
   const { call, stop } = await boot();
   const list = await call('GET', '/design-systems');
   assert.equal(list.status, 200);
-  assert.deepEqual(list.body.map((d: { id: string }) => d.id).sort(), ['aurora', 'companion-light', 'nova', 'obsidian', 'orb-teal', 'paper']);
+  assert.deepEqual(list.body.map((d: { id: string }) => d.id).sort(), ['aurora', 'companion-light', 'nebula', 'nova', 'obsidian', 'orb-teal', 'paper']);
   assert.ok(list.body.every((d: { valid: boolean; problems: string[] }) => d.valid && d.problems.length === 0));
   assert.equal(list.body.find((d: { active: boolean }) => d.active).id, 'orb-teal');
   const one = await call('GET', '/design-systems/companion-light');
