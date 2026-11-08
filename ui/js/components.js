@@ -1127,3 +1127,76 @@ ${taskPicks(view)}${view.device.wake ? sleepPolicy(view) : ''}</section>`;
 export function settingsRow({ id = '', title, note = '', control = '' }) {
   return `<li class="settings-row"${id ? ` id="${esc(id)}"` : ''}><div class="settings-text"><p class="settings-label">${esc(title)}</p>${note ? `<p class="settings-note">${esc(note)}</p>` : ''}</div>${control ? `<div class="settings-control">${control}</div>` : ''}</li>`;
 }
+
+// ---- About Nova, the changelog, the pipeline and the version stamp ---------------------------------
+// docs/builder-packet/nova-versioning-changelog-2026-11-03.md and its 2026-11-06 delta, built against
+// the approved compositions (styleguide ui-about). Data in, HTML out: a build is GET /api/v1/version's,
+// a release GET /api/v1/changelog's, a pipeline item GET /api/v1/pipeline's.
+
+// An ISO time as Health's build stamp says it: "2026-11-06 21:02 UTC".
+const utcWords = (iso) => `${String(iso).slice(0, 16).replace('T', ' ')} UTC`;
+// Whether this build is the latest merged: 'current', 'pending' (a redeploy is waiting) or 'unknown'.
+export const buildTone = (v) => (v?.behind === true ? 'pending' : v?.behind === false ? 'current' : 'unknown');
+
+// The version stamp at the rail's foot (so also at the foot of a phone's navigation drawer): the
+// version and the short commit (open rail), a "v" (slim rail), amber with a dot when a redeploy is
+// pending. A link to About. Nothing until the build is known.
+export function versionStamp(v) {
+  if (!v?.version) return '';
+  const pending = buildTone(v) === 'pending';
+  const words = `Nova ${v.version}${v.commit_short ? `, build ${v.commit_short}` : ''}${pending ? ', redeploy pending' : ''}`;
+  return `<a class="rail-stamp" href="/about"${pending ? ' data-pending' : ''} title="${esc(words)}. About Nova"><span class="sr-only">${esc(words)}. About Nova</span><span class="rail-stamp-v" aria-hidden="true">v</span>${pending ? '<span class="rail-stamp-dot" aria-hidden="true"></span>' : ''}<span class="rail-stamp-full" aria-hidden="true">${esc(v.version)}${v.commit_short ? ` <span class="rail-stamp-commit">${esc(v.commit_short)}</span>` : ''}${pending ? ' redeploy pending' : ''}</span></a>`;
+}
+
+const ABOUT_LINE = {
+  current: 'This is the latest merged build.',
+  pending: 'A newer merged build is waiting to be deployed. Until Nova restarts on it, you are using the older one shown here.',
+  unknown: 'Nova can’t tell whether a newer merged build is waiting: the deploy step hasn’t told it which one is latest.',
+};
+const ABOUT_LINKS = [['/changelog', 'What’s new', 'Every change, newest first'], ['/pipeline', 'Where Nova stands', 'Merged, in progress and planned work'], ['/health', 'Health', 'What is working right now']];
+
+// About Nova: the version, the running build against the latest merged one ("redeploy pending" when
+// it is behind), when it was built (or, said as such, when it started), and the way on.
+// `state`: 'ready' | 'loading' | 'failed'.
+export function aboutCard({ build = null, state = 'ready' } = {}) {
+  const links = `<ul class="about-links" aria-label="More about Nova">${ABOUT_LINKS.map(([href, name, line]) => `<li><a class="about-link" href="${href}"><span class="about-link-text"><span class="about-link-name">${name}</span><span class="about-link-line">${line}</span></span>${ICONS.chevron}</a></li>`).join('')}</ul>`;
+  if (state === 'failed') return `<section class="card about-card" aria-labelledby="about-card-title" data-about-state="failed"><h3 class="card-title" id="about-card-title">Nova</h3><p class="about-state" data-tone="unknown" role="status"><span class="about-dot" aria-hidden="true"></span><span>Nova’s server didn’t answer, so this page can’t say which build is running.</span></p>${links}</section>`;
+  if (state === 'loading' || !build) return `<section class="card about-card" aria-labelledby="about-card-title" data-waiting><h3 class="card-title" id="about-card-title">Nova</h3>${waitingLine('Asking Nova which build is running', { key: 'view-about' })}</section>`;
+  const tone = buildTone(build);
+  const when = build.built_at ? ['Built', utcWords(build.built_at)] : build.started_at ? ['Started', `${utcWords(build.started_at)}. No build date was given, so this is when Nova started.`] : null;
+  const latest = build.latest ? `<span class="about-mono">${esc(build.latest.commit.slice(0, 8))}</span>, merged ${esc(utcWords(build.latest.merged_at))}` : 'Not known';
+  const facts = [['Version', esc(build.version)], ['Running build', build.commit_short ? `<span class="about-mono">${esc(build.commit_short)}</span>` : 'Not known'], ...(when ? [[when[0], esc(when[1])]] : []), ['Latest merged', latest]];
+  return `<section class="card about-card" aria-labelledby="about-card-title" data-about-state="${tone}">
+<h3 class="card-title" id="about-card-title">Nova ${esc(build.version)}</h3>
+<p class="about-state" data-tone="${tone}" role="status"><span class="about-dot" aria-hidden="true"></span><span>${esc(build.words)}</span></p>
+<p class="about-line">${ABOUT_LINE[tone]}</p>
+<dl class="about-facts">${facts.map(([k, v]) => `<div class="about-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
+${links}</section>`;
+}
+
+const DAY = new Intl.DateTimeFormat('en', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
+const dayWords = (d) => { const t = Date.parse(`${d}T12:00:00Z`); return Number.isFinite(t) ? DAY.format(t) : String(d); };
+const SECTION_WORDS = { Added: 'New', Changed: 'Changed', Removed: 'Removed', Fixed: 'Fixed', Security: 'Safer' };
+
+// One changelog entry: a version (or, `waiting`, the changes merged but not yet in one), its date and
+// its sections in plain words. `running`: the version this Nova is running.
+export function changelogEntry({ version = '', date = '', sections = [], running = false, waiting = false } = {}) {
+  const hid = `cl-${waiting ? 'waiting' : String(version).replace(/[^\w-]/g, '-')}`;
+  const title = waiting ? 'Merged, not yet in a version' : `Nova ${esc(version)}`;
+  const meta = waiting ? 'These come with the next version.' : `${esc(dayWords(date))}${running ? ' · the version you’re running' : ''}`;
+  return `<section class="changelog-entry${running ? ' is-running' : ''}${waiting ? ' is-waiting' : ''}" aria-labelledby="${hid}"${waiting ? ' data-waiting-changes' : ` data-version="${esc(version)}"`}>
+<header class="changelog-head"><h3 class="changelog-title" id="${hid}">${title}</h3><p class="changelog-meta">${meta}</p></header>
+${sections.map((s) => `<h4 class="changelog-section">${esc(SECTION_WORDS[s.name] ?? s.name)}</h4><ul class="changelog-items">${s.items.map((it) => `<li>${esc(it)}</li>`).join('')}</ul>`).join('')}</section>`;
+}
+
+export const PIPELINE_STATES = { merged: 'Merged', progress: 'In progress', designed: 'Designed', none: 'Not started' };
+const EVIDENCE_KIND = { gate: 'Gate evidence', ledger: 'Ledger entry', plan: 'Plan', roadmap: 'Roadmap' };
+
+// One item on the pipeline dashboard: its name and state, and the evidence behind the state one tap
+// away (a ledger entry's own plain words, or the gate, plan or roadmap section it stands on).
+export function pipelineRow({ id = '', name, state, why = '', evidence = null }) {
+  const s = PIPELINE_STATES[state] ? state : 'none';
+  const parts = evidence ? [['What changed', evidence.changed], ['What you can now do', evidence.now], ['Still unfinished', evidence.unfinished]].filter(([, t]) => t) : [];
+  const ev = evidence ? `<p class="pipeline-ev-src">${esc(EVIDENCE_KIND[evidence.kind] ?? 'Evidence')}${evidence.pull ? `, pull request ${esc(String(evidence.pull))}` : ''}${evidence.date ? `, ${esc(dayWords(evidence.date))}` : ''}: <span class="pipeline-ev-title">${esc(evidence.title)}</span> <span class="pipeline-ev-path">${esc(evidence.path)}</span></p>${parts.map(([k, t]) => `<p class="pipeline-ev-part"><span class="pipeline-ev-k">${k}:</span> ${esc(t)}</p>`).join('')}` : '<p class="pipeline-ev-src">No evidence on file.</p>';
+  return `<li class="pipeline-row" data-p="${s}"${id ? ` data-item="${esc(id)}"` : ''}><details class="pipeline-item"><summary class="pipeline-sum"><span class="pipeline-mark" data-p="${s}" aria-hidden="true"></span><span class="pipeline-name">${esc(name)}</span><span class="pipeline-state" data-p="${s}">${PIPELINE_STATES[s]}</span></summary><div class="pipeline-ev">${why ? `<p class="pipeline-why">${esc(why)}</p>` : ''}${ev}</div></details></li>`;
+}
