@@ -3,7 +3,7 @@
 // When it isn't, a GET is answered from the cache and marked x-nova-offline, and the page says
 // so: an honest offline state, never stale data presented as live. Changes (POST, PUT, DELETE)
 // and the event streams are never cached or answered offline.
-const VERSION = 'nova-shell-v61';
+const VERSION = 'nova-shell-v62';
 const SHELL = [
   '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png',
   '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css', '/styles/stage2.css', '/styles/palette.css', '/styles/status-icon.css',

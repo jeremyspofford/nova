@@ -19,7 +19,7 @@
   - orb() remains in two places:
     - the styleguide orb section, where design systems still define orb_states{}
     - /pair, which may load only public files. Switching it means adding status-icon.js to the unauthenticated allowlist in src/core/mesh/access.ts, an owner security decision.
-  - The service worker caches status-icon.js and status-icon.css in the shell and moves to v61.
+  - The service worker caches status-icon.js and status-icon.css in the shell and moves to v62.
 - What you can now do: see Nova's live state as the ribbon icon in the rail, the title bar and an empty chat, and each task's own state on its row.
 - Still unfinished: three things.
   - /pair keeps the old orb until the owner decides on the allowlist.
