@@ -992,3 +992,85 @@ kbd {
 .backups-settings .code-block pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .backups-error { color: var(--text-primary); }
 .backups-settings .input[aria-invalid="true"] { border-color: var(--status-attention); }
+
+/* About Nova, What's new and Where Nova stands (ui/js/about.js; components aboutCard, changelogEntry,
+   pipelineRow, versionStamp), after the approved ui-about compositions. Tokens only; no breakpoints
+   here: rows wrap where the width runs out. */
+.view-crumb { margin: 0; }
+.view-crumb-link { display: inline-flex; align-items: center; gap: var(--space-1); min-height: var(--hit); color: var(--text-secondary); font-size: var(--type-small); text-decoration: none; }
+.view-crumb-link:hover { color: var(--text-primary); }
+.about-mono { font-family: var(--font-mono); }
+
+/* The version stamp at the rail's foot is a link to About, as tall as any target. */
+a.rail-stamp { position: relative; flex: none; min-width: var(--hit); min-height: var(--hit); border-radius: var(--radius-input); text-decoration: none; }
+a.rail-stamp::before { content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, var(--hit)); height: max(100%, var(--hit)); translate: -50% -50%; }
+a.rail-stamp:hover { background: var(--surface-card-hover); color: var(--text-primary); }
+a.rail-stamp[data-pending]:hover { color: var(--status-attention); }
+
+/* About Nova */
+.about-card { gap: var(--space-3); }
+.about-state { display: flex; align-items: baseline; gap: var(--space-2); margin: 0; font-weight: var(--type-weight-strong); }
+.about-state[data-tone="current"] { color: var(--status-ok); }
+.about-state[data-tone="pending"] { color: var(--status-attention); }
+.about-state[data-tone="unknown"] { color: var(--text-secondary); }
+.about-dot { flex: none; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: currentColor; }
+.about-state[data-tone="unknown"] .about-dot { background: transparent; border: 1px dashed currentColor; }
+.about-line { margin: 0; color: var(--text-secondary); }
+.about-facts { margin: 0; }
+.about-fact { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); padding: var(--space-3) 0; border-top: 1px solid var(--border-subtle); font-size: var(--type-small); }
+.about-fact dt { flex: 0 0 calc(var(--space-8) * 2); color: var(--text-secondary); }
+.about-fact dd { flex: 1 1 calc(var(--space-8) * 4); min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.about-links { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border-subtle); }
+.about-links li { border-bottom: 1px solid var(--border-subtle); }
+.about-link { display: flex; align-items: center; gap: var(--space-3); min-height: var(--hit); padding: var(--space-2) 0; color: var(--text-primary); text-decoration: none; }
+.about-link:hover .about-link-name { color: var(--accent-primary); }
+.about-link .icon { flex: none; width: var(--space-5); height: var(--space-5); color: var(--text-secondary); }
+.about-link-text { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.about-link-name { font-weight: var(--type-weight-strong); }
+.about-link-line { color: var(--text-secondary); font-size: var(--type-small); }
+
+/* What's new */
+.changelog-pin { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.changelog-pin p { margin: 0; }
+.changelog-kicker { color: var(--text-secondary); font-size: var(--type-caption); text-transform: uppercase; letter-spacing: 0.08em; }
+.changelog-running { font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display); }
+.changelog-gap { color: var(--text-secondary); font-size: var(--type-small); }
+.changelog-list { display: flex; flex-direction: column; gap: var(--space-6); }
+.changelog-entry { display: flex; flex-direction: column; gap: var(--space-2); }
+.changelog-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); padding-bottom: var(--space-2); border-bottom: 1px solid var(--border-subtle); }
+.changelog-title { margin: 0; font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display); }
+.changelog-meta { margin: 0; color: var(--text-secondary); font-size: var(--type-small); }
+.changelog-entry.is-running .changelog-meta { color: var(--accent-primary); }
+.changelog-entry.is-waiting .changelog-title { color: var(--text-secondary); }
+.changelog-section { margin: var(--space-2) 0 0; color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); text-transform: uppercase; letter-spacing: 0.08em; }
+.changelog-items { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding-left: var(--space-5); }
+.changelog-problems { color: var(--text-secondary); font-size: var(--type-small); }
+.changelog-problems summary { cursor: pointer; width: fit-content; }
+
+/* Where Nova stands */
+.pipeline-tally { display: grid; grid-template-columns: repeat(auto-fit, minmax(calc(var(--space-8) * 2), 1fr)); gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.pipeline-col { display: flex; min-width: 0; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.pipeline-col-name { flex: 1; color: var(--text-secondary); font-size: var(--type-small); }
+.pipeline-col-n { font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display); }
+.pipeline-note { margin: 0; color: var(--text-secondary); font-size: var(--type-small); overflow-wrap: anywhere; }
+.pipeline-stream { display: flex; flex-direction: column; }
+.pipeline-stream-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-input); background: var(--surface-card-hover); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); }
+.pipeline-stream-n { color: var(--text-secondary); font-weight: var(--type-weight-regular); }
+.pipeline-list { margin: 0; padding: 0; list-style: none; }
+.pipeline-row { border-bottom: 1px solid var(--border-subtle); }
+.pipeline-sum { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); padding-inline: var(--space-3); cursor: pointer; font-size: var(--type-small); list-style: none; }
+.pipeline-sum::-webkit-details-marker { display: none; }
+.pipeline-name { flex: 1 1 calc(var(--space-8) * 4); min-width: 0; overflow-wrap: anywhere; }
+.pipeline-state { color: var(--text-secondary); }
+.pipeline-state[data-p="merged"] { color: var(--status-ok); }
+.pipeline-state[data-p="progress"] { color: var(--status-working); }
+.pipeline-mark { display: inline-block; flex: none; width: var(--space-4); height: var(--space-4); border: 2px solid var(--text-faint); border-radius: var(--radius-pill); }
+.pipeline-mark[data-p="merged"] { border-color: var(--status-ok); background: var(--status-ok); }
+.pipeline-mark[data-p="progress"] { position: relative; overflow: hidden; border-color: var(--status-working); }
+.pipeline-mark[data-p="progress"]::after { content: ""; position: absolute; inset: 0 0 0 50%; background: var(--status-working); }
+.pipeline-mark[data-p="designed"] { border-style: dashed; border-color: var(--status-waiting); }
+.pipeline-ev { display: flex; flex-direction: column; gap: var(--space-2); padding: 0 var(--space-3) var(--space-3) var(--space-8); color: var(--text-secondary); font-size: var(--type-small); }
+.pipeline-ev p { margin: 0; overflow-wrap: anywhere; }
+.pipeline-ev-title { color: var(--text-primary); }
+.pipeline-ev-path { font-family: var(--font-mono); }
+.pipeline-ev-k { color: var(--text-primary); font-weight: var(--type-weight-strong); }

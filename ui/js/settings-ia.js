@@ -14,6 +14,7 @@ export const CATEGORIES = Object.freeze([
   { id: 'devices', label: 'Devices', summary: 'Phones and computers paired with Nova', parts: ['devices'] },
   { id: 'capture', label: 'Capture', summary: 'Sources, consent, and what Nova remembers', parts: ['capture'] },
   { id: 'services', label: 'Services', summary: 'How Nova runs its services here', parts: ['services'] },
+  { id: 'about', label: 'About Nova', summary: 'Its version and build, what’s new, where it stands', parts: ['about'] },
   { id: 'security', label: 'Security', summary: 'Passkeys that confirm tier-3 actions here', parts: ['security'] },
   { id: 'backups', label: 'Backups and changes', summary: 'Backup folders, checkpoints, restores and changes', parts: ['backups', 'checkpoints', 'changes'] },
   { id: 'config', label: 'Configuration', summary: 'Every setting of yours, a few questions, or a file', parts: ['form', 'config'] },
@@ -24,6 +25,7 @@ export const CATEGORIES = Object.freeze([
 export const GROUPS = Object.freeze([
   { title: 'You', cats: ['you', 'appearance', 'privacy'] },
   { title: 'What Nova works with', cats: ['connections', 'models', 'devices', 'capture', 'services'] },
+  { title: 'About', cats: ['about'] },
   { title: 'Keeping Nova safe', cats: ['security', 'backups', 'config', 'danger'] },
 ]);
 
@@ -54,6 +56,7 @@ export const ENTRIES = Object.freeze([
   { cat: 'backups', label: 'Changes', target: 'changes', words: ['changes', 'updates', 'update', 'extensions', 'plugins', 'add-ons', 'upgrade', 'new features'] },
   { cat: 'config', label: 'Configuration file', target: 'config', words: ['configuration', 'config', 'nova.config.json', 'import', 'export', 'pack', 'user pack', 'settings file', 'bring in settings', 'json'] },
   { cat: 'config', label: 'Your settings', target: 'config-form', words: ['all my settings', 'every setting', 'timezone', 'time zone', 'quiet hours', 'do not disturb', 'warmth', 'speaking up', 'proactive', 'use the default', 'back to default', 'defaults', 'guided setup', 'questions', 'layer', 'your pack'] },
+  { cat: 'about', label: 'About Nova', target: 'about', words: ['about', 'version', 'which version', 'build', 'commit', 'running build', 'redeploy', 'deploy', 'latest build', 'changelog', 'whats new', 'what changed', 'release notes', 'pipeline', 'roadmap', 'where nova stands', 'progress', 'milestones'] },
   { cat: 'danger', label: 'Erase Nova', target: 'danger-zone', words: ['reset', 'erase', 'delete everything', 'start over', 'factory reset', 'wipe', 'export', 'remove nova', 'uninstall'] },
 ]);
 

@@ -13,6 +13,10 @@ export const DESTINATIONS = Object.freeze([
   { id: 'settings', label: 'Settings', path: '/settings' },
   { id: 'capture', label: 'Capture', path: '/capture', parent: 'settings' },
   { id: 'topology', label: 'Machines and services', path: '/topology', parent: 'settings' },
+  // Settings › About Nova, and the two pages it leads to (also reached from the version stamp).
+  { id: 'about', label: 'About Nova', path: '/about', parent: 'settings' },
+  { id: 'changelog', label: 'What’s new', path: '/changelog', parent: 'settings' },
+  { id: 'pipeline', label: 'Where Nova stands', path: '/pipeline', parent: 'settings' },
 ]);
 
 export const destination = (id) => DESTINATIONS.find((d) => d.id === id) ?? null;

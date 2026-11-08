@@ -1,0 +1,32 @@
+**2026-11-08 · Versioning · About, in-app changelog, footer stamp and pipeline dashboard**
+- What changed: the surfaces from nova-versioning-changelog-2026-11-03.md and nova-about-deploy-visibility-delta-2026-11-06.md (versioning-deploy.md:83-85), built to the endpoint exposure audit (docs/builder-packet/nova-endpoint-exposure-audit-2026-11-08.md, filed here).
+  - About (/about, a Settings destination via parent: 'settings', so not a new top-level place) shows:
+    - the version
+    - the running commit against the latest merged commit, with "redeploy pending" when behind (from /api/v1/version)
+    - the build and start time
+    - links to the changelog, the pipeline and Health
+  - /changelog renders GET /api/v1/changelog. src/core/changelog.ts reads CHANGELOG.md back with the generator's own rules (scripts/changelog.js now imports them), plus the fragments still waiting in docs/changelog/. A test checks the page equals what the generator writes, so there is never a hand-kept copy.
+  - /pipeline renders GET /api/v1/pipeline. src/core/pipeline.ts builds it per request from ROADMAP-AND-GATES.md, the docs/evidence/ gate files, docs/plans/M*.md, LEDGER.md history and docs/ledger/*.md, with one workstream per ledger area, as shipped, in-progress and specced.
+  - Both endpoints are read-only, at the access level of /version:
+    - the hub screen and paired phones or browsers can read them; no session gets 401, a paired computer gets 403, writes get 405
+    - only fixed files are read, plain files only, size-capped, with no network calls
+    - responses carry repo-relative paths only
+  - The rail stamp links to About. On a phone it sits at the foot of the navigation drawer, as the approved composition shows.
+  - The service worker:
+    - caches about.js in the shell
+    - lists the three pages as app pages
+    - never caches the changelog or pipeline responses, which are live like the version
+    - moves to cache v56
+  - A styleguide entry covers the About card, a changelog entry, the stamp and a pipeline row.
+- What you can now do: open About from Settings or the stamp, see whether the preview is behind, read what's new in the app, and see what has shipped and what's coming.
+- Still unfinished: three things.
+  - "In progress" has thin data: the repo knows no open PRs, so it means a partly gated milestone or an unfinished series in the ledger.
+  - On a phone the stamp shows only while the drawer is open.
+  - The changelog and pipeline pages are also registered under Settings, because the navigation tests require every page to be reachable.
+- Checked: locally, before CI.
+  - 14 new tests: changelog parser, pipeline generator, and endpoint auth and exposure, plus a UI test across 2 schemes × 2 layouts.
+  - typecheck, lint:tokens and check:themes.
+  - The shots walkthrough passed 133/133.
+  - UI: navigation-drawn, navigation-reachability, command-palette, health-caps-diagnostics, m9-targets, offline, fold-postures and posture-sweep.
+  - Full npm test locally had 11 failures in untouched tests; provider-guard fails about half the time on unmodified main as well. CI is the gate.
+  - Screenshots are in docs/screenshots/about-changelog-2026-11-08/.
