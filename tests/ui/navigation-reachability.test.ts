@@ -160,7 +160,7 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
           const target = url.pathname + url.hash;
           if (!queued.has(target)) { queued.add(target); queue.push([...path, link]); }
         }
-        for (const [selector, label] of [['#more-btn[aria-expanded="false"]', 'More'], ['#nav-menu[aria-expanded="false"]', 'Navigation'], ['#menu', 'Conversations'], ['#new-chat', 'New conversation']] as const) {
+        for (const [selector, label] of [['#more-btn[aria-expanded="false"]', 'More'], ['#nav-menu[aria-expanded="false"]', 'Navigation'], ['#menu', 'Conversations'], ['#nav-all', 'All conversations'], ['#new-chat', 'New conversation']] as const) {
           // Behind an open drawer the page is inert: its buttons aren't doors from here.
           if (!buttons.has(selector) && await page.locator(selector).isVisible() && !await page.locator(selector).evaluate((e) => !!e.closest('[inert]'))) { buttons.add(selector); queue.push([...path, { button: selector, label }]); }
         }

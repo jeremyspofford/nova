@@ -215,7 +215,9 @@ test('M9 gate, foldable 3: nothing under the hinge, in the book and laptop postu
       await d.page.goto(`${m.base}/c/${CHAT}`);
       await screen(d.page, cdp, w, h, hinge);
       await settled(d.page, 'chat');
-      await d.page.click('#menu');
+      // A cover screen (the phone layout) has no conversations button: All conversations in its drawer.
+      if (await d.page.locator('#menu').isVisible()) await d.page.click('#menu');
+      else { await d.page.click('#nav-menu'); await d.page.click('#nav-all'); }
       await d.page.waitForSelector('.app.drawer-open');
       await check('conversations open');
       await d.page.keyboard.press('Escape');

@@ -90,7 +90,9 @@ test('M9 gate, hit areas: every control at a phone’s width is 44×44, 48×48 t
     await check('chat, typing');
     await page.locator('#thread .msg-user .bubble').first().tap();
     await check('chat, a message tapped');
-    await page.click('#menu');
+    // A phone has no conversations button: All conversations in the navigation drawer opens it.
+    await page.click('#nav-menu');
+    await page.click('#nav-all');
     await page.waitForSelector('.app.drawer-open');
     await check('chat, conversations open', '#sidebar');
     await page.keyboard.press('Escape');

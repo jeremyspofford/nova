@@ -905,8 +905,10 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.waitForSelector('.prose');
   await p.waitForTimeout(500);
   await shot(p, 'mobile-chat');
-  await p.click('#menu');
+  // A phone's recent conversations are in its navigation drawer (owner decision 2026-11-08, option B).
+  await p.click('#nav-menu');
   await p.waitForTimeout(450);
+  check('mobile: the navigation drawer lists recent conversations', await p.evaluate(() => document.querySelectorAll('#rail .rail-recent a[href^="/c/"]').length > 0 && !!document.getElementById('nav-all')));
   await shot(p, 'mobile-drawer');
   await p.keyboard.press('Escape');
   // The phone's places are in the navigation drawer (owner decision 2026-11-08).
