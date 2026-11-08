@@ -33,6 +33,8 @@
 .jv-dim.jv-faint { opacity: 0.22; }
 .jv-hi { stroke: color-mix(in oklch, var(--jv-c) 70%, var(--jv-ink)); }
 .jv-flash { stroke: var(--jv-ink); }
+/* Success: a dim full ring under a bright heavy sweep (.jv-tail) led by its head (.jv-flash). */
+.jv-base { opacity: 0.4; }
 .jv-amber { stroke: var(--jv-amber); }
 .jv-red { stroke: var(--jv-red); }
 .jv-grey, .jv-off { stroke: var(--jv-grey); }
@@ -50,8 +52,8 @@
 .jv-a-pulse { animation: jv-pulse var(--motion-pulse) var(--motion-ease) infinite alternate; }
 /* Speaking with a voice: the radius follows the amplitude, not a loop. */
 .jv-amp { scale: calc(0.9 + var(--jv-amp) * 0.16); transition: scale var(--motion-duration-fast) var(--motion-ease); }
-/* Success shows for one second, so its one-second loop sweeps once. */
-.jv-a-sweep { opacity: 0; animation: jv-sweep calc(var(--motion-breathe) / 6) var(--motion-ease) infinite; }
+/* Success shows for one second, so its one-second loop sweeps once; the morph to idle fades it. */
+.jv-a-sweep { animation: jv-turn calc(var(--motion-breathe) / 6) var(--motion-ease) infinite; }
 .jv-a-fill { animation: var(--jv-fill) var(--motion-breathe) var(--motion-ease) infinite; }
 .jv-f1 { --jv-fill: jv-fill-1; } .jv-f2 { --jv-fill: jv-fill-2; } .jv-f3 { --jv-fill: jv-fill-3; } .jv-f4 { --jv-fill: jv-fill-4; }
 .jv-f5 { --jv-fill: jv-fill-5; } .jv-f6 { --jv-fill: jv-fill-6; } .jv-f7 { --jv-fill: jv-fill-7; } .jv-f8 { --jv-fill: jv-fill-8; }
@@ -59,9 +61,8 @@
 @keyframes jv-breathe { from { opacity: 0.55; } to { opacity: 1; } }
 @keyframes jv-turn { from { rotate: 0deg; } to { rotate: 360deg; } }
 @keyframes jv-turn-rev { from { rotate: 0deg; } to { rotate: -360deg; } }
-@keyframes jv-seg { 0%, 100% { opacity: 0.5; } 18% { opacity: 1; } 40% { opacity: 0.5; } }
+@keyframes jv-seg { 0%, 100% { opacity: 0.72; } 18% { opacity: 1; } 40% { opacity: 0.72; } }
 @keyframes jv-pulse { from { scale: 0.92; } to { scale: 1.04; } }
-@keyframes jv-sweep { from { rotate: 0deg; opacity: 1; } 85% { opacity: 1; } to { rotate: 360deg; opacity: 0; } }
 /* The progress arc fills in eight steps over the loop, holds, and empties together. */
 @keyframes jv-fill-1 { 0% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
 @keyframes jv-fill-2 { 0%, 10% { opacity: 0.2; } 12% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0.2; } }
@@ -76,7 +77,6 @@
 .jv-ring[data-reduced] *, .jv-surface[data-reduced] .jv-ring * { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   .jv-ring * { animation: none; }
-  .jv-a-sweep { opacity: 1; }
 }
 
 /* ---- the styleguide entry: a near-black HUD surface with hairline cyan dividers ---- */
@@ -116,7 +116,7 @@
 
 /* The sheet: every state at 16, 24, 48 and 96 px, one row per state, hairlines between. */
 .jv-sheet-wrap { margin-top: var(--space-5); overflow-x: auto; }
-.jv-sheet { display: grid; grid-template-columns: minmax(calc(var(--space-8) + var(--space-5)), auto) repeat(4, minmax(var(--space-7), auto)); column-gap: var(--space-5); width: max-content; }
+.jv-sheet { display: grid; grid-template-columns: minmax(calc(var(--space-8) + var(--space-5)), 1fr) repeat(4, minmax(var(--space-7), 1fr)); column-gap: var(--space-5); width: max-content; min-width: 100%; }
 .jv-sheet > * { display: flex; align-items: center; justify-content: center; padding-block: var(--space-2); border-bottom: 1px solid var(--jv-line); }
 .jv-head { color: var(--jv-text-2); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-mono); }
 .jv-sheet > .jv-head:first-child, .jv-name { justify-content: flex-start; }

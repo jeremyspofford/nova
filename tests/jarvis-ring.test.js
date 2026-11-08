@@ -41,7 +41,7 @@ test('at 24 px and under: no ticks, fewer segments, heavier strokes', () => {
   assert.equal(jarvisTier(16), 's');
   assert.equal(jarvisTier(24), 's');
   assert.equal(jarvisTier(25), 'm');
-  for (const status of JARVIS_STATES) {
+  for (const status of JARVIS_STATES.filter((s) => s !== 'offline')) { // offline has no ticks at any size
     const small = jarvisRing({ status, size: 16 }), big = jarvisRing({ status, size: 96 });
     assert.ok(circles(small) < circles(big), `${status}: fewer pieces small (${circles(small)} vs ${circles(big)})`);
     assert.ok(Math.min(...widths(small)) > Math.max(...widths(big).filter((w) => w < 4.5)), `${status}: heavier strokes small`);
@@ -61,6 +61,58 @@ test('reduced motion: no animation classes at all, still configurations', () => 
   for (const status of ['paused', 'stopped', 'offline']) assert.deepEqual(motion(jarvisRing({ status, size: 96 })), [], `${status} is still`);
   // Working still shows how far along it is: part of its progress arc lit, the rest dim.
   assert.match(jarvisRing({ status: 'working', size: 96, reduced: true }), /opacity="0.2"/);
+});
+
+// The arcs a state draws, from its dash arrays: [start°, length°] for each dash, wrapped to 0..360.
+function arcs(svg, cls) {
+  const out = [];
+  for (const m of svg.matchAll(/<circle [^>]*class="([^"]+)"[^>]*>/g)) {
+    if (!m[1].split(' ').includes(cls)) continue;
+    const dash = /stroke-dasharray="([\d. ]+)"/.exec(m[0]);
+    const at = -Number(/stroke-dashoffset="(-?[\d.]+)"/.exec(m[0])?.[1] ?? 0);
+    if (!dash) { out.push([0, 360]); continue; }
+    const [on, off] = dash[1].split(' ').map(Number);
+    for (let a = at; a < at + 360 - 1e-6; a += on + off) out.push([((a % 360) + 360) % 360, on]);
+  }
+  return out;
+}
+const width = (svg, cls) => Number(new RegExp(`class="${cls}" style="stroke-width: ([\\d.]+)`).exec(svg)?.[1]);
+
+test('stopped, paused and needs-you differ by structure at 16 px, not only by where the gaps are', () => {
+  for (const size of [16, 96]) {
+    const stopped = jarvisRing({ status: 'stopped', size }), paused = jarvisRing({ status: 'paused', size }), needs = jarvisRing({ status: 'needs-you', size }), idle = jarvisRing({ status: 'idle', size });
+    // Stopped: three heavy segments, gaps of 48° evenly at 60°, 180° and 300°.
+    assert.deepEqual(arcs(stopped, 'jv-red').map(([a, l]) => [Math.round(a), l]), [[324, 72], [84, 72], [204, 72]], `${size}: stopped`);
+    assert.ok(width(stopped, 'jv-red') > width(idle, 'jv-c'), `${size}: stopped heavier than idle`);
+    // Paused: two halves, gaps of 70° at the top and the bottom.
+    assert.deepEqual(arcs(paused, 'jv-c'), [[35, 110], [215, 110]], `${size}: paused brackets`);
+    // Needs-you: one amber arc of 60–75°, heavier than the ring, across the top, and one gap.
+    const [[aAt, aLen]] = arcs(needs, 'jv-amber');
+    assert.ok(aLen >= 60 && aLen <= 76 && (aAt + aLen) % 360 < 60 && aAt > 300, `${size}: amber ${aAt}+${aLen}`);
+    assert.ok(width(needs, 'jv-amber') > width(needs, 'jv-c'), `${size}: amber heavier`);
+    const [[cAt, cLen]] = arcs(needs, 'jv-c');
+    assert.equal(Math.round(cAt + cLen) % 360, Math.round(aAt), `${size}: the ring meets the amber arc on one side (one gap only)`);
+    assert.ok(cAt - (aAt + aLen - 360) >= 30, `${size}: and leaves a clear gap on the other`);
+  }
+});
+
+test('success differs from idle by structure, moving or still: a sweep arc with a bright head', () => {
+  for (const size of [16, 96]) for (const reduced of [false, true]) {
+    const svg = jarvisRing({ status: 'success', size, reduced });
+    assert.equal(arcs(svg, 'jv-flash').length, 1, `${size}${reduced ? ' reduced' : ''}: a head`);
+    assert.equal(arcs(svg, 'jv-tail').length, 1, 'a tail');
+    assert.ok(arcs(svg, 'jv-base').some(([, l]) => l === 360), 'over the full ring');
+    assert.ok(width(svg, 'jv-hi jv-tail') > width(svg, 'jv-c jv-base'), 'the sweep is heavier than the ring');
+  }
+});
+
+test('offline: dashed, dim, and no ticks at any size', () => {
+  for (const size of SIZES) {
+    const svg = jarvisRing({ status: 'offline', size });
+    assert.equal(circles(svg), 1, `${size}: one dashed ring only`);
+    assert.match(svg, /class="jv-grey"[^>]*stroke-dasharray/);
+  }
+  assert.ok(circles(jarvisRing({ status: 'idle', size: 96 })) > 1, 'idle keeps its ticks');
 });
 
 test('red only for stopped, amber only for needs-you', () => {

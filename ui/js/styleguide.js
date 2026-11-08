@@ -15,7 +15,7 @@ import { escapeHtml as esc } from './markdown.js';
 import { workCosts, diagnosticsDownload, configImport, configSetup, configProposal, passkeySetup, PASSKEY_STATES, PASSKEY_SETUP_STATES, deviceModels } from './components.js';
 import * as fitEngine from './fit-engine.js';
 import { UC_FRAMES, entryOf, ucEntry, ucFrame } from './sg-compositions.js';
-import { bindStatusIcons, statusIconEntry } from './sg-status-icons.js';
+import { bindStatusIcons, statusIconEntry, statusIconSheet } from './sg-status-icons.js';
 import { bindJarvis, jarvisEntry } from './sg-jarvis.js';
 
 const sg = document.getElementById('sg');
@@ -643,6 +643,16 @@ function entries() {
     ['Foundations', [
       ['color', 'Colour', `The ${tokensOf((t) => t.group === 'color').length} colour tokens every design system defines. Components use nothing else.`,
         () => `<div class="sg-grid">${tokensOf((t) => t.group === 'color').map((n) => `<div class="sg-swatch"><div class="sg-chip" style="background: var(${n})"></div><span class="sg-name">${n}</span><span class="sg-value">${value(n)}</span></div>`).join('')}</div>`],
+      ['nebula-match', 'Nebula with the status icons', 'The acceptance page for the theme match (2026-11-08): Nebula’s neutral surfaces and real components beside the status icons, whose ribbon is drawn from the same five material tokens as the orb, sampled from the state sheet. Use the switch above for light and dark.',
+        () => {
+          const chips = (names) => `<div class="sg-grid">${names.map((t) => `<div class="sg-swatch"><div class="sg-chip" style="background: var(${css(t)})"></div><span class="sg-name">${t}</span><span class="sg-value">${value(css(t))}</span></div>`).join('')}</div>`;
+          return `${state('Surfaces, text and lines', chips(['bg/base', 'bg/raised', 'bg/overlay', 'surface/card', 'surface/card-hover', 'border/subtle', 'border/strong', 'text/primary', 'text/secondary', 'text/faint']))}
+${state('The material: the orb, the status icons and state accents only', chips(['orb/core', 'accent/secondary', 'orb/listening', 'orb/attention', 'status/error']))}
+${state('The orb and the status icons, one material', `<div class="sg-demo-row">${orb({ state: 'idle', size: 'rail' })}<span class="si-tile" data-si-cell="idle-48"></span></div>`)}
+<div class="sg-cards">${state('A card', briefCard({ brief: { headline: 'One thing matters today: the contract, due Thursday.', lines: ['Two tasks are waiting on other people.', 'The backup ran at 3:00 AM and was checked.'] } }))}${state('Stopped (red)', healthCard({ health: { ok: true, checks: {} }, problems: [{ id: 2, source: 'ledger', stops: true }] }))}${state('Rows', `<div class="panel"><ul class="task-list">${workTasks.slice(0, 3).map((x) => taskRow(x, { now: t0 })).join('')}</ul></div>`)}</div>
+${state('Status and actions', `<div class="sg-demo-row">${['quiet', 'working', 'waiting', 'needs-you', 'failed'].map((x) => status(x)).join('')}</div><div class="sg-demo-row"><button class="btn primary">Approve</button><button class="btn">Not now</button><a class="link" href="#sg-nebula-match">All tasks</a></div>`)}
+${state('Every state at 16, 24 and 48 px', statusIconSheet())}`;
+        }],
       ['type', 'Type scale', `Six steps on one ratio${ratio ? ` (here ${ratio.toFixed(3)})` : ''}, from a ${px('type/body')}px body: real hierarchy from size, weight and colour together. Families: ${tokenList(tokensOf((t) => t.syntax === 'font'))}.`,
         () => `${typeSteps.slice().reverse().map((n) => `<div class="sg-row"><span class="sg-name">${css(n)} · ${px(n)}px</span><span class="sg-type" style="font-size: var(${css(n)})">${n === 'type/caption' ? 'Done and checked' : n === 'type/small' ? 'Wrote lists/reading.md · just now' : n === 'type/body' ? 'Nothing is done until Nova has checked the evidence.' : n === 'type/h3' ? 'Nova is handling' : n === 'type/h2' ? 'Waiting for your OK' : 'Tasks'}</span></div>`).join('')}
 ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-hierarchy"><p class="view-title">Tasks</p><p class="sg-kicker-demo">Done and checked</p><p class="task-title">Save the reading list</p><p class="task-meta">Wrote lists/reading.md · just now</p></div>`)}`],

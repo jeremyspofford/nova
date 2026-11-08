@@ -69,6 +69,23 @@ const running = (page: Page) => page.evaluate(() => {
   return document.getAnimations().filter((a) => a.playState === 'running' && root.contains((a.effect as KeyframeEffect | null)?.target ?? null)).length;
 });
 
+// The colours the Jarvis surface resolves to, as sRGB 0..255 (a canvas resolves color-mix(),
+// light-dark() and oklch() the way the page does): its background, its ink, and stopped's stroke.
+const colours = (page: Page) => page.evaluate(() => {
+  const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!;
+  const rgb = (c: string) => { ctx.fillStyle = '#010203'; ctx.fillStyle = c; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)]; };
+  const surface = getComputedStyle(document.querySelector('.jv-surface')!);
+  return { bg: rgb(surface.backgroundColor), ink: rgb(surface.color), red: rgb(getComputedStyle(document.querySelector('[data-jv-cell="stopped-96"] .jv-red')!).stroke) };
+});
+const luma = ([r, g, b]: number[]) => (0.2126 * r! + 0.7152 * g! + 0.0722 * b!) / 255;
+function assertColours(c: Awaited<ReturnType<typeof colours>>, label: string) {
+  assert.notDeepEqual(c.bg, [1, 2, 3], `${label}: the surface's colour resolves`);
+  assert.ok(luma(c.bg) < 0.12, `${label}: near-black surface ${c.bg}`); // a little cyan in the black
+  assert.ok(luma(c.ink) > 0.75, `${label}: light ink ${c.ink}`);
+  const [r, g, b] = c.red as [number, number, number];
+  assert.ok(r > 150 && r > g * 1.8 && r > b * 1.8, `${label}: stopped reads red ${c.red}`);
+}
+
 for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]] as const) {
   test(`Jarvis rings ${engine}: 40 cells labelled and drawn; morph, success, amplitude and reduced motion`, { timeout: 600_000 }, async () => {
     let b: Browser | undefined;
@@ -148,9 +165,23 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         assert.deepEqual(changes, [], 'demo only: nothing is sent');
         assert.deepEqual(d.errors, [], 'no page errors');
 
+        // Colours from the theme's tokens: near-black surface and light ink in dark and in light
+        // (light-dark() picks the light or dark token of each pair), and stopped in the theme's red.
+        const dark = await colours(p);
+        console.log(`${engine} dark: ${JSON.stringify(dark)}`);
+        assertColours(dark, `${engine} dark`);
+        const light = await device(b!, { width: 1280, height: 820, scheme: 'light', serviceWorkers: 'block' });
+        await open(light.page, base);
+        const lit = await colours(light.page);
+        console.log(`${engine} light: ${JSON.stringify(lit)}`);
+        assertColours(lit, `${engine} light`);
+        assert.deepEqual(light.errors, [], 'light: no page errors');
+        await light.ctx.close();
+
         const dir = shotsDir();
         if (dir && engine === 'chromium') {
-          const flourishing = (page: Page) => page.waitForFunction(() => document.querySelector('[data-jv-cell="success-48"] .jv-core')!.getAttribute('aria-label') === 'success', null, { timeout: 5000 }).then(() => sleep(350));
+          // Success is caught once its layer has fully morphed in (800 ms) and before it settles (1 s).
+          const flourishing = (page: Page, after = 840) => page.waitForFunction(() => document.querySelector('[data-jv-cell="success-48"] .jv-core')!.getAttribute('aria-label') === 'success', null, { timeout: 5000, polling: 'raf' }).then(() => sleep(after));
           await sleep(900);
           await flourishing(p);
           await p.locator('#sg-jarvis').scrollIntoViewIfNeeded();
@@ -176,6 +207,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           await p.getByLabel('Reduced motion').check();
           await sleep(100);
           await sheet.evaluate((el) => { el.style.filter = 'grayscale(1)'; });
+          await flourishing(p, 100); // reduced: success swaps in at once
           await sheet.screenshot({ path: join(dir, 'jarvis-greyscale-reduced-all-sizes.png') });
           await sheet.evaluate((el) => { el.style.filter = ''; });
           await p.getByLabel('Reduced motion').uncheck();

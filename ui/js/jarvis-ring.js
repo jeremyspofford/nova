@@ -40,15 +40,16 @@ function ring(r, w, cls, { dash, at = 0, extra = '', k = null } = {}) {
   const o = at ? ` stroke-dashoffset="${n2(-at)}"` : '';
   return `<circle cx="50" cy="50" r="${n2(r)}" pathLength="360" class="${cls}" style="stroke-width: ${n2(w)}${k === null ? '' : `; --jv-k: ${k}`}"${d}${o}${extra}/>`;
 }
-// One arc from `at` degrees, `len` degrees long.
-const arc = (r, w, cls, at, len, extra = '', k = null) => ring(r, w, cls, { dash: `${n2(len)} 360`, at, extra, k });
+// One arc from `at` degrees, `len` degrees long. The dash pattern repeats every 360°, so an arc that
+// crosses the top (at + len > 360) wraps round instead of being cut off where the circle's path ends.
+const arc = (r, w, cls, at, len, extra = '', k = null) => ring(r, w, cls, { dash: `${n2(len)} ${n2(360 - len)}`, at, extra, k });
 // n equal segments around a whole ring, with `gap` degrees between them.
 const segmented = (r, w, cls, n, gap) => ring(r, w, cls, { dash: `${n2(360 / n - gap)} ${n2(gap)}`, at: gap / 2 });
 const group = (cls, body, extra = '') => `<g${cls ? ` class="${cls}"` : ''}${extra}>${body}</g>`;
 
 // The bezel: fine ticks just outside the ring (none at 24 px and under).
 function bezel(t, tone, turning) {
-  if (!t.ticks) return '';
+  if (!t.ticks || !tone) return '';
   const major = ring(46, t.minor ? 4 : 5, tone, { dash: `${t.minor ? 1.2 : 2.4} ${n2(360 / t.ticks - (t.minor ? 1.2 : 2.4))}`, at: t.minor ? 0.6 : 1.2 });
   const minor = t.minor ? ring(46.5, 2.2, `${tone} jv-faint`, { dash: `0.5 ${n2(360 / t.minor - 0.5)}`, at: 0.25 }) : '';
   return group(turning ? 'jv-a-turn' : '', major + minor);
@@ -62,8 +63,9 @@ function layers(status, t, { reduced, amplitude }) {
       return ['jv-dim', false, group(a('jv-a-breathe'), ring(t.R, t.main, 'jv-c'))];
     case 'listening': {
       // An open arc (a 60° gap at the top) of segments that brighten in turn; the whole turns slowly.
+      // Brighter and a little heavier than idle: it is an active state.
       const span = 300, n = t.segs, seg = (span - (n - 1) * t.gap) / n;
-      const segs = Array.from({ length: n }, (_, k) => arc(t.R, t.main, `jv-c${reduced ? '' : ' jv-a-seg'}`, 30 + k * (seg + t.gap), seg, '', reduced ? null : k)).join('');
+      const segs = Array.from({ length: n }, (_, k) => arc(t.R, t.main * 1.3, `jv-hi${reduced ? '' : ' jv-a-seg'}`, 30 + k * (seg + t.gap), seg, '', reduced ? null : k)).join('');
       return ['jv-dim', false, group(a('jv-a-turn'), segs)];
     }
     case 'thinking':
@@ -86,25 +88,32 @@ function layers(status, t, { reduced, amplitude }) {
       return ['jv-dim', false, group(pulse, ring(t.R - (t.tier === 's' ? 2 : 0), t.main, 'jv-c')) + ring(t.tier === 's' ? 12 : 13, t.inner, 'jv-c')];
     }
     case 'needs-you': {
-      // An amber arc at the top with a clear gap either side; the rest of the ring keeps breathing.
-      // Small, the amber arc is longer so it still reads at 16 px.
-      const [amber, gap] = t.tier === 's' ? [76, 22] : [50, 25];
+      // One heavy amber arc (about 70°, centred on the top) and ONE clear gap after it; the rest of
+      // the ring runs on from the amber arc's other end and keeps breathing.
+      const [amber, gap] = t.tier === 's' ? [76, 40] : [68, 30];
+      const end = amber / 2; // the amber arc runs from -amber/2 to +amber/2
       return ['jv-dim', !reduced,
-        group(a('jv-a-breathe'), arc(t.R, t.main, 'jv-c', amber / 2 + gap, 360 - amber - 2 * gap))
-        + arc(t.R, t.heavy, 'jv-amber', 360 - amber / 2, amber)];
+        group(a('jv-a-breathe'), arc(t.R, t.main, 'jv-c', end + gap, 360 - amber - gap))
+        + arc(t.R, t.heavy, 'jv-amber', 360 - end, amber)];
     }
     case 'success':
-      // The full ring closed, heavier and bright, with one sweep around it.
-      return ['jv-dim', false, ring(t.R, t.heavy * 0.8, 'jv-hi') + (reduced ? '' : group('jv-a-sweep', arc(t.R, t.heavy, 'jv-flash', 330, 40)))];
+      // Closing: the full ring, and a heavy sweep arc with a bright head leading it round once.
+      // Still (reduced), the sweep rests with its head at the top: still not idle's single ring.
+      // The base ring is dim so the bright, heavy sweep stands out from idle's even ring at 16 px.
+      return ['jv-dim', false, ring(t.R, t.main, 'jv-c jv-base')
+        + group(a('jv-a-sweep'), arc(t.R, t.heavy, 'jv-hi jv-tail', 195, 150) + arc(t.R, t.heavy, 'jv-flash', 340, 20))];
     case 'paused':
-      // Two still halves, gaps at the top and the bottom.
-      return ['jv-dim', false, arc(t.R, t.main, 'jv-c', 22, 136) + arc(t.R, t.main, 'jv-c', 202, 136)];
-    case 'stopped':
-      // A broken red ring: three separated segments, still.
-      return ['jv-off', false, ring(t.R, t.heavy * 0.8, 'jv-red', { dash: '96 24', at: 12 })];
+      // Two still halves with wide gaps at the top and the bottom: a pair of vertical brackets.
+      return ['jv-dim', false, arc(t.R, t.main * 1.15, 'jv-c', 35, 110) + arc(t.R, t.main * 1.15, 'jv-c', 215, 110)];
+    case 'stopped': {
+      // A broken red ring: three heavy segments, one centred on the top, wide even gaps at 60°, 180°
+      // and 300° (so never paused's top-and-bottom brackets), still.
+      const seg = 72;
+      return ['jv-off', false, ring(t.R, t.heavy, 'jv-red', { dash: `${seg} ${120 - seg}`, at: 360 - seg / 2 })];
+    }
     case 'offline':
-      // A dim dashed ring, desaturated.
-      return ['jv-off', false, ring(t.R, t.main, 'jv-grey', { dash: `${n2(360 / t.off * 0.45)} ${n2(360 / t.off * 0.55)}` })];
+      // A dim dashed ring, desaturated, and no bezel ticks at any size: deliberately off, not faint.
+      return ['', false, ring(t.R, t.main, 'jv-grey', { dash: `${n2(360 / t.off * 0.45)} ${n2(360 / t.off * 0.55)}` })];
   }
   return ['', false, ''];
 }
