@@ -14,7 +14,7 @@ import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { routeOf } from './nav.js';
 import { problemTone, stoppingProblems } from './status.js';
 import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
-import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
+import { closeMore, closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, setRecent, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
 import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
 import { bindSites, loadSites, renderSites } from './sites.js';
@@ -298,7 +298,7 @@ function setView(view) {
   topologyVisible(view === 'topology');
   for (const [v, key] of Object.entries(VIEWS)) el[key].hidden = v !== view;
   el.dock.hidden = view !== 'chat';
-  el.menu.hidden = view !== 'chat';
+  showMenu();
   if (view !== 'chat') el.jump.hidden = true;
   if (was === 'settings' && view !== 'settings') { core.cancelPreview(); core.leaveBackups(); }
   // Capture and Topology belong to Settings in the navigation.
@@ -658,7 +658,9 @@ function renderChrome() {
 }
 
 function renderToc_() {
-  el.toc.innerHTML = renderToc(state.list, state.view === 'chat' ? state.id : null);
+  const current = state.view === 'chat' ? state.id : null;
+  el.toc.innerHTML = renderToc(state.list, current);
+  setRecent(state.list, current);
 }
 
 // ---- scrolling -----------------------------------------------------------
@@ -2040,10 +2042,18 @@ function closeDrawer() {
   el.menu.setAttribute('aria-expanded', 'false');
 }
 el.menu.addEventListener('click', () => (el.app.classList.contains('drawer-open') ? closeDrawer() : openDrawer()));
-el.drawerClose.addEventListener('click', () => { closeDrawer(); el.menu.focus(); });
+// A phone has no conversations button (owner decision 2026-11-08, option B): its navigation drawer
+// lists the recent ones, opens this drawer for the rest, and takes the focus back.
+const drawerDoor = () => (layout.layout === 'phone' ? $('nav-menu') : el.menu);
+const showMenu = () => { el.menu.hidden = state.view !== 'chat' || layout.layout === 'phone'; };
+document.addEventListener('click', (e) => {
+  if (e.target.closest?.('#nav-all')) openDrawer();
+  else if (e.target.closest?.('#nav-new')) navigate('/new');
+});
+el.drawerClose.addEventListener('click', () => { closeDrawer(); drawerDoor().focus(); });
 el.scrim.addEventListener('click', closeDrawer);
 el.asideToggle.addEventListener('click', () => { toggleAside(); renderCore(); });
-window.addEventListener('nova:layout', () => { renderCore(); if (state.view === 'settings') selectSettings(settingsUi.cat); });
+window.addEventListener('nova:layout', () => { showMenu(); renderCore(); if (state.view === 'settings') selectSettings(settingsUi.cat); });
 // Settings changes layout at its own width too (840px, layout.css), within one app layout.
 let settingsFrame = 0;
 window.addEventListener('resize', () => { cancelAnimationFrame(settingsFrame); settingsFrame = requestAnimationFrame(() => { if (state.view === 'settings') selectSettings(settingsUi.cat); }); });
@@ -2070,7 +2080,7 @@ document.addEventListener('keydown', (e) => {
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view !== 'chat' && state.undo) { e.preventDefault(); runToastAction() || runUndo(); return; }
   if (e.key === '/' && !inField && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
   if (e.key === 'Escape') {
-    if (el.app.classList.contains('drawer-open')) { closeDrawer(); el.menu.focus(); return; }
+    if (el.app.classList.contains('drawer-open')) { closeDrawer(); drawerDoor().focus(); return; }
     const card = e.target.closest?.('.approval');
     if (card) { e.preventDefault(); decide(card.dataset.tool, 'deny', card.querySelector('button')); return; }
     if (state.listening) { e.preventDefault(); stopListening(); return; }

@@ -36,8 +36,8 @@ test('press() waits for the route, then drawn() waits out a conversation’s hel
     await drawn(page);
     await press(page, { button: '#nav-menu', label: 'Navigation' }, true);
     await press(page, { href: '/chat', label: 'Chat', section: '' }, true);
-    await press(page, { button: '#menu', label: 'Conversations' }, true);
-    await press(page, { href: '/c/2026-11-02-nav001', label: 'Navigation example', section: '' }, true);
+    await press(page, { button: '#nav-menu', label: 'Navigation' }, true);
+    await press(page, { href: '/c/2026-11-02-nav001', label: 'Navigation example', section: 'rail' }, true);
     const at = await page.evaluate(() => {
       const t = document.getElementById('thread')!;
       const a = document.querySelector<HTMLElement>('a[href="/schedules#sc-navigation-example"]');
@@ -68,6 +68,17 @@ test('the navigation drawer: every place, focus in and back, Esc, scrim and clos
       await page.goto(`${m.base}/${q}`);
       await drawn(page);
       assert.equal(await page.evaluate(() => document.body.dataset.layout), 'phone', `${what}: the phone layout`);
+      if (what === 'phone') {
+        // No conversations yet: no Recent group at all, not an empty heading. Then six of them.
+        assert.equal(await page.locator('#rail-recent, #nav-all').count(), 0, 'no conversations, no Recent');
+        for (let i = 1; i <= 6; i++) {
+          const id = `2026-11-0${i}-rec00${i}`;
+          writeFileSync(join(m.home, 'sessions', `${id}.jsonl`), JSON.stringify({ ts: `2026-11-0${i}T12:00:00Z`, type: 'session', id, title: `Recent example ${i}`, v: 1 }) + '\n');
+        }
+        // The app reads the list again when it comes back into view (no reload: the router keeps the document).
+        await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+        await until(page, () => document.querySelectorAll('#toc a[data-id]').length === 6);
+      }
       assert.equal(await page.locator('#tabs').count(), 0, `${what}: no bottom tabs`);
       const menu = page.locator('#nav-menu');
       assert.ok(await menu.isVisible(), `${what}: the menu button is in the title bar`);
@@ -118,6 +129,29 @@ test('the navigation drawer: every place, focus in and back, Esc, scrim and clos
       assert.equal(await page.evaluate(() => document.body.dataset.view), 'tasks');
       assert.equal(await page.locator('.app.nav-open').count(), 0, `${what}: choosing a place closes it`);
       assert.equal(await page.locator('#rail [data-dest="tasks"]').getAttribute('aria-current'), 'page');
+
+      // Recent (owner decision 2026-11-08, option B): the newest four conversations under Places, and
+      // All conversations; one menu button in the title bar, no separate conversations button.
+      await menu.tap();
+      assert.ok(await page.locator('#rail-recent').isVisible(), `${what}: a Recent group`);
+      const recent = page.locator('#rail .rail-recent a[href]');
+      assert.deepEqual(await recent.evaluateAll((es) => es.map((e) => e.textContent)), [6, 5, 4, 3].map((i) => `Recent example ${i}`), `${what}: the newest four, newest first`);
+      await press(page, { href: '/c/2026-11-05-rec005', label: 'Recent example 5', section: 'rail' }, true);
+      assert.equal(await page.evaluate(() => document.body.dataset.view), 'chat');
+      assert.equal(await page.locator('.app.nav-open').count(), 0, `${what}: opening a conversation closes it`);
+      assert.equal(await page.locator('#rail a[href="/c/2026-11-05-rec005"]').getAttribute('aria-current'), 'page', `${what}: the open conversation is marked`);
+      assert.equal(await page.locator('#menu').isVisible(), false, `${what}: no separate conversations button`);
+      // All conversations: the conversations drawer, with every one; closing it gives focus back to the menu button.
+      await menu.tap();
+      await page.locator('#nav-all').tap();
+      await until(page, () => !!document.querySelector('.app.drawer-open') && !document.querySelector('.app.nav-open') && !!document.activeElement?.closest('#sidebar'));
+      assert.equal(await page.locator('#toc a[data-id]').filter({ visible: true }).count(), 6, `${what}: every conversation is reachable`);
+      await page.locator('#drawer-close').tap();
+      await until(page, () => document.activeElement?.id === 'nav-menu' && !document.querySelector('.app.drawer-open'));
+      // New conversation, beside search.
+      await menu.tap();
+      await page.locator('#nav-new').tap();
+      await until(page, () => location.pathname === '/new' && !document.querySelector('.app.nav-open'));
       assert.deepEqual(d.errors, [], `${what}: no errors`);
       await d.ctx.close();
     }

@@ -129,9 +129,10 @@ export function renderNav() {
   const drawer = layout.layout === 'phone';
   const home = p.home === 'orb' ? `<a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(ORB_WORDS[orbNow])}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${orb({ state: orbNow, size: 'rail', live: true, decorative: true })}</a>` : '';
   $('rail').innerHTML = `<div class="rail-head">${home}
-<button type="button" class="icon-btn rail-search" id="rail-search" aria-label="Search or go to" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Search or go to (Ctrl K)">${ICONS.search}</button>${drawer ? `<button type="button" class="icon-btn" id="nav-close" aria-label="Close navigation">${ICONS.close}</button>` : ''}</div>
+<button type="button" class="icon-btn rail-search" id="rail-search" aria-label="Search or go to" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Search or go to (Ctrl K)">${ICONS.search}</button>${drawer ? `<button type="button" class="icon-btn rail-new" id="nav-new" aria-label="New conversation" title="New conversation (Ctrl Shift O)">${ICONS.plus}</button><button type="button" class="icon-btn" id="nav-close" aria-label="Close navigation">${ICONS.close}</button>` : ''}</div>
 <p class="rail-group" id="rail-places">Places</p>
 <ul class="rail-list" aria-labelledby="rail-places">${p.primary.map((id) => navItem(id)).join('')}${p.more.length ? moreButton(p.more) : ''}</ul>
+${drawer && recent.list.length ? recentGroup() : ''}
 <div class="rail-foot"><ul class="rail-list">${p.foot.map((id) => navItem(id)).join('')}</ul>${stamp()}</div>`;
   $('more').innerHTML = `<ul class="more-list">${p.more.map((id) => navItem(id)).join('')}</ul>`;
   // The menu button carries the most urgent place's dot, as the tabs did.
@@ -150,6 +151,22 @@ function stamp() {
   const pending = build.behind === true;
   const words = `Nova ${build.version}${build.commit_short ? `, build ${build.commit_short}` : ''}${pending ? ', redeploy pending' : ''}`;
   return `<p class="rail-stamp"${pending ? ' data-pending' : ''} title="${esc(words)}"><span class="sr-only">${esc(words)}</span><span class="rail-stamp-v" aria-hidden="true">v</span>${pending ? '<span class="rail-stamp-dot" aria-hidden="true"></span>' : ''}<span class="rail-stamp-full" aria-hidden="true">${esc(build.version)}${build.commit_short ? ` <span class="rail-stamp-commit">${esc(build.commit_short)}</span>` : ''}${pending ? ' redeploy pending' : ''}</span></p>`;
+}
+
+// A phone's drawer lists the newest conversations under Places (owner decision 2026-11-08, option
+// B), as the composition does, and a row to the whole list: the conversations drawer (app.js).
+const RECENT = 4;
+let recent = { list: [], current: null };
+export function setRecent(list, current) {
+  const next = { list: list.slice(0, RECENT).map(({ id, title }) => ({ id, title })), current };
+  if (JSON.stringify(next) === JSON.stringify(recent)) return;
+  recent = next;
+  renderNav();
+}
+function recentGroup() {
+  const rows = recent.list.map((s) => `<li><a class="nav-item" href="/c/${esc(s.id)}"${s.id === recent.current ? ' aria-current="page"' : ''}>${ICONS.chat}<span class="nav-label">${esc(s.title)}</span></a></li>`).join('');
+  return `<p class="rail-group" id="rail-recent">Recent</p>
+<ul class="rail-list rail-recent" aria-labelledby="rail-recent">${rows}<li><button type="button" class="nav-item" id="nav-all" aria-haspopup="dialog" aria-controls="sidebar">${ICONS.conversations}<span class="nav-label">All conversations</span></button></li></ul>`;
 }
 
 export function markCurrent(dest) {
@@ -209,7 +226,8 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('#nav-menu')) openNav();
   // The search button's palette gives focus back to the menu button, so close (and focus) first.
   else if (navOpen() && e.target.closest('#nav-close, #scrim, #rail-search')) closeNav({ focus: true });
-  else if (navOpen() && e.target.closest('#rail a')) closeNav();
+  // A place, a conversation, New and All conversations close it; app.js does the rest.
+  else if (navOpen() && e.target.closest('#rail a, #nav-new, #nav-all')) closeNav();
 });
 document.addEventListener('keydown', (e) => {
   if (!navOpen() || document.querySelector('dialog[open]')) return;

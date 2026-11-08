@@ -220,7 +220,9 @@ async function audit(page: Page, base: string, look: string, { phone = false } =
   await page.waitForSelector('.app.nav-open');
   await over('the navigation drawer', '#rail');
   await page.keyboard.press('Escape');
-  await page.click('#menu');
+  // A phone has no conversations button: All conversations in the navigation drawer opens it.
+  await page.click('#nav-menu');
+  await page.click('#nav-all');
   await page.waitForSelector('.app.drawer-open');
   await over('the conversations drawer', '#sidebar');
   await page.keyboard.press('Escape');

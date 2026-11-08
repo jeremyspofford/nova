@@ -78,8 +78,10 @@ async function drive(page: Page, base: string, size: string) {
   await settled(page, 'chat');
   await page.click('#input');
   await page.keyboard.type('a short note');
-  if (await page.locator('#menu').isVisible()) {
-    await page.click('#menu');
+  // The conversations drawer: its own button, or on a phone All conversations in the navigation drawer.
+  const conv = await page.locator('#menu').isVisible();
+  if (conv || await page.locator('#nav-menu').isVisible()) {
+    if (conv) await page.click('#menu'); else { await page.click('#nav-menu'); await page.click('#nav-all'); }
     await page.waitForTimeout(350);
     await page.keyboard.press('Escape');
   }

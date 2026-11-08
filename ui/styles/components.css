@@ -155,6 +155,9 @@ body[data-rail="open"] .rail { align-items: stretch; padding: var(--space-3) var
 body[data-rail="open"] .rail-head { flex-direction: row; justify-content: space-between; margin-bottom: var(--space-2); }
 body[data-rail="open"] .rail-group { display: block; margin: var(--space-2) 0 var(--space-1); padding: 0 var(--space-3); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); text-transform: uppercase; letter-spacing: 0.04em; }
 body[data-rail="open"] .rail .nav-item { flex-direction: row; gap: var(--space-3); width: 100%; padding: var(--space-1) var(--space-3); font-size: var(--type-small); }
+/* A phone drawer's New sits beside search, its close at the far end; a recent title stays on one line. */
+.rail-new { margin-inline-end: auto; }
+.rail-recent .nav-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 body[data-rail="open"] .rail .nav-label { flex: 1; text-align: start; }
 body[data-rail="open"] .rail .nav-count { display: inline-block; padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--surface-card-hover); color: var(--text-secondary); font-size: var(--type-caption); font-variant-numeric: tabular-nums; }
 body[data-rail="open"] .rail .nav-count + .nav-badge { display: none; }
