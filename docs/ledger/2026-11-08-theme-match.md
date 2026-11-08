@@ -1,0 +1,23 @@
+**2026-11-08 · Design system · Nebula matches the state sheet's material**
+- What changed: the owner's theme-match amendment (docs/builder-packet/ui-references/nova-nebula-theme-match-amendment-2026-11-08.md) is built. The ribbon palette was sampled directly from the filed state sheet: the median of the bright pixels for each hue, read in a canvas. The values are teal #25aaf7, violet #ab3fe2, magenta #dc3b9c, coral #f37a23, red #e84747 and field #0b0b13.
+  - design-systems/nebula.json, dark: orb/core #1684b9→#25aaf7, accent/secondary #852bac→#ab3fe2, orb/listening #e5998d→#dc3b9c, orb/attention #f08d1f→#f37a23, orb/glow follows the violet, and status/error #ff8a80→#ee5050.
+  - Light uses each sample mixed 35% toward its deep tone: #1987ce, #8931b9, #b52d7e, #cb621b and #bc3734.
+  - The sampled red falls just under 4.5:1 on dark overlays and hovered rows. #ee5050 passes on every dark surface (4.65:1 or better), so text and icon share one red, kept only for stopped.
+  - Surfaces were already neutral and are unchanged.
+  - Appearance labels Nebula "Recommended · Nova's design", first in the list.
+  - A new core test: removing the active design, with no usable previous one, falls back to Nebula.
+  - New acceptance page /styleguide?entry=nebula-match: surfaces, the material swatches, the orb beside a status icon, a card, a stopped health card, rows, pills and every icon state at 16/24/48.
+  - The styleguide's background is the app's quiet top light, not base.css's older violet wash.
+  - A status icon flake is fixed. The preview replays success, which settles to idle, so a lookup by name could miss; the test now finds success cells by their stable cell id. The exact "success" label is still checked on the hero.
+  - The service worker cache moves to v51.
+- What you can now do: see Nebula's surfaces and the status icons as one material on one page, and find Nebula marked as recommended in Appearance.
+- Still unfinished: three things.
+  - The orb is still the old glossy sphere: it takes the new tokens but not the ribbon form. Part B draws it with the status icon component.
+  - The app icon (ui/icon.svg and the PNGs) is still the old teal disc.
+  - Light values are derived from the samples, not sampled directly.
+- Checked: locally, before CI.
+  - lint:tokens, typecheck, check:themes (7/7).
+  - Design core, theme, styleguide-coverage and ui-fixes unit tests (84/84).
+  - UI: theme-match, ui-fixes, live-swap, appearance-redraw, m9-contrast, m10i-styleguide, fold-postures, fold-render, m9-fold, compositions, orb-states and ui-rebuild-compositions.
+  - status-icon passed 8 runs in a row.
+  - Screenshots are in docs/screenshots/theme-match-2026-11-08/.

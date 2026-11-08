@@ -318,6 +318,20 @@ test('a third-party package installs through the extension host, applies, and re
   assert.ok(!design.list().some((d) => d.id === 'example.slate'));
 });
 
+test('removing the design in use with nothing usable to go back to falls back to Nebula, the default', () => {
+  const { design, extensions, profile } = host();
+  design.install(fixture());
+  design.install({ ...fixture(), id: 'example.dusk', name: 'Example Dusk' });
+  design.apply('example.slate', { scope: 'user' });
+  design.apply('example.dusk', { scope: 'user' });
+  assert.equal(profile.get('appearance', 'previous'), 'example.slate');
+  extensions.remove('example.slate');
+  extensions.remove('example.dusk');
+  assert.equal(design.active().id, 'nebula');
+  assert.equal(design.active().scope, 'default', 'the default, not a stored pick');
+  assert.match(design.css(), /Nebula/);
+});
+
 test('an invalid package can be installed and inspected but never applied or previewed', () => {
   const { design } = host();
   const bad = { ...withTokens({ 'text/primary': '#eeeeee' }), id: 'example.faded' };

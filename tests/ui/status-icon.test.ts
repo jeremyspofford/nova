@@ -108,8 +108,16 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         assertDrawn(await drawn(p), engine, expected ?? undefined);
         for (const s of STATES) for (const px of SIZES) {
           const sel = `[data-si-cell="${s}-${px}"] .status-icon`;
-          // Success is a flourish the sheet replays; catch it while it shows.
-          if (s === 'success') await p.waitForFunction((q) => document.querySelector(q)!.getAttribute('aria-label') === 'success', sel, { timeout: 5000 });
+          // Success is a flourish the sheet replays and that settles to idle, so its name changes
+          // under any lookup by name: find it by its cell and read role, name and title in one
+          // snapshot. That it says success while flourishing is the hero's check below.
+          if (s === 'success') {
+            const [role, name, title] = await p.locator(sel).evaluate((e) => [e.getAttribute('role'), e.getAttribute('aria-label'), e.getAttribute('title')]);
+            assert.equal(role, 'img', `${s}-${px}: role`);
+            assert.ok(name === 'success' || name === 'idle', `${s}-${px}: named success, or idle once settled (got ${name})`);
+            assert.equal(title, name, `${s}-${px}: title matches its name`);
+            continue;
+          }
           assert.equal(await p.getByRole('img', { name: s, exact: true }).and(p.locator(sel)).count(), 1, `${s}-${px}: found by its accessible name`);
         }
         const renderer = await p.locator('[data-si-hero] .status-icon').getAttribute('data-renderer');
