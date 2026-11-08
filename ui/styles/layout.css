@@ -153,6 +153,8 @@ body[data-layout="desktop"][data-aside="off"] .home-cards { grid-template-column
 .topbar-orb { display: none; }
 body[data-layout="phone"] .topbar-orb { display: inline-flex; }
 body[data-layout="phone"][data-view="home"] .topbar-orb { display: none; }
+/* An empty chat shows the hero orb: one orb in the view (DESIGN-SYSTEM §1). */
+body[data-layout="phone"][data-empty] .topbar-orb { display: none; }
 
 /* Activity and Settings rows narrow down on a phone. */
 body[data-layout="phone"] .act-entry { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
