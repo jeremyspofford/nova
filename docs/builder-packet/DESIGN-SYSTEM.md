@@ -77,6 +77,8 @@ Each item is scored per surface as **pass**, **fail** or **n/a**, with one line 
    - *Pass when:* every icon comes from the one set (`ICONS`) at its one stroke, and there are no emoji. `lint:tokens` enforces this.
 8. **Placeholder-looking empty states.**
    - *Pass when:* the empty state says what is true now and what will appear here, in Nova's words, with at most one next step. Never "No data", lorem, a grey box or an illustration placeholder.
+9. **No overflow nav, no nav popovers.** (Owner ruling, `ui-references/nova-ui-no-more-overflow-ruling-2026-11-08.md`.)
+   - *Pass when:* every destination is a direct link in the rail (or the phone's drawer), with no "More" item; navigation never opens a floating panel over content (popovers are for actions on the current surface); and each badge sits on its own destination, never aggregated behind an overflow.
 
 **Every UI PR** states its self-check against this list, per surface it touches, beside its posture screenshots and its screenshots matched to the styleguide (OPERATING-RULES, Design quality).
 
@@ -200,7 +202,7 @@ Layouts are chosen by viewport + posture, never by device name:
 - **Phone / foldable cover screen** — Ambient Home: orb hero, greeting, card stack (Brief, Nova is handling, Devices, Smart Home, Memory highlight). Navigation is a drawer, not bottom tabs (owner decision, 2026-11-08): a menu button in the title bar opens the rail's content (search, every place as a row with its count, Settings, the version stamp) over the page.
 - **Chat** — single centered conversation column; Nova's turns full-width and un-bubbled, the person's turns tinted bubbles without tails, grouped timestamps (Amendment 2026-10-30-C Part 1); "looking into it" working cards inline (H-right), composer with voice. The orb appears once in the view, not per message.
 - **Tablet / foldable inner / half-open** — two-pane: conversation or home + one contextual pane; half-open may split conversation (top) and active card/result (bottom).
-- **Desktop/laptop** — Calm Control (G): slim rail (orb + ≤6 destinations), center column (conversation/brief), optional right column with at most three quiet cards (Active Tasks, Device Mesh, System Health) — collapsible, off by default on smaller widths.
+- **Desktop/laptop** — Calm Control (G): the rail (orb + every destination, Settings at its foot; the list scrolls inside the rail when the window is short, never behind a More menu: §0.4 item 9), center column (conversation/brief), optional right column with at most three quiet cards (Active Tasks, Device Mesh, System Health) — collapsible, off by default on smaller widths.
 Every layout exposes the same features; layouts differ in arrangement only.
 
 **The iOS status bar in the installed app** (owner decision, 2026-10-31, option C):
