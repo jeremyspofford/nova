@@ -103,7 +103,7 @@
 .rail-home { display: grid; place-items: center; min-width: var(--hit); min-height: var(--hit); border-radius: 50%; text-decoration: none; }
 .rail-search { width: var(--hit); height: var(--hit); border-radius: var(--radius-input); }
 .rail-group { display: none; }
-.rail-list, .tabs-list { list-style: none; margin: 0; padding: 0; display: flex; }
+.rail-list { list-style: none; margin: 0; padding: 0; display: flex; }
 .rail-list { flex-direction: column; gap: 0; }
 .rail-foot { display: flex; flex-direction: column; align-items: center; width: 100%; margin-top: auto; padding-top: var(--space-2); border-top: 1px solid var(--border-subtle); }
 .rail-stamp { display: flex; align-items: center; justify-content: center; gap: var(--space-1); margin: 0; padding: var(--space-2) var(--space-3); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); }
@@ -163,18 +163,6 @@ body[data-rail="open"] .rail-foot { align-items: stretch; }
 body[data-rail="open"] .rail-stamp { justify-content: flex-start; }
 body[data-rail="open"] .rail-stamp-v { display: none; }
 body[data-rail="open"] .rail-stamp-full { display: inline; }
-
-/* The phone's tabs: a glass bar along the bottom. */
-.tabs {
-  justify-content: center;
-  padding: var(--space-2) var(--space-3) calc(var(--space-2) + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--bg-overlay) 70%, transparent);
-  border-top: 1px solid var(--border-subtle);
-  backdrop-filter: blur(var(--blur-glass));
-  -webkit-backdrop-filter: blur(var(--blur-glass));
-}
-.tabs-list { flex: 1; justify-content: space-around; max-width: var(--layout-content-max); }
-.tabs .nav-item { min-width: calc(var(--space-7) + var(--space-3)); }
 
 /* More: the rest of the destinations, as a sheet. */
 .more {

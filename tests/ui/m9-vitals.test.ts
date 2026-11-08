@@ -27,7 +27,11 @@ const LIMIT = { lcp: 2500, inp: 200, cls: 0.1 };
 // drawing is part of that interaction.
 async function use(page: Page, view: string, touch: boolean) {
   const press = async (sel: string) => { const l = page.locator(sel).filter({ visible: true }).first(); if (touch) await l.tap(); else await l.click(); };
-  const nav = async (dest: string) => press(`#rail [data-dest="${dest}"], #tabs [data-dest="${dest}"]`);
+  const nav = async (dest: string) => {
+    const sel = `#rail [data-dest="${dest}"]`;
+    if (await page.locator('#nav-menu').isVisible()) { await press('#nav-menu'); await page.waitForSelector('.app.nav-open'); }
+    await press(sel);
+  };
   if (view === 'home') {
     const open = '#home [data-action="open-task"], #home [data-action="evidence"]';
     await press(open);

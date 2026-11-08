@@ -80,6 +80,8 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
       const buttons = new Set<string>();
       async function home() {
         if (await page.locator('#drawer-close').isVisible()) await press(page, { button: '#drawer-close', label: 'Close conversations' }, touch);
+        // A phone's Home is a row in the navigation drawer: open it when Home isn't on screen.
+        if (!await page.locator('a[href="/"]').filter({ visible: true }).count()) await press(page, { button: '#nav-menu', label: 'Navigation' }, touch);
         // The phone's open More sheet covers its trigger. Leave through a real visible link.
         if (await page.locator('#more').isVisible()) {
           const exit = page.locator('#more a').first();
@@ -94,7 +96,7 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
         report.attempting = path;
         for (const step of path) await press(page, step, touch);
         current = path;
-        const key = at(page) + (await page.locator('#more').isVisible() ? '|More' : '') + (await page.locator('#sidebar').isVisible() ? '|Conversations' : '');
+        const key = at(page) + (await page.locator('#more').isVisible() ? '|More' : '') + (await page.locator('#sidebar').isVisible() ? '|Conversations' : '') + (await page.locator('.app.nav-open').count() ? '|Navigation' : '');
         if (seen.has(key)) continue;
         seen.add(key);
         const view = await page.getAttribute('body', 'data-view');
@@ -158,8 +160,9 @@ for (const [layout, width, touch] of [['phone', 390, true], ['rail', 1440, false
           const target = url.pathname + url.hash;
           if (!queued.has(target)) { queued.add(target); queue.push([...path, link]); }
         }
-        for (const [selector, label] of [['#more-btn[aria-expanded="false"]', 'More'], ['#menu', 'Conversations'], ['#new-chat', 'New conversation']] as const) {
-          if (!buttons.has(selector) && await page.locator(selector).isVisible()) { buttons.add(selector); queue.push([...path, { button: selector, label }]); }
+        for (const [selector, label] of [['#more-btn[aria-expanded="false"]', 'More'], ['#nav-menu[aria-expanded="false"]', 'Navigation'], ['#menu', 'Conversations'], ['#new-chat', 'New conversation']] as const) {
+          // Behind an open drawer the page is inert: its buttons aren't doors from here.
+          if (!buttons.has(selector) && await page.locator(selector).isVisible() && !await page.locator(selector).evaluate((e) => !!e.closest('[inert]'))) { buttons.add(selector); queue.push([...path, { button: selector, label }]); }
         }
         assert.ok(seen.size < 120, 'Safe crawl must stay bounded');
       }

@@ -45,12 +45,13 @@ function recorder() {
 
 type Seen = { kind: string; name: string; props: string[]; duration: number; iterations: number; target: string };
 
-// Real actions on each main view: moving between them, the drawer, More, a task, Settings, a
+// Real actions on each main view: moving between them, the drawers, More, a task, Settings, a
 // memory, hovering and typing.
 async function drive(page: Page, base: string, size: string) {
   const nav = async (dest: string) => {
-    const direct = page.locator(`#rail [data-dest="${dest}"], #tabs [data-dest="${dest}"]`).filter({ visible: true });
-    if (await direct.count()) await direct.first().click();
+    const direct = page.locator(`#rail [data-dest="${dest}"]`).filter({ visible: true });
+    if (await page.locator('#nav-menu').isVisible()) { await page.click('#nav-menu'); await page.locator(`#rail [data-dest="${dest}"]`).click(); }
+    else if (await direct.count()) await direct.first().click();
     else { await page.click('#more-btn'); await page.locator(`#more [data-dest="${dest}"]`).click(); }
     await settled(page, dest === 'chat' ? 'chat' : dest);
   };
@@ -86,6 +87,12 @@ async function drive(page: Page, base: string, size: string) {
     await page.click('#more-btn');
     await page.waitForTimeout(350);
     await page.keyboard.press('Escape');
+  }
+  if (await page.locator('#nav-menu').isVisible()) {
+    await page.click('#nav-menu');
+    await page.waitForTimeout(350);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(350);
   }
   for (const b of (await page.locator('#thread .act, #thread summary').filter({ visible: true }).all()).slice(0, 6)) { if (size === 'desktop') await b.hover().catch(() => {}); }
   await page.waitForTimeout(400);

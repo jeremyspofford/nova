@@ -17,11 +17,12 @@ export const DESTINATIONS = Object.freeze([
 
 export const destination = (id) => DESTINATIONS.find((d) => d.id === id) ?? null;
 
-// phone: bottom tabs Home · Chat · Tasks · Memory · More, the rest under More.
+// phone and a foldable's cover screen: the rail's content as a drawer from the title bar (owner
+// decision 2026-11-08): Home and every other place as rows, Settings at the foot, nothing under More.
 // tablet and desktop: a slim rail, the orb (Home) on top, at most six destinations, Settings
 // at the foot, and the rest under More.
 const PLACES = {
-  phone: { home: 'tab', primary: ['home', 'chat', 'tasks', 'memory'], more: ['automations', 'skills', 'activity', 'health', 'settings'], foot: [] },
+  phone: { home: 'row', primary: ['home', 'chat', 'tasks', 'memory', 'automations', 'skills', 'activity', 'health'], more: [], foot: ['settings'] },
   rail: { home: 'orb', primary: ['chat', 'tasks', 'memory', 'automations'], more: ['skills', 'activity', 'health'], foot: ['settings'] },
 };
 

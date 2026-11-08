@@ -205,8 +205,8 @@ async function audit(page: Page, base: string, look: string, { phone = false } =
   }
   if (!phone) return { fails, states };
 
-  // At a phone's width: the tabs, and what opens over the page, each measured on its own (the page
-  // behind a veil isn't meant to be read).
+  // At a phone's width: what opens over the page (the navigation drawer, the conversations drawer),
+  // each measured on its own (the page behind a veil isn't meant to be read).
   const over = async (where: string, root: string) => {
     await still(page);
     add('at rest', await page.evaluate((r) => (window as any).__c.text(document.querySelector(r)), root), where);
@@ -216,14 +216,13 @@ async function audit(page: Page, base: string, look: string, { phone = false } =
   await page.goto('about:blank');
   await page.goto(`${base}${VIEWS.chat}`);
   await settled(page, 'chat');
-  await over('the tabs', '#tabs');
+  await page.click('#nav-menu');
+  await page.waitForSelector('.app.nav-open');
+  await over('the navigation drawer', '#rail');
+  await page.keyboard.press('Escape');
   await page.click('#menu');
   await page.waitForSelector('.app.drawer-open');
   await over('the conversations drawer', '#sidebar');
-  await page.keyboard.press('Escape');
-  await page.click('#more-btn');
-  await page.waitForSelector('#more:not([hidden])');
-  await over('More', '#more');
   await page.keyboard.press('Escape');
   await page.goto(`${base}/tasks`);
   await settled(page, 'tasks');

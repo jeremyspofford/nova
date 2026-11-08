@@ -81,10 +81,12 @@ test('every layout models the same eleven destinations, including Settings child
   for (const l of LAYOUTS) assert.deepEqual(reachable(l).sort(), all, l);
 });
 
-test('phone has five tabs (four destinations and More); the rail has the orb and at most six', () => {
+test('a phone\'s drawer lists every place as a row, Settings at the foot, no More; the rail has the orb and at most six', () => {
   const phone = placement('phone');
-  assert.deepEqual(phone.primary, ['home', 'chat', 'tasks', 'memory']);
-  assert.equal(phone.home, 'tab');
+  assert.deepEqual(phone.primary, ['home', 'chat', 'tasks', 'memory', 'automations', 'skills', 'activity', 'health']);
+  assert.deepEqual(phone.foot, ['settings']);
+  assert.deepEqual(phone.more, []);
+  assert.equal(phone.home, 'row');
   for (const l of ['tablet', 'desktop']) {
     const p = placement(l);
     assert.equal(p.home, 'orb');

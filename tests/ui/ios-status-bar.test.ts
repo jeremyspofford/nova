@@ -161,7 +161,7 @@ test('behind the status bar: the background reaches the top edge, the top bar cl
               }
               return { top, bottom, left, right };
             };
-            const visible = (sel: string) => [...document.querySelectorAll(sel)].filter((e) => (e as HTMLElement).checkVisibility()).map(shown).filter((r) => r.bottom - r.top > 0 && r.right - r.left > 0);
+            const visible = (sel: string) => [...document.querySelectorAll(sel)].filter((e) => (e as HTMLElement).checkVisibility({ checkVisibilityCSS: true })).map(shown).filter((r) => r.bottom - r.top > 0 && r.right - r.left > 0);
             const under = inset.top > 0 ? document.elementFromPoint(innerWidth / 2, inset.top / 2) : null;
             return {
               padTop: parseFloat(shell.paddingTop), padLeft: parseFloat(shell.paddingLeft), padRight: parseFloat(shell.paddingRight),
@@ -169,7 +169,7 @@ test('behind the status bar: the background reaches the top edge, the top bar cl
               htmlTop: document.documentElement.getBoundingClientRect().top, bodyTop: document.body.getBoundingClientRect().top,
               htmlBg: getComputedStyle(document.documentElement).backgroundColor,
               under: under ? `${under.tagName.toLowerCase()}${under.id ? `#${under.id}` : ''}.${[...under.classList].join('.')}` : null,
-              controls: visible('#rail .nav-item, #rail .rail-home, #tabs .nav-item, #composer button, .topbar button, .topbar a, .settings-search, #main input'),
+              controls: visible('#rail .nav-item, #rail .rail-home, #composer button, .topbar button, .topbar a, .settings-search, #main input'),
               vw: innerWidth, vh: innerHeight,
             };
           }, inset);

@@ -29,9 +29,14 @@ const bandsOf = (page: Page) => page.evaluate(() => {
 
 const visible = (page: Page, sel: string) => page.$$eval(sel, (els) => els.filter((e) => (e as HTMLElement).checkVisibility()).map((e) => (e as HTMLElement).dataset.dest!));
 
-// The destinations a person can get to from here: what the rail or tabs show, plus More.
+// The destinations a person can get to from here: what the rail shows (in its drawer on a phone),
+// plus More.
 async function reachable(page: Page): Promise<string[]> {
-  const seen = new Set(await visible(page, '#rail [data-dest], #tabs [data-dest]'));
+  const menu = page.locator('#nav-menu');
+  const drawer = await menu.isVisible();
+  if (drawer) { await menu.click(); await page.waitForSelector('.app.nav-open #rail .rail-foot', { state: 'visible' }); }
+  const seen = new Set(await visible(page, '#rail [data-dest]'));
+  if (drawer) await page.keyboard.press('Escape');
   const more = page.locator('#more-btn');
   if (await more.isVisible()) {
     await more.click();
@@ -105,8 +110,12 @@ test('M3 gate: every destination opens in every layout', async (t) => {
       await d.page.goto(`${m.base}/`);
       await ready(d.page);
       for (const dest of ALL) {
-        const direct = d.page.locator(`#rail [data-dest="${dest}"], #tabs [data-dest="${dest}"]`).filter({ visible: true });
-        if (await direct.count()) await direct.first().click();
+        const direct = d.page.locator(`#rail [data-dest="${dest}"]`).filter({ visible: true });
+        // The drawer first: a closing drawer's rows stay visible for its transition.
+        if (await d.page.locator('#nav-menu').isVisible()) {
+          await d.page.click('#nav-menu');
+          await d.page.locator(`#rail [data-dest="${dest}"]`).click();
+        } else if (await direct.count()) await direct.first().click();
         else {
           await d.page.click('#more-btn');
           await d.page.locator(`#more [data-dest="${dest}"]`).click();
