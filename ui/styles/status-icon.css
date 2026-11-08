@@ -8,7 +8,7 @@
 .si-controls .sg-label { margin-top: 0; }
 .si-controls .sg-demo-row + .sg-demo-row { margin-top: var(--space-3); }
 .si-reduce { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--space-7); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
-.si-tile { display: inline-grid; place-items: center; padding: var(--space-1); border: 1px solid var(--border-subtle); border-radius: var(--radius-input); background: var(--bg-base); }
-.si-tile-hero { padding: var(--space-2); border-radius: var(--radius-card); }
+.si-tile { display: inline-grid; place-items: center; padding: 1px; border: 1px solid var(--border-subtle); border-radius: var(--radius-input); background: var(--bg-base); }
+.si-tile-hero { padding: var(--space-1); border-radius: var(--radius-card); }
 .si-sheet { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); align-items: center; justify-items: center; gap: var(--space-2) var(--space-4); max-width: calc(var(--space-8) * 6); }
 .si-sheet > .sg-name:nth-child(4n + 1) { justify-self: start; }
