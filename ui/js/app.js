@@ -34,7 +34,7 @@ import { blocksOf, doneWaiting, keepShape, showWaiting } from './skeleton.js';
 const $ = (id) => document.getElementById(id);
 const el = {
   app: $('app'), toc: $('toc'), thread: $('thread'), scroller: $('scroller'), title: $('title'),
-  input: $('input'), send: $('send'), mic: $('mic'), voiceNote: $('voice-note'), composer: $('composer'), hint: $('hint'), banner: $('banner'),
+  input: $('input'), send: $('send'), mic: $('mic'), voiceNote: $('voice-note'), composer: $('composer'), privacyChip: $('privacy-chip'), hint: $('hint'), banner: $('banner'),
   jump: $('jump'), menu: $('menu'), scrim: $('scrim'), newChat: $('new-chat'), drawerClose: $('drawer-close'),
   sidebar: $('sidebar'), dock: $('dock'), toast: $('toast'), topbarOrb: $('topbar-orb'), asideToggle: $('aside-toggle'),
   home: $('home'), tasks: $('tasks-view'), memory: $('memory'), automations: $('automations'), rules: $('rules'),
@@ -796,6 +796,8 @@ async function decide(tool, decision, button) {
 }
 
 el.composer.addEventListener('submit', (e) => { e.preventDefault(); running() ? stop() : send(); });
+// The privacy chip opens Settings › Privacy in the app.
+el.privacyChip.addEventListener('click', (e) => { followLink(e); });
 // A tier-3 step's confirm box unlocks its Allow button.
 el.thread.addEventListener('change', (e) => {
   const box = e.target.closest?.('[data-confirm]');
@@ -1804,7 +1806,12 @@ window.addEventListener('nova:providers', () => { if (state.view === 'settings')
 
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
+// The composer's privacy chip names the current privacy mode.
+const PRIVACY_CHIP = { 'local-only': 'Local only', 'local-preferred': 'Local first', 'cloud-allowed': 'Cloud allowed' };
 function renderVoice() {
+  const mode = PRIVACY_CHIP[core.privacy()] ?? 'Privacy';
+  el.privacyChip.textContent = mode;
+  el.privacyChip.setAttribute('aria-label', mode === 'Privacy' ? 'Privacy settings' : `Privacy: ${mode}. Change in Settings`);
   const v = voiceState({ privacy: core.privacy(), supported: !!Recognition });
   el.mic.innerHTML = ICONS.mic;
   el.mic.disabled = !v.enabled;
@@ -2097,7 +2104,7 @@ readLayout();
 // The composer lines up with the conversation: as wide as the scroller's content, which is
 // narrower by its scrollbar gutters (none for overlay scrollbars).
 new ResizeObserver(() => $('main').style.setProperty('--gutter', `${el.scroller.offsetWidth - el.scroller.clientWidth}px`)).observe(el.scroller);
-el.topbarOrb.innerHTML = liveOrb('avatar');
+el.topbarOrb.innerHTML = liveOrb('mini');
 applyTheme();
 coreStream();
 keepSession();
