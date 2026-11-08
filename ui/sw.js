@@ -6,10 +6,10 @@
 const VERSION = 'nova-shell-v57';
 const SHELL = [
   '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png',
-  '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css', '/styles/stage2.css', '/styles/palette.css',
+  '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css', '/styles/stage2.css', '/styles/palette.css', '/styles/status-icon.css',
   '/js/app.js', '/js/core.js', '/js/shell.js', '/js/layout.js', '/js/nav.js', '/js/status.js', '/js/components.js',
   '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js', '/js/qr.js', '/js/device-key.js', '/js/takeover.js',
-  '/js/connections.js', '/js/sites.js', '/js/capture.js', '/js/models.js', '/js/changes.js', '/js/checkpoints.js', '/js/services.js', '/js/topology.js', '/js/topology-view.js', '/js/reset.js', '/js/forget-here.js', '/js/settings-ia.js', '/js/contrast.js', '/js/look.js', '/js/wait.js', '/js/skeleton.js', '/js/passkey.js', '/js/config.js', '/js/device-models.js', '/js/fit-engine.js', '/js/palette.js',
+  '/js/connections.js', '/js/sites.js', '/js/capture.js', '/js/models.js', '/js/changes.js', '/js/checkpoints.js', '/js/services.js', '/js/topology.js', '/js/topology-view.js', '/js/reset.js', '/js/forget-here.js', '/js/settings-ia.js', '/js/contrast.js', '/js/look.js', '/js/wait.js', '/js/skeleton.js', '/js/passkey.js', '/js/config.js', '/js/device-models.js', '/js/fit-engine.js', '/js/palette.js', '/js/status-icon.js',
 ];
 // Memory and context receipts are never kept here: a forgotten memory must not survive in a
 // cache (owner's standing order 4), so these are network-only.

@@ -396,6 +396,22 @@ function strokeFallback(ctx, size, pts, cols, bright) {
 
 const live = new Set();
 let raf = 0;
+// What is on screen: an icon scrolled away, or in a hidden region (the rail's on an empty chat, the
+// phone's top bar on a desktop), keeps its state but isn't redrawn until it shows again.
+let sight;
+const watchSight = (ic) => {
+  if (sight === undefined) {
+    sight = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const it = e.target.statusIcon;
+        if (!it) continue;
+        it.visible = e.isIntersecting;
+        if (it.visible) { it.dirty = true; kick(); }
+      }
+    }) : null;
+  }
+  sight?.observe(ic.el);
+};
 let forced = null; // the preview's reduced-motion switch; null follows the system
 const reduceQuery = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)');
 const reducedNow = () => forced ?? !!reduceQuery()?.matches;
@@ -408,13 +424,15 @@ function frame(now) {
   for (const ic of live) {
     if (!ic.el.isConnected) {
       // Gone from the page (or never put there): let it go.
-      if (ic.seen || ++ic.unseen > 600) live.delete(ic);
+      if (ic.seen || ++ic.unseen > 600) { live.delete(ic); sight?.unobserve(ic.el); }
       else more = true;
       continue;
     }
     ic.seen = true;
-    const moving = ic.model.moving(now) || (!ic.model.reduced && LOOPS.has(ic.model.status(now)));
-    if (moving || ic.dirty) { paint(ic, now, pals); ic.dirty = false; }
+    // A morph or the success flourish runs out whether seen or not; a resting loop runs only on screen.
+    const morphing = ic.model.moving(now);
+    const moving = morphing || (ic.visible && !ic.model.reduced && LOOPS.has(ic.model.status(now)));
+    if ((moving && ic.visible) || ic.dirty) { paint(ic, now, pals); ic.dirty = false; }
     ic.label(ic.model.status(now));
     if (moving) more = true;
   }
@@ -436,7 +454,10 @@ export function setReducedMotion(on) { forced = on; restill(); }
 
 let watching = false;
 // statusIcon({ status, size }) → a <span role="img"> holding one canvas, with el.setStatus(next).
-export function statusIcon({ status = 'idle', size = 24 } = {}) {
+// `label(status)` gives the words it says (the status itself if not given); a `decorative` one says
+// nothing (aria-hidden), for a place whose own name or text already says the state.
+// An icon taken off the page and put back is woken by setStatus (its own status wakes it unchanged).
+export function statusIcon({ status = 'idle', size = 24, label = null, decorative = false } = {}) {
   known(status);
   const px = Number(size);
   if (!(px > 0)) throw new TypeError(`Bad size: ${String(size)}`);
@@ -447,21 +468,37 @@ export function statusIcon({ status = 'idle', size = 24 } = {}) {
   }
   const el = document.createElement('span');
   el.className = 'status-icon';
-  el.setAttribute('role', 'img');
+  if (decorative) el.setAttribute('aria-hidden', 'true');
+  else el.setAttribute('role', 'img');
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = Math.round(px * Math.min(3, Math.max(1, Math.ceil(globalThis.devicePixelRatio || 1))));
   canvas.style.width = canvas.style.height = `${px}px`;
   canvas.setAttribute('aria-hidden', 'true');
   el.append(canvas);
   const ic = {
-    el, canvas, small: px <= SMALL_MAX, model: new StatusModel(status, performance.now()), dirty: false, seen: false, unseen: 0,
-    label(s) { if (el.dataset.status === s) return; el.dataset.status = s; el.setAttribute('aria-label', s); el.title = s; },
+    el, canvas, small: px <= SMALL_MAX, model: new StatusModel(status, performance.now()), dirty: false, seen: false, unseen: 0, visible: true,
+    label(s) {
+      if (el.dataset.status === s) return;
+      el.dataset.status = s;
+      if (decorative) return;
+      const words = label ? label(s) : s;
+      el.setAttribute('aria-label', words);
+      el.title = words;
+    },
   };
   ic.model.reduced = reducedNow();
   ic.label(status);
-  el.setStatus = (next) => { ic.model.set(known(next), performance.now()); ic.label(next); ic.dirty = true; kick(); };
+  el.statusIcon = ic;
+  el.setStatus = (next) => {
+    ic.model.set(known(next), performance.now());
+    ic.label(next);
+    ic.dirty = true;
+    if (!live.has(ic)) { ic.seen = false; ic.unseen = 0; live.add(ic); watchSight(ic); }
+    kick();
+  };
   Object.defineProperty(el, 'status', { get: () => ic.model.status(performance.now()) });
   live.add(ic);
+  watchSight(ic);
   paint(ic, performance.now(), palettes());
   kick();
   return el;

@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { LAYOUTS, POSTURES, asideOf, layoutOf, postureOf, resolve, viewportOf } from '../ui/js/layout.js';
 import { DESTINATIONS, placement, reachable, routeOf } from '../ui/js/nav.js';
-import { ORB_STATES, STATUS, activityStatus, greeting, label, needsApproval, orbState, problemTone, statusOf, stoppingProblems, toolTier } from '../ui/js/status.js';
+import { ICON_WORDS, ORB_STATES, ORB_WORDS, STATUS, activityStatus, greeting, iconState, label, needsApproval, orbState, problemTone, statusOf, stoppingProblems, taskIconState, toolTier } from '../ui/js/status.js';
+import { STATUS_ICON_STATES } from '../ui/js/status-icon.js';
 
 // ---- layout ----------------------------------------------------------------------------
 
@@ -144,6 +145,38 @@ test('the orb takes its state from real signals, most urgent first', () => {
   assert.equal(orbState({ needsYou: 1, stopped: 1 }), 'stopped');
   assert.equal(orbState({ stopped: 1, listening: true }), 'listening');
   assert.equal(orbState({ reachable: false, listening: true, stopped: 3 }), 'offline');
+});
+
+// Status icons part B (owner, 2026-11-08): the status icon draws the same live state, one step finer
+// only where the app knows more (thinking), and every state it is given is one it can draw.
+test('the status icon draws the orb’s live state, thinking only while working', () => {
+  for (const s of ORB_STATES) {
+    assert.equal(iconState(s), s, s);
+    assert.ok(STATUS_ICON_STATES.includes(iconState(s, { thinking: true })), s);
+    assert.equal(ICON_WORDS[s], ORB_WORDS[s], `${s} says the same words`);
+  }
+  assert.equal(iconState('working', { thinking: true }), 'thinking');
+  // Thinking never hides something more urgent.
+  for (const s of ['idle', 'listening', 'speaking', 'needs-you', 'stopped', 'offline']) assert.equal(iconState(s, { thinking: true }), s);
+  assert.equal(iconState(orbState({ working: 1, needsYou: 1 }), { thinking: true }), 'needs-you');
+  assert.equal(ICON_WORDS.thinking, 'Nova is thinking');
+});
+
+test('a task row’s icon is the task’s own state, never one the ledger lacks', () => {
+  assert.equal(taskIconState(task('active')), 'working');
+  assert.equal(taskIconState(task('verifying')), 'working');
+  assert.equal(taskIconState(task('waiting', { approval_tier: 2 })), 'needs-you');
+  assert.equal(taskIconState(task('waiting', { user_visibility: 'attention' })), 'needs-you');
+  assert.equal(taskIconState(task('queued')), 'idle');
+  assert.equal(taskIconState(task('waiting', { reason: 'Waiting on local capacity.' })), 'idle');
+  assert.equal(taskIconState(task('failed')), 'stopped');
+  assert.equal(taskIconState(task('done', { verification: { ok: false, checks: [] } })), 'stopped');
+  assert.equal(taskIconState(task('done', { verification: { ok: true, checks: [] } })), 'success');
+  assert.equal(taskIconState(task('cancelled')), null);
+  for (const st of ['queued', 'active', 'verifying', 'waiting', 'done', 'failed', 'cancelled']) {
+    const s = taskIconState(task(st));
+    assert.ok(s === null || (STATUS_ICON_STATES.includes(s) && s !== 'paused'), `${st}: ${s}`);
+  }
 });
 
 // DESIGN-SYSTEM §1 (owner decision 2026-10-31): red only for what stops Nova; every other open

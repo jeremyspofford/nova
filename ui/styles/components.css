@@ -465,7 +465,7 @@ body[data-empty] .dock { flex: 1 0 auto; }
 body[data-dock-wait] .dock { opacity: 0; }
 .chat-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); margin: 0; padding-bottom: 0; }
 .chat-hero { position: relative; display: grid; place-items: center; width: 100%; padding-block: var(--space-5); }
-.chat-hero > .orb { position: relative; }
+.chat-hero > .status-icon { position: relative; }
 /* The sky: very low contrast, screen-blended so it is gone on a light theme, never behind text. */
 .chat-sky { position: absolute; inset: 0; width: 100%; height: 100%; fill: color-mix(in srgb, var(--orb-listening) 35%, var(--accent-primary)); opacity: 0.45; mix-blend-mode: screen; pointer-events: none; }
 @media (prefers-reduced-transparency: reduce) { .chat-sky { display: none; } }
@@ -474,7 +474,7 @@ body[data-dock-wait] .dock { opacity: 0; }
 body[data-empty] .chips { display: flex; }
 /* One orb per view at every width (owner, 2026-11-08): while the hero shows, the rail's Home link
    keeps its name and target but draws the plain Home icon instead of its orb. */
-.rail-home > .icon, body[data-empty] .rail-home > .orb { display: none; }
+.rail-home > .icon, body[data-empty] .rail-home > .status-icon { display: none; }
 body[data-empty] .rail-home > .icon { display: block; }
 .chip { min-height: var(--hit); padding: 0 var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius-input); background: transparent; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-body); cursor: pointer; }
 .chip:hover { color: var(--text-primary); background: var(--surface-card-hover); }
@@ -483,7 +483,7 @@ body[data-empty] .rail-home > .icon { display: block; }
 
 .home { gap: var(--space-5); }
 .home-hero { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); padding-top: var(--space-4); text-align: center; }
-.home-hero .orb { --orb-size: calc(var(--space-8) * 2.25); margin: var(--space-5) 0 var(--space-3); }
+.home-hero .status-icon { margin: var(--space-5) 0 var(--space-3); }
 .greeting { font: var(--type-weight-strong) var(--type-h1)/var(--type-line-tight) var(--font-display); text-wrap: balance; }
 .greeting-sub { color: var(--text-secondary); }
 .home-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--layout-card-gap); }

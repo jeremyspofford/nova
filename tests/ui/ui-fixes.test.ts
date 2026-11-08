@@ -115,7 +115,8 @@ async function scopeSays(page: Page, re: RegExp, what: string) {
   assert.ok(ok, `${what}: “${await page.locator('#appearance-scope').textContent()}”`);
 }
 
-const visibleOrbs = (page: Page) => page.$$eval('.orb', (els) => els.filter((e) => (e as HTMLElement).checkVisibility() && e.getBoundingClientRect().width > 0).length);
+// The live state, drawn as the status icon since status icons part B (task rows' own icons aside).
+const visibleOrbs = (page: Page) => page.$$eval('.orb, .status-icon[data-presence]', (els) => els.filter((e) => (e as HTMLElement).checkVisibility() && e.getBoundingClientRect().width > 0).length);
 
 // ---- 1, 2, 3: the orb, chat, timestamps ------------------------------------------------------------
 
@@ -137,14 +138,14 @@ test('UI fixes 1–3: the orb once per view; chat in the AI-chat style; grouped,
         // 1. Every destination shows the orb exactly once.
         for (const dest of ALL) {
           await go(d.page, dest);
-          if (dest === 'home') await d.page.waitForFunction(() => [...document.querySelectorAll('.orb')].some((o) => (o as HTMLElement).checkVisibility()), null, { timeout: 5000 }).catch(() => {});
+          if (dest === 'home') await d.page.waitForFunction(() => [...document.querySelectorAll('.orb, .status-icon[data-presence]')].some((o) => (o as HTMLElement).checkVisibility()), null, { timeout: 5000 }).catch(() => {});
           assert.equal(await visibleOrbs(d.page), 1, `${where}: ${dest} shows the orb once`);
         }
 
         // 2. The conversation.
         await go(d.page, 'chat');
         await d.page.locator('.msg-nova').first().waitFor();
-        assert.equal(await d.page.locator('#thread .orb, #thread .msg-avatar').count(), 0, `${where}: no orb or avatar on a message`);
+        assert.equal(await d.page.locator('#thread .orb, #thread .status-icon, #thread .msg-avatar').count(), 0, `${where}: no orb, status icon or avatar on a message`);
         const shape = await d.page.evaluate(() => {
           const thread = document.getElementById('thread')!;
           const cs = getComputedStyle(thread);

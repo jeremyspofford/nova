@@ -962,10 +962,15 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
 {
   const p = await page({ reducedMotion: 'reduce' });
   await p.goto(base);
-  await p.waitForSelector('html[data-ready] .home-hero .orb', { state: 'attached' });
+  // The live state is the status icon (status icons part B): under reduced motion its canvas holds still.
+  await p.waitForSelector('html[data-ready] .home-hero .status-icon[data-presence]', { state: 'attached' });
   await p.waitForTimeout(300);
-  const v = await p.evaluate(() => ({ breathe: getComputedStyle(document.documentElement).getPropertyValue('--motion-breathe').trim(), orb: getComputedStyle(document.querySelector('.home-hero .orb-glow')).animationDuration }));
-  check('reduced motion: the orb stops breathing', v.breathe === '0s' && v.orb === '0s', JSON.stringify(v));
+  // The live icon on screen (the hero on a phone, the rail's beside a rail).
+  const pic = () => p.evaluate(() => [...document.querySelectorAll('.status-icon[data-presence]')].find((e) => e.checkVisibility()).querySelector('canvas').toDataURL());
+  const first = await pic();
+  await p.waitForTimeout(600);
+  const v = { breathe: await p.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--motion-breathe').trim()), still: (await pic()) === first };
+  check('reduced motion: the orb stops breathing', v.breathe === '0s' && v.still, JSON.stringify(v));
   const p2 = await page({ reducedMotion: 'reduce', theme: 'obsidian', mode: 'dark' });
   await p2.goto(base);
   await p2.waitForSelector('html[data-ready]');
