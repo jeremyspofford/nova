@@ -506,3 +506,19 @@
 .mm-quote { margin: var(--space-2) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
 .mm-file { margin: 0 0 var(--space-4); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .mm .au-locked { margin-top: var(--space-4); }
+
+/* ---- The vault: names, delete, reset (2026-11-09; ui/js/sg-vault.js) ----
+   The Automations panes (.au-*) again: secret names on hairlines, grouped by the part of Nova that
+   uses each, the opened one beside them. Separators sit on the list items, never on a control. */
+.vt .au-list > * { flex-shrink: 0; }
+.vt .au-detail .uc-back { margin-bottom: var(--space-2); }
+.vt-list, .vt-notes { margin: 0; padding: 0; list-style: none; }
+.vt-item + .vt-item { border-top: 1px solid var(--border-subtle); }
+.vt-list .au-open { align-items: flex-start; padding-block: var(--space-3); }
+.vt-kind { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.vt .au-detail .uc-h { overflow-wrap: anywhere; }
+.vt-notes > li { padding: var(--space-2) 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.vt-notes > li + li { border-top: 1px solid var(--border-subtle); }
+.vt-said { margin: 0 0 var(--space-4); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.vt-quote { margin: var(--space-2) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.vt .confirm { min-height: var(--hit); }

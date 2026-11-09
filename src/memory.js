@@ -361,6 +361,8 @@ export class Memory {
       if (rec && has(SHOWN, rec.kind)) {
         if (!clean) throw new Error('An entry needs some words. To remove it, forget it instead.');
         const latest = this.latest(rec.id);
+        // An edit of an older wording would silently replace a newer correction (another device's).
+        if (latest.id !== rec.id && oneLine(latest.content) !== clean) throw Object.assign(new Error('This memory was changed since you opened it. Reload to see the newest wording, then edit that.'), { status: 409 });
         const next = oneLine(latest.content) === clean ? latest : this.store().correct(latest.id, clean, 'person');
         this.publish();
         return recordEntry(this.view(next));
