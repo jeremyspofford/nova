@@ -5,7 +5,7 @@
 // and the event streams are never cached or answered offline.
 const VERSION = 'nova-shell-v66';
 const SHELL = [
-  '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png',
+  '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/mark-1024.webp',
   '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css', '/styles/stage2.css', '/styles/palette.css', '/styles/status-icon.css',
   '/js/app.js', '/js/core.js', '/js/shell.js', '/js/layout.js', '/js/nav.js', '/js/status.js', '/js/components.js',
   '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js', '/js/qr.js', '/js/device-key.js', '/js/takeover.js',

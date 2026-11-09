@@ -1,20 +1,25 @@
-// The agent status icon (owner spec 2026-11-08, docs/builder-packet/ui-references/
-// nova-agent-status-icon-builder-prompt-2026-11-08.md; art: nova-agent-state-system-sheet-2026-11-08.jpg).
-// One iridescent ribbon, reshaped per state. Every state is a ribbon of N points (x, y, half-width,
-// gradient position, link to the previous point), so a morph interpolates the same points, and a
-// change mid-morph starts from the form on screen. One shared offscreen WebGL context shades every
-// instance and copies into each instance's own 2D canvas; Canvas2D strokes the same points if WebGL
-// isn't there. Colours are the design system's tokens, read at runtime, so any theme maps the states.
-// The model (StatusModel, statusForm) is pure and unit-tested (tests/status-icon.test.js).
+// The agent status icon: Nova's mark, the owner's artwork (docs/builder-packet/ui-references/
+// nova-mark-artwork-not-code-amendment-2026-11-08.md), with each state a TREATMENT of it, never new
+// geometry (nova-single-mark-n-direction-2026-11-08.md): a palette shift, brightness, and motion
+// (a twirl round the black core, a radial pulse). One shared offscreen WebGL context samples the
+// artwork as a mipmapped texture, so 16 px is a prefiltered downscale of the same picture as 180 px,
+// and copies into each instance's own 2D canvas; Canvas2D draws the artwork with composited tints if
+// WebGL isn't there. Colours come from the design system's tokens, read at runtime.
+// The artwork itself is the page's: an <img data-nova-mark> in its markup (ui/index.html, pair.html,
+// styleguide.html). This file only draws what is already on the page; it loads nothing (it is served
+// before pairing on that condition: tests/public-status-icon.test.js).
+// The model (StatusModel, stateTreatment) is pure and unit-tested (tests/status-icon.test.js).
 
 export const STATUS_ICON_STATES = Object.freeze(['idle', 'listening', 'thinking', 'working', 'speaking', 'needs-you', 'success', 'paused', 'stopped', 'offline']);
-// Owner, 2026-11-08: 400 ms read as too fast and acute; a morph takes 800 ms on a soft ease-in-out.
+// Owner, 2026-11-08: 400 ms read as too fast and acute; a change takes 800 ms on a soft ease-in-out.
 export const MORPH_MS = 800;
 // success is a flourish, never a resting state: it settles to idle by itself.
-export const SUCCESS_MS = 1800; // the 800 ms morph in, then about a second shown
-export const SMALL_MAX = 24;
-const N = 36;
-const EXTENT = 1; // the canvas shows [-EXTENT, EXTENT]; forms fill about 90% of it, the glow the rest
+export const SUCCESS_MS = 1800; // the 800 ms change in, its sweep, then about a second shown
+const SWEEP_MS = 1000;
+// Where the artwork's vortex turns and where its black core is, as fractions of the tile
+// (measured on the source by scripts/app-icon.js, which crops the same tile).
+const CORE = [0.5, 0.4953];
+const CORE_BLACK = [0.4752, 0.5008, 0.065]; // the darkest disc: centre and radius, kept black
 const LOOPS = new Set(['idle', 'listening', 'thinking', 'working', 'speaking', 'needs-you']);
 const TAU = Math.PI * 2;
 
@@ -65,226 +70,88 @@ export class StatusModel {
   }
 }
 
-// ---- the forms: N points of [x, y, half-width, u, link] in [-1, 1], y up -------------------------
+// ---- the treatments: what each state does to the artwork (the owner's state table) ---------------
 
-function stroke(out, i0, n, at) {
-  for (let j = 0; j < n; j++) {
-    const s = j / (n - 1);
-    const [x, y, w, u = s] = at(s);
-    out.set([x, y, w, u, j ? 1 : 0], (i0 + j) * 5);
-  }
-}
-// An arm of the swirl: from r0 (inner, a fine tip) to r1 (outer, broad); warm at the heart, cool outside.
-// taper < 1 swells the ribbon early, so most of its length is broad.
-const arm = ({ a0, span, r0, r1, w0, w1, taper = 1 }) => (s) => {
-  const a = a0 - span * (1 - s);
-  const r = r0 + (r1 - r0) * s;
-  return [r * Math.cos(a), r * Math.sin(a), w0 + (w1 - w0) * s ** taper, 1 - s];
-};
-const ring = (r, w, a0 = 0) => (s) => [r * Math.cos(a0 + s * TAU), r * Math.sin(a0 + s * TAU), w, 0.5 - 0.5 * Math.cos(TAU * s)];
-// A straight-ish stroke with a width profile along it.
-const bend = (ax, ay, bx, by, k, width) => (s) => {
-  const x = ax + (bx - ax) * s, y = ay + (by - ay) * s, b = k * Math.sin(Math.PI * s);
-  return [x - (by - ay) * b, y + (bx - ax) * b, width(s)];
-};
-// Loops ease in and out: each period turns by `step` and comes to rest, never a linear spin.
-const soft = (x) => (1 - Math.cos(Math.PI * x)) / 2;
-const turn = (t, period, step) => step * (Math.floor(t / period) + soft((t / period) % 1));
+// A wave that eases in and out by itself, and a 0 → 1 → 0 swell over one period.
+const sway = (t, period) => Math.sin((TAU * t) / period);
+const swell = (t, period) => (1 - Math.cos((TAU * t) / period)) / 2;
 
-// The idle swirl, the owner's supernova N: two broad lobes in opposite corners, joined by a diagonal
-// sweep that curls round a dark heart. Stretched along the upper-left to lower-right diagonal.
-function swirl(out, t, small, { scale = 1, thin = 1, from = 0, n = N / 2 } = {}) {
-  const shape = small
-    ? { span: 1.1 * Math.PI, r0: 0.26, r1: 0.6, w0: 0.1, w1: 0.2 }
-    : { span: 1.2 * Math.PI, r0: 0.17, r1: 0.55, w0: 0.05, w1: 0.36, taper: 0.45 };
-  const rot = turn(t, 10, Math.PI); // two-fold, so half a turn per period is seamless
-  for (let k = 0; k < 2; k++) {
-    const at = arm({ a0: rot + k * Math.PI + (3 * Math.PI) / 4, ...shape });
-    stroke(out, from + k * n, n, (s) => {
-      const [x, y, w, u] = at(s);
-      const along = (x - y) / Math.SQRT2 * 1.12, across = (x + y) / Math.SQRT2 * 0.9;
-      return [((along + across) / Math.SQRT2) * scale, ((across - along) / Math.SQRT2) * scale, w * scale * thin, u];
-    });
-  }
-}
-
-export function statusForm(status, t = 0, small = false) {
-  const out = new Float32Array(N * 5);
+// stateTreatment(status, t) → how the artwork is drawn in that state at time t (seconds; 0 when
+// motion is reduced): twirl (radians round the core), pulse (radial: > 0 draws inward, < 0 outward),
+// hue (radians of palette churn), tint ('cyan' | 'amber' | 'red' | null) and how much, saturation
+// and brightness. Paused, stopped and offline don't depend on t: they are frozen.
+export function stateTreatment(status, t = 0) {
+  const still = { twirl: 0, pulse: 0, hue: 0, tint: null, tintAmt: 0, sat: 1, bright: 1 };
   switch (known(status)) {
-    case 'idle': swirl(out, t, small); break;
-    case 'offline': swirl(out, 0, small, { scale: 0.9, thin: 0.8 }); break;
-    case 'speaking': {
-      // The idle swirl, smaller, with a ring easing outward from it.
-      const k = soft((t / 1.6) % 1);
-      swirl(out, t, small, { scale: 0.74, n: 9 });
-      stroke(out, 18, 18, ring(t ? 0.78 + 0.12 * k : 0.86, t ? 0.07 * (1 - k) + 0.02 : 0.05));
-      break;
-    }
-    case 'thinking':
-      // One arm curling inward: a nautilus whose outer turn rides over the inner. A slow, eased turn.
-      stroke(out, 0, N, small
-        ? arm({ a0: turn(t, 7, TAU), span: 1.5 * Math.PI, r0: 0.2, r1: 0.66, w0: 0.1, w1: 0.22 })
-        : arm({ a0: turn(t, 7, TAU), span: 2.1 * Math.PI, r0: 0.06, r1: 0.55, w0: 0.04, w1: 0.37, taper: 0.7 }));
-      break;
-    case 'working':
-      // The thinking spiral's family: three broad blades round an open heart, a third of a turn at a time, briskly.
-      for (let k = 0; k < 3; k++) stroke(out, k * 12, 12, arm({ a0: turn(t, 1.2, TAU / 3) + (k * TAU) / 3, span: 0.75 * Math.PI, r0: 0.26, r1: 0.64, w0: 0.08, w1: 0.26, taper: 0.7 }));
-      break;
-    case 'listening': {
-      // A full orbit ring, tilted, broad on one side and fine on the other; the broad side slowly orbits.
-      const g = turn(t, 8, TAU), tilt = 0.4;
-      stroke(out, 0, N, (s) => {
-        const a = s * TAU;
-        const x = 0.68 * Math.cos(a), y = 0.44 * Math.sin(a);
-        return [x * Math.cos(tilt) - y * Math.sin(tilt), x * Math.sin(tilt) + y * Math.cos(tilt), 0.07 + 0.19 * (0.5 + 0.5 * Math.cos(a - g - 3.4)), 0.5 - 0.5 * Math.cos(a)];
-      });
-      break;
-    }
-    case 'needs-you': {
-      // A rounded triangle ribbon, broadest at its lower left, gently beckoning.
-      const z = 1 + 0.05 * Math.sin((t * TAU) / 1.8);
-      stroke(out, 0, N, (s) => {
-        const a = Math.PI / 2 + s * TAU;
-        const tri = 0.4 / Math.cos(((((a - Math.PI / 2) % (TAU / 3)) + TAU / 3) % (TAU / 3)) - Math.PI / 3);
-        const r = (tri * 0.8 + 0.1) * z;
-        return [r * Math.cos(a), r * Math.sin(a) - 0.05, 0.15 + 0.07 * Math.cos(a - 3.6), 0.5 - 0.5 * Math.cos(TAU * s)];
-      });
-      break;
-    }
-    case 'success': {
-      // A check drawn as one wave of ribbon, broad at its turn, fine at its tips; nebula, never green.
-      const [a, b, c] = [[-0.66, 0.06], [-0.2, -0.46], [0.7, 0.6]];
-      const l1 = Math.hypot(b[0] - a[0], b[1] - a[1]), l2 = Math.hypot(c[0] - b[0], c[1] - b[1]), m = l1 / (l1 + l2);
-      stroke(out, 0, N, (s) => {
-        const [p, q, k] = s < m ? [a, b, s / m] : [b, c, (s - m) / (1 - m)];
-        return [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, 0.07 + 0.22 * (1 - s) ** 0.6 * Math.min(1, s * 4)];
-      });
-      break;
-    }
-    case 'paused': {
-      // Twin pillars, swollen at their ends and pinched at the waist.
-      const width = (s) => 0.2 + 0.06 * Math.cos(TAU * s);
-      stroke(out, 0, 18, bend(-0.34, 0.56, -0.34, -0.56, 0.06, width));
-      stroke(out, 18, 18, bend(0.34, 0.56, 0.34, -0.56, 0.06, width));
-      break;
-    }
-    case 'stopped': {
-      // HALT: two heavy crossed ribbons, swung like a twist, broad lobes at the ends.
-      const width = (s) => 0.32 - 0.1 * Math.sin(Math.PI * s);
-      stroke(out, 0, 18, bend(-0.56, 0.56, 0.56, -0.56, 0.1, width));
-      stroke(out, 18, 18, bend(0.56, 0.56, -0.56, -0.56, -0.1, width));
-      break;
-    }
+    case 'idle': return { ...still, twirl: 0.1 * sway(t, 12) }; // full palette, a very slow swirl
+    case 'listening': return { ...still, tint: 'cyan', tintAmt: 0.45, pulse: 0.035 * swell(t, 4) }; // cyan-leaning, a slow inward pulse
+    case 'thinking': return { ...still, hue: 0.2 + 0.3 * sway(t, 6), twirl: 0.16 * sway(t, 7) }; // the palette shifted and churning, medium motion
+    case 'working': return { ...still, twirl: 0.22 * sway(t, 2.4), sat: 1.12, bright: 1.15 }; // full palette, faster, brighter
+    case 'speaking': return { ...still, pulse: -0.03 * swell(t, 1.8), bright: 1.05 }; // a gentle outward pulse
+    case 'needs-you': return { ...still, tint: 'amber', tintAmt: 0.7, twirl: 0.1 * sway(t, 8), bright: 1.05 }; // amber, still running
+    case 'success': return { ...still, sat: 1.05, bright: 1.12 }; // plus the sweep, drawn from the model's clock
+    case 'paused': return { ...still, sat: 0.55, bright: 0.5 }; // dimmed and frozen
+    case 'stopped': return { ...still, tint: 'red', tintAmt: 0.8, bright: 0.95 }; // red and frozen
+    case 'offline': return { ...still, sat: 0, bright: 0.45 }; // greyscale, dim and frozen
   }
-  if (small) {
-    // Small sizes: the same silhouette, no hairlines, and no band so broad it closes the gaps
-    // (stopped keeps its mass: it must read as a halt at 16 px).
-    const cap = status === 'stopped' ? 0.28 : 0.22;
-    for (let i = 0; i < N; i++) out[i * 5 + 2] = Math.min(Math.max(out[i * 5 + 2] * 1.25, 0.1), cap);
-  } else {
-    // Large sizes fill the tile, as the sheet's forms do.
-    for (let i = 0; i < N * 5; i += 5) { out[i] *= 1.04; out[i + 1] *= 1.04; out[i + 2] *= 1.04; }
-  }
-  return out;
 }
 
-// ---- colour: six stops per state, derived from the design system's tokens -----------------------
-
-const mixc = (a, b, k) => a.map((v, i) => v + (b[i] - v) * k);
-const scalec = (a, k) => a.map((v) => v * k);
-const LIGHT = [1, 1, 1];
-const grey = (a, k) => { const l = a[0] * 0.3 + a[1] * 0.59 + a[2] * 0.11; return mixc(a, [l, l, l], k); };
-
-// [stops, brightness] per state, from the five tokens the Nebula orb already defines.
-export function statePalettes({ core, violet, coral, amber, red }) {
-  const deep = scalec(mixc(core, violet, 0.35), 0.5);
-  const magenta = mixc(violet, coral, 0.5);
-  const nebula = [deep, core, violet, magenta, coral, amber];
-  return {
-    idle: [nebula, 0.92],
-    speaking: [nebula, 1.1],
-    offline: [nebula.map((c) => grey(c, 0.85)), 0.62],
-    listening: [[deep, core, core, mixc(core, violet, 0.5), violet, magenta], 1],
-    thinking: [[deep, deep, core, core, mixc(core, LIGHT, 0.3), violet], 0.98],
-    working: [nebula, 1.05],
-    'needs-you': [[magenta, amber, amber, coral, amber, mixc(amber, LIGHT, 0.2)], 1.05],
-    success: [[violet, magenta, violet, core, mixc(core, LIGHT, 0.25), core], 1.1],
-    paused: [[deep, violet, violet, magenta, magenta, violet], 0.95],
-    stopped: [[scalec(red, 0.45), scalec(red, 0.75), red, red, scalec(red, 0.6), mixc(red, violet, 0.35)], 1],
-  };
+// The treatments of every state on screen, mixed by how much of each there is.
+function blend(weights, t, tints) {
+  const out = { twirl: 0, pulse: 0, hue: 0, tint: [0, 0, 0], tintAmt: 0, sat: 0, bright: 0 };
+  for (const [s, k] of Object.entries(weights)) {
+    if (k < 1e-3) continue;
+    const tr = stateTreatment(s, t);
+    for (const f of ['twirl', 'pulse', 'hue', 'tintAmt', 'sat', 'bright']) out[f] += tr[f] * k;
+    if (tr.tint) for (let i = 0; i < 3; i++) out.tint[i] += tints[tr.tint][i] * tr.tintAmt * k;
+  }
+  if (out.tintAmt > 0) out.tint = out.tint.map((v) => v / out.tintAmt);
+  return out;
 }
 
 // ---- rendering (browser only below) --------------------------------------------------------------
 
 const VERT = 'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}';
 const FRAG = `
-#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
 precision mediump float;
-#endif
-uniform vec4 uP[${N}];
-uniform vec4 uL[${N / 4}];
-uniform vec3 uC[6];
-uniform vec2 uRes;
-uniform float uBright, uSmall;
-vec3 pal(float t) {
-  t = clamp(t, 0., 1.) * 5.;
-  vec3 c = mix(uC[0], uC[1], clamp(t, 0., 1.));
-  c = mix(c, uC[2], clamp(t - 1., 0., 1.));
-  c = mix(c, uC[3], clamp(t - 2., 0., 1.));
-  c = mix(c, uC[4], clamp(t - 3., 0., 1.));
-  return mix(c, uC[5], clamp(t - 4., 0., 1.));
+uniform sampler2D uTex;
+uniform vec2 uRes, uCore;
+uniform vec3 uBlack, uTint;
+uniform float uTwirl, uPulse, uTintAmt, uSat, uBright, uHue, uSweep, uSweepAmt;
+vec3 hue(vec3 c, float h) {
+  vec3 yiq = mat3(.299, .596, .211, .587, -.274, -.523, .114, -.322, .312) * c;
+  float cs = cos(h), sn = sin(h);
+  yiq.yz = mat2(cs, sn, -sn, cs) * yiq.yz;
+  return mat3(1., 1., 1., .956, -.272, -1.106, .621, -.647, 1.703) * yiq;
 }
 void main() {
-  vec2 p = (gl_FragCoord.xy / uRes * 2. - 1.) * ${EXTENT.toFixed(2)};
-  float aa = ${(2 * EXTENT).toFixed(2)} / uRes.x;
-  float best = -1., cover = 0., edge = 9., bu = 0., bz = 0., layer = 0.;
-  vec2 bn = vec2(0.);
-  vec4 prev = uP[0];
-  for (int q = 0; q < ${N / 4}; q++) {
-    vec4 L = uL[q];
-    for (int c = 0; c < 4; c++) {
-      int i = q * 4 + c;
-      vec4 cur = uP[q * 4 + c]; // GLSL ES 1.0 indexes uniforms by loop indices only
-      float l = c == 0 ? L.x : c == 1 ? L.y : c == 2 ? L.z : L.w;
-      if (l < .5) layer += 1.;
-      if (i > 0 && l > 0.01) {
-        vec2 pa = p - prev.xy, ba = cur.xy - prev.xy;
-        float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0., 1.);
-        vec2 d = pa - ba * h;
-        float w = max(mix(prev.z, cur.z, h) * l, 1e-4), r = length(d);
-        edge = min(edge, r - w);
-        float cv = clamp((w - r) / aa + .5, 0., 1.);
-        if (cv > 0.) {
-          float z = sqrt(max(0., 1. - r * r / (w * w)));
-          float score = z + layer * 2.; // within a stroke the nearest wins; a later stroke passes over an earlier one
-          if (score > best) { best = score; bu = mix(prev.w, cur.w, h); bn = d / w; bz = z; }
-          cover = max(cover, cv);
-        }
-      }
-      prev = cur;
-    }
-  }
-  // A solid lit ribbon first, glow second: a body darker on its shadow side, a bright rim on the
-  // edge facing the light, a soft sheen, and the colour running along the ribbon (u), not across it.
-  vec3 base = pal(bu);
-  float rr = length(bn), lit = clamp(dot(bn, normalize(vec2(-.6, .8))) * .5 + .5, 0., 1.);
-  vec3 col = base * mix(mix(.42, 1.05, lit), .98, uSmall) * mix(.85, 1.1, bz); // small sizes: flat and bright, for legibility
-  col += base * smoothstep(.5, .97, rr) * smoothstep(.45, 1., lit) * .9 * (1. - uSmall * .4);
-  col += mix(base, vec3(1.), .3) * exp(-pow((rr - .4) / .14, 2.)) * lit * .2 * (1. - uSmall);
-  float star = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
-  col += step(.993, star) * .25 * bz * (1. - uSmall);
-  col = mix(vec3(dot(col, vec3(.3, .59, .11))), col, 1.25); // toward the sheet's saturation
-  col = clamp(col * uBright, 0., 1.);
-  // A tight glow, fading out before the canvas edge so no square shows.
-  float fade = 1. - smoothstep(.9, 1., max(abs(p.x), abs(p.y)));
-  float glow = exp(-max(edge, 0.) * 26.) * mix(.24, .14, uSmall) * uBright * (1. - cover) * fade;
-  gl_FragColor = vec4(col * cover + pal(.45) * glow, cover + glow);
+  vec2 uv = vec2(gl_FragCoord.x / uRes.x, 1. - gl_FragCoord.y / uRes.y);
+  vec2 d = uv - uCore;
+  float r = length(d);
+  // Motion moves where the artwork is read from, never what it is: a twirl that is strongest at the
+  // core and gone before the tile's frame, and a radial pulse inside the vortex.
+  float a = uTwirl * exp(-r / .22) * (1. - smoothstep(.36, .46, r));
+  d = mat2(cos(a), sin(a), -sin(a), cos(a)) * d;
+  d *= 1. + uPulse * (1. - smoothstep(.3, .46, r));
+  vec4 tex = texture2D(uTex, uCore + d);
+  vec3 col = tex.a > 0. ? tex.rgb / tex.a : vec3(0.);
+  col = clamp(hue(col, uHue), 0., 1.);
+  float lum = dot(col, vec3(.3, .59, .11));
+  // A tint is a gradient map onto the token's colour: black stays black, light stays light.
+  vec3 mapped = uTint * smoothstep(0., .6, lum) * 1.25 + vec3(smoothstep(.6, 1., lum) * .35);
+  col = mix(col, mapped, uTintAmt);
+  lum = dot(col, vec3(.3, .59, .11));
+  col = mix(vec3(lum), col, uSat) * uBright;
+  // Success: a band of light sweeping across, lighting the ribbons and not the dark between them.
+  float band = exp(-pow((uv.x + uv.y) * .5 - uSweep, 2.) / .008);
+  col += band * uSweepAmt * .7 * smoothstep(.03, .25, lum);
+  // The core stays black under every treatment.
+  col *= smoothstep(uBlack.z * .8, uBlack.z * 1.15, distance(uv, uBlack.xy));
+  gl_FragColor = vec4(clamp(col, 0., 1.) * tex.a, tex.a);
 }`;
 
 let gl; // undefined: not tried; null: unavailable
-let glCanvas, loc;
+let glCanvas, loc, tex, texOf;
 function webgl() {
   if (gl !== undefined) return gl;
   gl = null;
@@ -303,16 +170,47 @@ function webgl() {
     g.bufferData(g.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), g.STATIC_DRAW);
     g.enableVertexAttribArray(0);
     g.vertexAttribPointer(0, 2, g.FLOAT, false, 0, 0);
-    loc = Object.fromEntries(['uP', 'uL', 'uC', 'uRes', 'uBright', 'uSmall'].map((u) => [u, g.getUniformLocation(prog, u)]));
+    loc = Object.fromEntries(['uTex', 'uRes', 'uCore', 'uBlack', 'uTint', 'uTwirl', 'uPulse', 'uTintAmt', 'uSat', 'uBright', 'uHue', 'uSweep', 'uSweepAmt'].map((u) => [u, g.getUniformLocation(prog, u)]));
     glCanvas.addEventListener('webglcontextlost', () => { gl = null; });
     gl = g;
   } catch { gl = null; }
   return gl;
 }
 
-// Token colours, parsed once per distinct value.
-const TOKENS = { core: '--orb-core', violet: '--accent-secondary', coral: '--orb-listening', amber: '--orb-attention', red: '--status-error' };
-let parser, lastKey, lastPalettes;
+// The artwork: the page's own <img data-nova-mark>, once it has loaded. Until then an icon draws
+// nothing, and every icon is redrawn when it arrives.
+let waitingFor = null;
+function artwork() {
+  const img = document.querySelector('img[data-nova-mark]');
+  if (img?.complete && img.naturalWidth > 0) return img;
+  if (img && waitingFor !== img) {
+    waitingFor = img;
+    img.addEventListener('load', () => { for (const ic of live) ic.dirty = true; kick(); }, { once: true });
+  }
+  return null;
+}
+
+// The artwork as a texture, mipmapped (it is 1024 px square) so every size is a prefiltered downscale.
+function texture(g, img) {
+  if (texOf === img) return tex;
+  tex = g.createTexture();
+  g.bindTexture(g.TEXTURE_2D, tex);
+  g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+  g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, img);
+  const pot = (n) => (n & (n - 1)) === 0;
+  const mip = pot(img.naturalWidth) && pot(img.naturalHeight);
+  if (mip) g.generateMipmap(g.TEXTURE_2D);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, mip ? g.LINEAR_MIPMAP_LINEAR : g.LINEAR);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
+  texOf = img;
+  return tex;
+}
+
+// Token colours, parsed once per distinct value: the tints the state table names.
+const TOKENS = { cyan: '--orb-core', amber: '--orb-attention', red: '--status-error' };
+let parser, lastKey, lastTints;
 function rgb(value) {
   parser ??= document.createElement('canvas').getContext('2d');
   parser.fillStyle = value;
@@ -320,76 +218,89 @@ function rgb(value) {
   if (v.startsWith('#')) return [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16) / 255);
   return (v.match(/[\d.]+/g) ?? [0, 0, 0]).slice(0, 3).map((x) => Number(x) / 255);
 }
-function palettes() {
+function tints() {
   const style = getComputedStyle(document.documentElement);
   const raw = Object.fromEntries(Object.entries(TOKENS).map(([k, name]) => [k, style.getPropertyValue(name).trim()]));
   const key = Object.values(raw).join('|');
-  if (key !== lastKey) { lastKey = key; lastPalettes = statePalettes(Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, rgb(v)]))); }
-  return lastPalettes;
+  if (key !== lastKey) { lastKey = key; lastTints = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, rgb(v)])); }
+  return lastTints;
 }
 
-function paint(ic, now, pals) {
-  const { canvas, model, small } = ic;
+function paint(ic, now, colours) {
+  const { canvas, model } = ic;
   const t = model.reduced ? 0 : now / 1000;
-  const pts = new Float32Array(N * 5);
-  const cols = Array.from({ length: 6 }, () => [0, 0, 0]);
-  let bright = 0;
-  for (const [s, k] of Object.entries(model.weights(now))) {
-    if (k < 1e-3) continue;
-    const f = statusForm(s, t, small);
-    for (let i = 0; i < f.length; i++) pts[i] += f[i] * k;
-    const [stops, b] = pals[s];
-    stops.forEach((c, j) => { for (let x = 0; x < 3; x++) cols[j][x] += c[x] * k; });
-    bright += b * k;
-  }
+  const tr = blend(model.weights(now), t, colours);
+  // The success sweep runs once across its first second, unless motion is reduced.
+  const since = now - model.start;
+  tr.sweep = model.to === 'success' && !model.reduced && since < SWEEP_MS ? -0.3 + 1.6 * (since / SWEEP_MS) : -9;
+  tr.sweepAmt = tr.sweep > -9 ? 1 : 0;
   const size = canvas.width;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, size, size);
+  const img = artwork();
+  if (!img) { ic.el.dataset.renderer = 'waiting'; return; }
   const g = webgl();
   try {
-    if (g) { shade(g, ctx, size, pts, cols, bright, small); ic.el.dataset.renderer = 'webgl'; return; }
+    if (g) { shade(g, ctx, size, img, tr); ic.el.dataset.renderer = 'webgl'; return; }
   } catch {
     gl = null; // a context that fails mid-draw: draw with Canvas2D from now on
   }
   ic.el.dataset.renderer = 'canvas2d';
-  strokeFallback(ctx, size, pts, cols, bright);
+  composite(ctx, size, img, tr);
 }
 
-function shade(g, ctx, size, pts, cols, bright, small) {
-  if (glCanvas.width < size) glCanvas.width = glCanvas.height = size;
+function shade(g, ctx, size, img, tr) {
+  // Big enough both ways (a fresh canvas is 300 × 150, so checking the width alone clipped any icon
+  // drawn more than 150 px tall).
+  if (glCanvas.width < size || glCanvas.height < size) glCanvas.width = glCanvas.height = Math.max(size, glCanvas.width, glCanvas.height);
   g.viewport(0, 0, size, size);
   g.clearColor(0, 0, 0, 0);
   g.clear(g.COLOR_BUFFER_BIT);
-  const p = new Float32Array(N * 4), l = new Float32Array(N);
-  for (let i = 0; i < N; i++) { p.set(pts.subarray(i * 5, i * 5 + 4), i * 4); l[i] = pts[i * 5 + 4]; }
-  g.uniform4fv(loc.uP, p);
-  g.uniform4fv(loc.uL, l);
-  g.uniform3fv(loc.uC, cols.flat());
+  g.activeTexture(g.TEXTURE0);
+  g.bindTexture(g.TEXTURE_2D, texture(g, img));
+  g.uniform1i(loc.uTex, 0);
   g.uniform2f(loc.uRes, size, size);
-  g.uniform1f(loc.uBright, bright);
-  g.uniform1f(loc.uSmall, small ? 1 : 0);
+  g.uniform2f(loc.uCore, CORE[0], CORE[1]);
+  g.uniform3f(loc.uBlack, CORE_BLACK[0], CORE_BLACK[1], CORE_BLACK[2]);
+  g.uniform3fv(loc.uTint, tr.tint);
+  for (const [u, v] of [['uTwirl', tr.twirl], ['uPulse', tr.pulse], ['uTintAmt', tr.tintAmt], ['uSat', tr.sat], ['uBright', tr.bright], ['uHue', tr.hue], ['uSweep', tr.sweep], ['uSweepAmt', tr.sweepAmt]]) g.uniform1f(loc[u], v);
   g.drawArrays(g.TRIANGLES, 0, 3);
   ctx.drawImage(glCanvas, 0, glCanvas.height - size, size, size, 0, 0, size, size);
 }
 
-// No WebGL: the same ribbon, stroked flat with the same colours.
-function strokeFallback(ctx, size, pts, cols, bright) {
-  const at = (u) => { const t = Math.min(1, Math.max(0, u)) * 5, j = Math.min(4, Math.floor(t)); return mixc(cols[j], cols[j + 1], t - j).map((v) => Math.round(Math.min(1, v * bright) * 255)); };
-  ctx.save();
-  ctx.translate(size / 2, size / 2);
-  ctx.scale(size / 2 / EXTENT, -size / 2 / EXTENT);
-  ctx.lineCap = 'round';
-  for (let i = 1; i < N; i++) {
-    const a = (i - 1) * 5, b = i * 5, link = pts[b + 4];
-    if (link < 0.01) continue;
-    ctx.lineWidth = (pts[a + 2] + pts[b + 2]) * link;
-    ctx.strokeStyle = `rgb(${at((pts[a + 3] + pts[b + 3]) / 2).join(' ')})`;
-    ctx.beginPath();
-    ctx.moveTo(pts[a], pts[a + 1]);
-    ctx.lineTo(pts[b], pts[b + 1]);
-    ctx.stroke();
+// No WebGL: the artwork, downscaled by halving (so small sizes aren't aliased), with the state's
+// saturation, tint and brightness composited over it. Still, but every state still reads.
+const halves = new Map();
+function downscaled(img, size) {
+  const key = `${size}`;
+  if (halves.get('img') !== img) { halves.clear(); halves.set('img', img); }
+  if (halves.has(key)) return halves.get(key);
+  let c = img, w = img.naturalWidth;
+  while (w / 2 >= size) {
+    const h = document.createElement('canvas');
+    h.width = h.height = Math.round(w / 2);
+    const g = h.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(c, 0, 0, h.width, h.height);
+    c = h; w = h.width;
   }
-  ctx.restore();
+  halves.set(key, c);
+  return c;
+}
+function composite(ctx, size, img, tr) {
+  const art = downscaled(img, size);
+  const grey = (v) => { const n = Math.round(Math.min(1, Math.max(0, v)) * 255); return `rgb(${n} ${n} ${n})`; };
+  const fill = (op, colour, alpha) => { ctx.globalCompositeOperation = op; ctx.globalAlpha = alpha; ctx.fillStyle = colour; ctx.fillRect(0, 0, size, size); };
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(art, 0, 0, size, size);
+  if (tr.sat < 0.99) fill('saturation', grey(0.5), Math.min(1, 1 - tr.sat));
+  if (tr.tintAmt > 0.01) fill('color', `rgb(${tr.tint.map((v) => Math.round(v * 255)).join(' ')})`, Math.min(1, tr.tintAmt));
+  if (tr.bright < 0.99) fill('multiply', grey(tr.bright), 1);
+  else if (tr.bright > 1.01) fill('screen', grey(tr.bright - 1), 1);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'destination-in'; // back to the artwork's own shape
+  ctx.drawImage(art, 0, 0, size, size);
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 // ---- instances and the one animation loop --------------------------------------------------------
@@ -419,7 +330,7 @@ const reducedNow = () => forced ?? !!reduceQuery()?.matches;
 function kick() { if (!raf && !document.hidden) raf = requestAnimationFrame(frame); }
 function frame(now) {
   raf = 0;
-  const pals = palettes();
+  const colours = tints();
   let more = false;
   for (const ic of live) {
     if (!ic.el.isConnected) {
@@ -432,7 +343,7 @@ function frame(now) {
     // A morph or the success flourish runs out whether seen or not; a resting loop runs only on screen.
     const morphing = ic.model.moving(now);
     const moving = morphing || (ic.visible && !ic.model.reduced && LOOPS.has(ic.model.status(now)));
-    if ((moving && ic.visible) || ic.dirty) { paint(ic, now, pals); ic.dirty = false; }
+    if ((moving && ic.visible) || ic.dirty) { paint(ic, now, colours); ic.dirty = false; }
     ic.label(ic.model.status(now));
     if (moving) more = true;
   }
@@ -476,7 +387,7 @@ export function statusIcon({ status = 'idle', size = 24, label = null, decorativ
   canvas.setAttribute('aria-hidden', 'true');
   el.append(canvas);
   const ic = {
-    el, canvas, small: px <= SMALL_MAX, model: new StatusModel(status, performance.now()), dirty: false, seen: false, unseen: 0, visible: true,
+    el, canvas, model: new StatusModel(status, performance.now()), dirty: false, seen: false, unseen: 0, visible: true,
     label(s) {
       if (el.dataset.status === s) return;
       el.dataset.status = s;
@@ -499,7 +410,7 @@ export function statusIcon({ status = 'idle', size = 24, label = null, decorativ
   Object.defineProperty(el, 'status', { get: () => ic.model.status(performance.now()) });
   live.add(ic);
   watchSight(ic);
-  paint(ic, performance.now(), palettes());
+  paint(ic, performance.now(), tints());
   kick();
   return el;
 }

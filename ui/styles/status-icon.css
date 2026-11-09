@@ -1,4 +1,4 @@
-/* The agent status icon (ui/js/status-icon.js): one canvas, drawn from the design system's tokens. */
+/* The agent status icon (ui/js/status-icon.js): one canvas, the owner’s artwork with a state’s treatment. */
 .status-icon { display: inline-flex; vertical-align: middle; }
 .status-icon canvas { display: block; }
 
@@ -8,10 +8,12 @@
 .si-controls .sg-label { margin-top: 0; }
 .si-controls .sg-demo-row + .sg-demo-row { margin-top: var(--space-3); }
 .si-reduce { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--space-7); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
-.si-tile { display: inline-grid; place-items: center; padding: 1px; border: 1px solid var(--border-subtle); border-radius: var(--radius-input); background: var(--bg-base); }
-.si-tile-hero { padding: var(--space-1); border-radius: var(--radius-card); }
+.si-tile { display: inline-grid; place-items: center; }
 .si-sheet { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); align-items: center; justify-items: center; gap: var(--space-2) var(--space-4); max-width: calc(var(--space-8) * 6); }
 .si-sheet > .sg-name:nth-child(4n + 1) { justify-self: start; }
+.si-sizes { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-4); }
+.si-crop { margin: 0 0 var(--space-4); }
+.si-crop .sg-name { display: block; margin-bottom: var(--space-2); }
 
 /* In the app (shell.js): the live state in the rail, the top bar and the heroes, and a task row's own state. */
 .task-icon { flex: none; }

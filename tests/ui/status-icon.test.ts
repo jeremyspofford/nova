@@ -1,21 +1,22 @@
-// The agent status icon's preview (owner spec 2026-11-08; /styleguide?entry=status-icon), in
-// Chromium and WebKit: every state at 16, 24 and 48 px with its name as its label, canvases that
-// aren't blank, looping states that move, a reduced-motion switch that leaves still frames and swaps
-// without a morph, success settling to idle by itself, and the mid-transition demo. With
-// NOVA_UI_SHOTS set: desktop 1440×900 and phone 390×844 in Nebula dark, and a greyscale sheet.
+// The agent status icon's preview (/styleguide?entry=status-icon), in Chromium and WebKit: Nova's mark,
+// the owner's artwork, drawn by every state's treatment at 16, 24 and 96 px with its name as its
+// label; canvases that aren't blank; looping states that move; a reduced-motion switch that leaves
+// still frames and swaps without a transition; success settling to idle by itself; the mid-transition
+// demo; and the 180 px hero drawn whole. With NOVA_UI_SHOTS set: the entry at desktop 1440×900 and
+// phone 390×844 in Nebula dark, every state at 96 and 24 px, and an idle → working → idle sequence.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { ROOT, chromiumPath, webkitBrowser, device, shotsDir } from './support.ts';
+import { chromiumPath, webkitBrowser, device, shotsDir } from './support.ts';
 import { createNova } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
 
 const STATES = ['idle', 'listening', 'thinking', 'working', 'speaking', 'needs-you', 'success', 'paused', 'stopped', 'offline'];
-const SIZES = [16, 24, 48];
+const SIZES = [16, 24, 96];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function fixture(run: (base: string) => Promise<void>) {
@@ -90,7 +91,7 @@ function assertDrawn(cells: Awaited<ReturnType<typeof drawn>>, label: string, re
 const webglChromium = () => chromium.launch({ executablePath: chromiumPath(), args: ['--disable-background-networking', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'] });
 
 for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], ['webkit', webkitBrowser, null]] as const) {
-  test(`Status icon ${engine}: every state at 16/24/48 labelled and drawn; motion, reduced motion, success and retargeting`, { timeout: 600_000 }, async () => {
+  test(`Status icon ${engine}: every state at 16/24/96 labelled and drawn; motion, reduced motion, success and retargeting`, { timeout: 600_000 }, async () => {
     let b: Browser | undefined;
     try {
       const launched = await launch();
@@ -124,6 +125,20 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         console.log(`${engine}: renderer ${renderer}`);
         assert.ok(renderer === 'webgl' || renderer === 'canvas2d');
         if (expected) assert.equal(renderer, expected, 'the shader renders where WebGL is');
+
+        // The 180 px hero is drawn whole: a fresh offscreen canvas is 300 × 150, and sizing it by its
+        // width alone once left the bottom of anything taller than 150 px blank (#393).
+        const rows = await p.evaluate(() => {
+          const c = document.querySelector<HTMLCanvasElement>('[data-si-hero] canvas')!;
+          const d = c.getContext('2d')!.getImageData(0, Math.round(c.height * 0.8), c.width, Math.round(c.height * 0.15)).data;
+          let n = 0;
+          for (let i = 3; i < d.length; i += 4) if (d[i]! > 64) n++;
+          return { share: n / (d.length / 4), css: c.getBoundingClientRect().width };
+        });
+        assert.equal(rows.css, 180, 'the hero is 180 px');
+        assert.ok(rows.share > 0.5, `the hero's bottom rows are drawn (${(rows.share * 100).toFixed(0)}% lit)`);
+        // It is the artwork: the page's own <img data-nova-mark>, loaded once.
+        assert.equal(await p.evaluate(() => document.querySelectorAll('img[data-nova-mark]').length), 1);
 
         // Moving: a looping state changes frame to frame.
         await p.getByRole('button', { name: 'working', exact: true }).click();
@@ -181,53 +196,36 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         const dir = shotsDir();
         if (dir && engine === 'chromium') {
           await p.evaluate(() => (document.querySelector('[data-si-hero] .status-icon') as HTMLElement & { setStatus: (s: string) => void }).setStatus('idle'));
-          // Catch a replay from its start, then wait out its 800 ms morph: the check, fully formed.
-          const label48 = (page: Page, l: string) => page.waitForFunction((x) => document.querySelector('[data-si-cell="success-48"] .status-icon')!.getAttribute('aria-label') === x, l, { timeout: 5000 });
-          const flourishing = async (page: Page) => { await label48(page, 'idle'); await label48(page, 'success'); await sleep(850); };
+          // Catch a success replay from its start, then wait out its 800 ms change: fully swept in.
+          const label96 = (page: Page, l: string) => page.waitForFunction((x) => document.querySelector('[data-si-cell="success-96"] .status-icon')!.getAttribute('aria-label') === x, l, { timeout: 5000 });
+          const flourishing = async (page: Page) => { await label96(page, 'idle'); await label96(page, 'success'); await sleep(850); };
           await flourishing(p);
-          await p.screenshot({ path: join(dir, 'status-icons-desktop-1440x900-nebula-dark.png') });
-          await p.screenshot({ path: join(dir, 'status-icons-desktop-1440x900-nebula-dark-full.png'), fullPage: true });
-          const sheet = p.locator('[data-si-sheet]');
-          await flourishing(p);
-          await sheet.evaluate((el) => { el.style.filter = 'grayscale(1)'; });
-          await sheet.screenshot({ path: join(dir, 'status-icons-greyscale-16-24-48.png') });
-          await sheet.evaluate((el) => { el.style.filter = ''; });
-          // Every state at the hero size, still (as reduced motion draws them), for a close look.
-          await p.evaluate(async (states) => {
-            const { statusIcon, setReducedMotion } = await import('/js/status-icon.js' as string);
-            setReducedMotion(true);
-            const row = document.createElement('div');
-            row.id = 'si-contact';
-            row.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;padding:8px;background:var(--bg-base)';
-            for (const s of states) row.append(statusIcon({ status: s, size: 96 }));
-            document.body.prepend(row);
-            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-          }, STATES);
-          await p.locator('#si-contact').screenshot({ path: join(dir, 'status-icons-every-state-96px-still.png') });
-          await p.evaluate(() => { document.getElementById('si-contact')!.remove(); });
-          // Side by side with the binding art: each of the sheet's tiles above the state it maps to.
-          const art = `data:image/jpeg;base64,${readFileSync(resolve(ROOT, 'docs/builder-packet/ui-references/nova-agent-state-system-sheet-2026-11-08.jpg')).toString('base64')}`;
-          await p.evaluate(async ({ art, pairs }: { art: string; pairs: [string, [number, number] | null][] }) => {
-            const { statusIcon } = await import('/js/status-icon.js' as string);
-            const k = 100 / 232; // the sheet's tiles are about 232 px square; ours are 100, holding a 96 px icon
-            const grid = document.createElement('div');
-            grid.id = 'si-compare';
-            grid.style.cssText = 'display:grid;grid-template-columns:repeat(10,100px);gap:12px;padding:16px;background:var(--bg-base);color:var(--text-secondary);font:12px/1.4 var(--font-mono);width:max-content';
-            const tile = 'box-sizing:border-box;width:100px;height:100px;border-radius:22px;display:grid;place-items:center;background:var(--bg-raised);border:1px solid var(--border-subtle)';
-            for (const [, at] of pairs) {
-              const t = document.createElement('div');
-              t.style.cssText = at ? `${tile};background:url(${art}) ${-at[0] * k}px ${-at[1] * k}px / ${1536 * k}px auto no-repeat` : `${tile};opacity:.3`;
-              grid.append(t);
-            }
-            for (const [s] of pairs) { const t = document.createElement('div'); t.style.cssText = tile; t.append(statusIcon({ status: s, size: 96 })); grid.append(t); }
-            for (const [s, at] of pairs) { const l = document.createElement('div'); l.textContent = at ? s : `${s} (no tile)`; grid.append(l); }
-            document.body.prepend(grid);
-            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-          }, { art, pairs: [['idle', [185, 77]], ['listening', [490, 77]], ['thinking', [803, 77]], ['success', [1116, 77]], ['needs-you', [185, 353]], ['stopped', [493, 353]], ['paused', [805, 353]], ['offline', [1115, 353]], ['working', null], ['speaking', null]] as [string, [number, number] | null][] });
-          await p.locator('#si-compare').screenshot({ path: join(dir, 'status-icons-vs-sheet-96px.png') });
-          await p.evaluate(() => { document.getElementById('si-compare')!.remove(); });
+          await p.screenshot({ path: join(dir, 'entry-desktop-1440x900-nebula-dark.png') });
+          await p.screenshot({ path: join(dir, 'entry-desktop-1440x900-nebula-dark-full.png'), fullPage: true });
+          // Every state's treatment at 96 and at 24 px, still (as reduced motion draws them).
+          for (const px of [96, 24]) {
+            await p.evaluate(async ({ states, px }) => {
+              const { statusIcon, setReducedMotion } = await import('/js/status-icon.js' as string);
+              setReducedMotion(true);
+              const grid = document.createElement('div');
+              grid.id = 'si-grid';
+              grid.style.cssText = `display:grid;grid-template-columns:repeat(5,${Math.max(px, 72)}px);gap:12px 16px;padding:16px;background:var(--bg-base);color:var(--text-secondary);font:12px/1.4 var(--font-mono);width:max-content`;
+              for (const s of states) {
+                const cell = document.createElement('div');
+                cell.style.cssText = 'display:grid;justify-items:center;gap:6px';
+                const name = document.createElement('span');
+                name.textContent = s;
+                cell.append(statusIcon({ status: s, size: px }), name);
+                grid.append(cell);
+              }
+              document.body.prepend(grid);
+              await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            }, { states: STATES, px });
+            await p.locator('#si-grid').screenshot({ path: join(dir, `every-state-${px}px.png`) });
+            await p.evaluate(() => { document.getElementById('si-grid')!.remove(); });
+          }
           // idle → working → idle at the real timing, on a manual clock so each frame lands exactly at
-          // its offset: 8 frames evenly across the two 800 ms morphs (back to idle at 800 ms).
+          // its offset: 8 frames evenly across the two 800 ms changes (back to idle at 800 ms).
           const seq = await device(b!, { width: 400, height: 300, scheme: 'dark', serviceWorkers: 'block' });
           await seq.ctx.addInitScript(() => {
             let now = 0;
@@ -239,12 +237,13 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
             };
           });
           await seq.page.goto(`${base}/styleguide?entry=status-icon`);
+          await seq.page.waitForFunction(() => (document.querySelector('img[data-nova-mark]') as HTMLImageElement | null)?.complete);
           await seq.page.evaluate(async () => {
             const { statusIcon } = await import('/js/status-icon.js' as string);
             const tile = document.createElement('div');
             tile.id = 'si-seq';
             tile.style.cssText = 'position:fixed;inset:0 auto auto 0;z-index:9;padding:8px;background:var(--bg-base)';
-            const icon = statusIcon({ status: 'idle', size: 96 });
+            const icon = statusIcon({ status: 'idle', size: 180 });
             tile.append(icon);
             document.body.append(tile);
             (window as unknown as { seqIcon: HTMLElement }).seqIcon = icon;
@@ -266,8 +265,8 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
           const phone = await device(b!, { width: 390, height: 844, scheme: 'dark', touch: true, serviceWorkers: 'block' });
           await open(phone.page, base);
           await flourishing(phone.page);
-          await phone.page.screenshot({ path: join(dir, 'status-icons-phone-390x844-nebula-dark.png') });
-          await phone.page.screenshot({ path: join(dir, 'status-icons-phone-390x844-nebula-dark-full.png'), fullPage: true });
+          await phone.page.screenshot({ path: join(dir, 'entry-phone-390x844-nebula-dark.png') });
+          await phone.page.screenshot({ path: join(dir, 'entry-phone-390x844-nebula-dark-full.png'), fullPage: true });
           assert.ok(await phone.page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'phone: no horizontal scroll');
           await phone.ctx.close();
         }
@@ -282,7 +281,7 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
 // No WebGL at all (a browser without it, or one whose context is refused): the Canvas2D fallback
 // draws every state, at every size, sized from creation and not blank; and changes still land.
 for (const [engine, launch] of [['chromium', webglChromium], ['webkit', webkitBrowser]] as const) {
-  test(`Status icon ${engine}, WebGL refused: the Canvas2D fallback draws every state at 16/24/48`, { timeout: 300_000 }, async () => {
+  test(`Status icon ${engine}, WebGL refused: the Canvas2D fallback draws every state at 16/24/96`, { timeout: 300_000 }, async () => {
     let b: Browser | undefined;
     try {
       const launched = await launch();
