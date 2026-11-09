@@ -20,6 +20,7 @@ import { bindConnections, loadConnections, renderConnections } from './connectio
 import { bindSites, loadSites, renderSites } from './sites.js';
 import { bindCapture, captureChanged, loadCapture, loadCaptureView, renderCaptureSettings, renderCaptureView } from './capture.js';
 import { bindModels, loadModels, renderModels } from './models.js';
+import { bindApprovals, loadApprovals, renderApprovals } from './approvals.js';
 import { bindDeviceModels, deviceModelsFrame, refreshDeviceModels, screenDevice, setScreenDevice } from './device-models.js';
 import { bindChanges, loadChanges, renderChanges } from './changes.js';
 import { bindCheckpoints, loadCheckpoints, renderCheckpoints } from './checkpoints.js';
@@ -1743,7 +1744,7 @@ function showSettings() {
   searchSettingsView('');
   selectSettings(settingsTarget(location.hash).cat);
   const opened = location.hash;
-  Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile', 'version']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset(), loadSecurity(api), loadConfigForm()]).then(() => {
+  Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile', 'version']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadApprovals(), loadChanges(), loadCheckpoints(), loadServices(), loadReset(), loadSecurity(api), loadConfigForm()]).then(() => {
     renderSettingsView({ only: 'security' });
     renderSettingsView({ only: 'you' });
     renderSettingsView({ only: 'privacy' });
@@ -1763,7 +1764,9 @@ const PARTS = {
   about: () => core.renderAboutSettings(),
   privacy: () => core.renderPrivacy(),
   providers: () => core.renderProviders(),
-  perms: () => (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" id="perms" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
+  // Approvals (approvals.js: every registered capability's tier, from GET /approvals), then the
+  // conversation's switches it links to as "Steps in a conversation", which stay as they were.
+  perms: () => renderApprovals() + (permissions ? renderPermissions(permissions) : permissionsError ? `<section class="memory-section" id="perms" aria-labelledby="set-perms"><h2 class="memory-heading" id="set-perms">Without asking</h2>
 <p class="memory-lede">${permissionsError}</p><button type="button" class="btn set-retry" data-action="retry-settings">Try again</button></section>` : ''),
   connections: () => renderConnections(),
   sites: () => renderSites(),
@@ -1858,8 +1861,9 @@ function renderSettingsView({ enter: entering = false, only = null } = {}) {
     if (k !== 'backups' && box.contains(active) && active.matches('input[type="text"], input[type="number"], input[type="password"], input[type="url"], input[type="search"], input:not([type]), textarea')) continue;
     // A device's Models screen keeps focus on its control by id (its selects and slider have no other name).
     const focus = box.contains(active) ? (active.closest('[data-device-models]') && active.id ? `#${CSS.escape(active.id)}` : active.dataset.id ? `[data-id="${CSS.escape(active.dataset.id)}"]` : active.name ? `input[name="${CSS.escape(active.name)}"]:checked` : active.dataset.action ? `[data-action="${CSS.escape(active.dataset.action)}"]${active.dataset.ds ? `[data-ds="${CSS.escape(active.dataset.ds)}"]` : ''}${active.dataset.scope ? `[data-scope="${CSS.escape(active.dataset.scope)}"]` : ''}` : active.type === 'submit' && active.form?.dataset.form ? `form[data-form="${CSS.escape(active.form.dataset.form)}"] [type="submit"]` : null) : null;
-    // Capture's and Models' forms sit under a status that changes by itself; what is typed there is kept.
-    const restore = k === 'capture' || k === 'models' ? keepEdits(box) : () => {};
+    // Capture's, Models' and Approvals' (in perms) forms sit under a status that changes by itself;
+    // what is typed or picked there is kept.
+    const restore = k === 'capture' || k === 'models' || k === 'perms' ? keepEdits(box) : () => {};
     const part = PARTS[k];
     if (typeof part === 'function') box.innerHTML = part(); else part.draw(box);
     restore();
@@ -2067,6 +2071,8 @@ bindConnections(el.settings, bindPart('connections'));
 bindSites(el.settings, bindPart('sites'));
 // Settings › Models (M6b): hardware, roles, downloads with live progress, budgets.
 bindModels(el.settings, bindPart('models'));
+// Settings › Privacy and permissions › Approvals: each registered capability's tier.
+bindApprovals(el.settings, bindPart('perms'), (path) => navigate(path));
 bindDeviceModels(el.settings);
 // Settings › Changes (M7a): the change pipeline, the one waiting for you, canaries, roll back.
 bindChanges(el.settings, bindPart('changes'));

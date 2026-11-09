@@ -929,6 +929,28 @@ kbd {
 #settings-view .choice::before { content: ''; flex: none; box-sizing: border-box; width: var(--space-5); height: var(--space-5); border: 2px solid var(--border-strong); border-radius: var(--radius-pill); }
 #settings-view .choice:has(input:checked)::before { padding: var(--space-1); border-color: var(--accent-primary); background: var(--accent-primary); background-clip: content-box; }
 
+/* Settings › Approvals (approvals.js, drawn to sg-approval-tiers.js): a row per capability, its
+   tiers a column of radio rows; a lowering's confirmation and a refusal take the row's full width.
+   Amber only on the needs-you mark of a confirmation; nothing here is red. */
+#approvals + .memory-section { margin-top: var(--space-7); }
+#settings-view .appr-tiers { min-width: 0; margin: 0; padding: 0; border: 0; }
+#settings-view .appr-pick { flex-direction: column; align-items: flex-start; }
+.appr-tier { color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.appr-faint { color: var(--text-secondary); }
+.appr-facts { margin: var(--space-3) 0 0; }
+.appr-always { margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.appr-always-h { margin: 0; color: var(--text-primary); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); }
+.appr-always-list { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.appr-area { margin: var(--space-5) 0 0; color: var(--text-primary); font: var(--type-weight-strong) var(--type-body)/var(--type-line-tight) var(--font-body); }
+.appr-confirm, .appr-said { flex: 1 1 100%; min-width: 0; }
+.appr-said { margin: 0; overflow-wrap: anywhere; }
+.appr-confirm { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.appr-confirm .facts { padding: 0; background: transparent; }
+.appr-confirm .sheet-actions { margin: 0; }
+.appr-kind { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); }
+.appr-confirm-h { margin: 0; color: var(--text-primary); font: var(--type-weight-strong) var(--type-body)/var(--type-line-tight) var(--font-body); }
+.appr-sentence { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+
 /* What the search found: the words marked where they appear; a setting found by a word people use
    for it has its name marked. */
 .settings-mark { border-radius: var(--radius-input); background: color-mix(in srgb, var(--accent-primary) 22%, transparent); color: var(--text-primary); }

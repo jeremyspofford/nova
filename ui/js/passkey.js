@@ -22,7 +22,9 @@ export class PasskeyStop extends Error {
 
 // The open sheet's form says how the step is going, in the approved words (components.js). While
 // it waits, "Cancel the task" is hidden; "Stop waiting" and "Not now" stay (owner, #291).
+// A confirmation drawn in place rather than in the sheet (Settings › Approvals) hears the state too.
 export function show(state) {
+  document.dispatchEvent(new CustomEvent('nova:passkey', { detail: { state } }));
   const form = document.querySelector('#sheet[open] #sheet-body form');
   if (!form) return;
   form.querySelector('.passkey-line')?.remove();
