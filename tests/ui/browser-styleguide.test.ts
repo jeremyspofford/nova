@@ -5,7 +5,8 @@
 // status icon (the top bar's) and none in a row, at most one primary control. The words are the real
 // model's: a task names the sites it may visit and signs in with the one sign-in saved for that
 // site, never shown; there is a live picture, and only Nova's own screen and approving devices act on
-// it; a checkout asks every time and stops at the total; a flow lists its shape, not its steps, and
+// it; using a saved sign-in doesn't make a task ask first (tier 1, owner ruling 2026-11-09); a
+// checkout asks every time and stops at the total; a flow lists its shape, not its steps, and
 // has no edit or retire; there is no planner from words. Failures quote the backend's own words. On a
 // phone (390×844) and a Duo's cover screen (380×900) each frame is one column filling the screen:
 // one pane, full width, down to the foot, no dead band. With NOVA_UI_SHOTS set (scripts/ui-test.sh),
@@ -131,7 +132,8 @@ async function words(page: Page, frame: string, label: string) {
     has('every time');
     assert.ok(await f.getByRole('button', { name: 'Confirm with passkey' }).isDisabled(), `${label}: the passkey waits for the box`);
   }
-  if (frame === 'approve') { has('Waiting for your OK'); has('Signs in with'); has('shop.example.com only'); }
+  // Owner ruling 2026-11-09: using a saved sign-in is tier 1; a checkout still asks every time.
+  if (frame === 'approve') { has('Waiting for your OK'); has('Signs in with'); has('shop.example.com only'); has('Signing in alone wouldn’t ask (tier 1).'); }
   if (frame === 'running') {
     has('Nova is working. Step 3 of 7: fill in the delivery address.');
     has('Only Nova’s own screen, or a device you’ve allowed to approve, can pause, stop or take over.');
@@ -147,7 +149,11 @@ async function words(page: Page, frame: string, label: string) {
     assert.equal(await f.getByRole('link', { name: 'Run it' }).count(), 1, `${label}: Run it`);
   }
   if (frame === 'flows-empty') { has('No flows yet'); has('inputs.learn'); }
-  if (frame === 'sites') { has('Sign-in saved'); has('The one saved now isn’t shown.'); assert.equal(await f.getByLabel('Password', { exact: true }).inputValue(), '', `${label}: the password field is empty`); }
+  if (frame === 'sites') {
+    has('Sign-in saved'); has('The one saved now isn’t shown.');
+    has('Signing in with it doesn’t make a task ask first'); has('A checkout or an account change still asks every time.'); has('tier 3: it deletes data'); lacks('First (tier 2)');
+    assert.equal(await f.getByLabel('Password', { exact: true }).inputValue(), '', `${label}: the password field is empty`);
+  }
   if (frame === 'forget-confirm') { has('Forget shop.example.com?'); assert.equal(await f.getByRole('checkbox', { name: 'Also delete its saved sign-in' }).isChecked(), true, `${label}: its sign-in too, by default`); }
 }
 

@@ -206,8 +206,8 @@ export function hostEgress(raw: string): Egress {
 // it fails.
 const ACTING: readonly Step['do'][] = ['fill', 'select', 'click', 'person', 'login', 'new_password', 'create_account', 'code'];
 export const hasEffects = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => ACTING.includes(s.do));
-// Steps that send something on Nova's own initiative (typing, choosing, clicking, signing in):
-// sending or sharing data outside asks first (NOVA-SPEC §6, tier 2). A person's own step is theirs.
+// Steps that send something (typing, choosing, clicking, signing in), always on the task's declared
+// sites (validatePlan holds every step and every send to them). A person's own step is theirs.
 export const sends = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => s.do === 'fill' || s.do === 'select' || s.do === 'click' || s.do === 'login' || s.do === 'new_password' || s.do === 'create_account');
 // The steps that change an account (M10d): each marks its own commit point, just before it sends.
 const ACCOUNT_STEPS: readonly Step['do'][] = ['new_password', 'create_account'];
@@ -216,8 +216,12 @@ export const isAccount = (p: Pick<Plan, 'steps'> & { account?: unknown }): boole
 export const marksCommit = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => ('commits' in s && s.commits === true) || ACCOUNT_STEPS.includes(s.do));
 export const hasCheckout = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s) => s.do === 'checkout');
 // The least tier a plan runs at: checkout (and so payment) is tier 3, always, and so is a change to an
-// account (M10d); sending is tier 2.
-export const minTierOf = (p: Pick<Plan, 'steps'> & { account?: unknown }): 0 | 2 | 3 => (hasCheckout(p) || isAccount(p) ? 3 : sends(p) ? 2 : 0);
+// account (M10d). Using a saved sign-in, and typing, choosing and clicking on the task's own sites,
+// is tier 1, act and report (owner ruling 2026-11-09, docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md:
+// "If they have access to a credential, they should be able to use it freely."); it was tier 2.
+// A sign-in never lowers a checkout or an account change. Reading is 0.
+export const SEND_TIER = 1;
+export const minTierOf = (p: Pick<Plan, 'steps'> & { account?: unknown }): 0 | 1 | 3 => (hasCheckout(p) || isAccount(p) ? 3 : sends(p) ? SEND_TIER : 0);
 
 export function planEgress(p: Plan): Egress {
   return p.allowed_hosts.some((h) => hostEgress(h) === 'remote') ? 'remote' : 'local';

@@ -32,7 +32,9 @@ test('M5b: connect Home Assistant in Settings › Connections, see it live, disc
     // One recommendation, one standout; Gmail is one layer down and says why it is off.
     assert.equal(await section.locator('.btn.primary').count(), 1, 'one standout');
     assert.match((await section.locator('.conn-offer').first().textContent()) ?? '', /Home Assistant/);
-    assert.match((await section.locator('.conn-offer').first().textContent()) ?? '', /after asking you first/);
+    // Owner ruling 2026-11-09: a change the person asks for is made and reported (it said “after
+    // asking you first” before).
+    assert.match((await section.locator('.conn-offer').first().textContent()) ?? '', /when you ask, and tell you what changed/);
     assert.equal(await section.locator('.conn-more').getAttribute('open'), null, 'the rest are folded away');
     if (shots) { await top(); await shoot(page, join(shots, 'connections-empty.png')); }
     await section.locator('.conn-more summary').click();

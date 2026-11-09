@@ -40,6 +40,9 @@ export const GUARDED = {
   infra_plan: 'plan infrastructure',
   network_change: 'change your network',
   account_change: 'change an account',
+  // Owner ruling 2026-11-09: a home change the person asks for is tier 1, but after outside content
+  // it still asks (the integrator's constraint, docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md).
+  home_call: 'change your home',
 };
 // The person's own files: never screened when read (their writes are guarded instead).
 const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
@@ -126,6 +129,7 @@ export class Runner extends EventEmitter {
     this.helpers = null; // set by the server: where delegate hands work
     this.coding = null; // set by the server: coding runs (the core's, M10c)
     this.ops = null; // set by the server: infrastructure, networking and accounts (the core's, M10d)
+    this.homeControl = null; // set by the server: Home Assistant service calls (the core's, owner ruling 2026-11-09)
     // Cost caps (Amendment 2026-10-31-B Part 5), set by the server: the core's Caps. Each run of a
     // ledger task (the chat-run worker says which, in runTasks) is metered and capped; a person's
     // own conversation is metered only. Without it, nothing here changes.
@@ -364,7 +368,7 @@ export class Runner extends EventEmitter {
       const installed = this.skills.installed().filter((x) => !this.skillHeld(x.id));
       // Helpers and scheduled runs can't hand work to helpers of their own,
       // and a helper doesn't touch schedules.
-      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: this.skills.installed().length, delegate: !run.alone && !!this.helpers, self: !!this.self, coding: !run.alone && !run.helper && !!this.coding, ops: !run.alone && !run.helper && !!this.ops }), mode)
+      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: this.skills.installed().length, delegate: !run.alone && !!this.helpers, self: !!this.self, coding: !run.alone && !run.helper && !!this.coding, ops: !run.alone && !run.helper && !!this.ops, homeControl: !run.alone && !run.helper && !!this.homeControl?.connected() }), mode)
         .filter((n) => !(run.helper && n.startsWith('schedule_')));
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
       const schedules = run.helper ? '' : schedulesSection(this.schedules.list(), this.config.timezone);
@@ -450,7 +454,7 @@ export class Runner extends EventEmitter {
       const ctx = {
         home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
         gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
-        schedules: this.schedules, sessionId, self: this.self, coding: this.coding, ops: this.ops,
+        schedules: this.schedules, sessionId, self: this.self, coding: this.coding, ops: this.ops, homeControl: this.homeControl,
         // A helper started from a run that read outside content starts with that taint.
         delegate: (args) => this.helpers.spawn({ ...args, parent: sessionId, turn, taint: run.taint }),
         seen: (p) => { page = p; },

@@ -34,7 +34,8 @@ test('M10b gate 1: a login from the vault leaves the fake secret in no transcrip
     };
     const { id, created } = await n.task(plan, 'Sign in to the example shop');
     assert.ok(id, JSON.stringify(created.body));
-    assert.equal(created.body.approval_tier, 2, 'signing in sends something: it asks first');
+    assert.equal(created.body.approval_tier, 1, 'using a saved sign-in is act and report (owner ruling 2026-11-09; it asked first before)');
+    assert.notEqual(created.body.reason, 'Needs your OK before it runs.', 'no OK asked for');
     const done = await n.done(id!);
     assert.equal(done.state, 'done', `${done.reason}`);
     const ev = await n.events(id!);

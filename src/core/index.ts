@@ -52,7 +52,7 @@ import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
 import { agentTar, joinScript } from './mesh/agent.ts';
 import { Vault, type KeyMode, type KeyStore } from './vault.ts';
 import { Connectors } from './connectors/index.ts';
-import { homeAssistant, type HomeAssistantOptions } from './connectors/home-assistant.ts';
+import { homeAssistant, type HomeAssistantConnector, type HomeAssistantOptions, type ServiceCall } from './connectors/home-assistant.ts';
 import { Providers } from './providers/registry.ts';
 import { Browser, type BrowserOptions } from './browser/worker.ts';
 import type { Hub } from './browser/plan.ts';
@@ -803,7 +803,15 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     addWorker: (w) => { ledger.workers.set(w.id, w); },
     addConfirmation: (system, check) => verifier.registerConfirmation(system, check),
   });
-  connectors.register(homeAssistant(o.homeAssistant));
+  const homeConnector = connectors.register(homeAssistant(o.homeAssistant)) as HomeAssistantConnector;
+  // Home Assistant through chat (home_call, src/tools.js): a service call the person asks for, as
+  // the connector's own task at the tier its domain needs (owner ruling 2026-11-09: 1 by default).
+  // The chat's ingest gate asks first after outside content (src/runner.js GUARDED).
+  const homeControl = {
+    connected: () => homeConnector.status().connected === true,
+    call: (domain: string, service: string, body: ServiceCall) => homeConnector.callService(domain, service, body),
+    task: (id: string) => ledger.get(id),
+  };
   // Resilience (M7b): nightly backups and the restore drill as ledger work, repair playbooks, the
   // clock watch, and what the supervisor says.
   resilience = new Resilience({
@@ -1573,14 +1581,18 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
         return { name: params.name, ref: `secret://${params.name}`, stored: true };
       },
     },
+    // The vault is tier 3 (owner ruling 2026-11-09): starting over and deleting a secret need
+    // {confirm: true} every time (a passkey on Nova's own screen), and only from a device allowed
+    // to approve.
     {
-      method: 'POST', path: '/vault/reset', summary: 'Start a new, empty vault (tier 3: needs {confirm: true}), for one that can’t be opened: the old file is kept aside in vault/ as secrets.json.unopenable-<time>. Every connection and key must be set again.', body: '{confirm}',
+      method: 'POST', path: '/vault/reset', access: 'approver', summary: 'Start a new, empty vault (tier 3: needs {confirm: true}, every time), for one that can’t be opened: the old file is kept aside in vault/ as secrets.json.unopenable-<time>. Every connection and key must be set again.', body: '{confirm: true}',
       handle: ({ body }) => vault.reset(body.confirm === true),
     },
     {
-      method: 'DELETE', path: '/vault/{name}', summary: 'Delete a provider’s secret from the vault.',
-      handle: ({ params }) => {
+      method: 'DELETE', path: '/vault/{name}', access: 'approver', summary: 'Delete a provider’s secret from the vault (tier 3: needs {confirm: true}, every time). It can’t be brought back.', body: '{confirm: true}',
+      handle: ({ params, body }) => {
         if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(params.name!)) throw new CoreError('validation', 'A secret’s name is capital letters, digits and underscores, like API_KEY.');
+        if (body?.confirm !== true) throw new CoreError('validation', 'Deleting a secret from the vault is tier 3: it needs {confirm: true}, every time.');
         return { name: params.name, deleted: vault.delete(`provider/${params.name}`) };
       },
     },
@@ -1769,7 +1781,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   const core = {
     self,
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
-    ingest, vault, broker: o.broker ?? null, connectors, capture, models, changes, caps, passkeys,
+    ingest, vault, broker: o.broker ?? null, connectors, homeControl, capture, models, changes, caps, passkeys,
     // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
     // asking for a template. Never a seat: nothing reaches a decision model except through it.
     decisionService: { view: decisionService.view, refresh: decisionService.refresh, standing: decisionService.standing, ask: decisionService.service.ask.bind(decisionService.service) }, foundry, resilience: keep, checkpoints, restarter, reset,

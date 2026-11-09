@@ -119,8 +119,9 @@ export class Browser extends EventEmitter {
       // by the time it fails, so the ledger never reruns it by itself (workers.ts, Effects).
       effects: (brief: Brief) => (hasEffects(self.#plan(brief.inputs)) ? 'external' : 'none'),
       commits: (brief: Brief) => marksCommit(self.#plan(brief.inputs)),
-      // Filling in and sending a form sends data outside: it asks first (NOVA-SPEC §6). Checkout
-      // is tier 3, always. A plan that can't run gets no tier here; it is refused when delegated.
+      // Signing in, filling in and sending a form on the task's own sites is tier 1, act and report
+      // (owner ruling 2026-11-09). Checkout and account changes are tier 3, always. A plan that
+      // can't run gets no tier here; it is refused when delegated.
       minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => {
         try { return minTierOf(self.#plan(input.inputs)); } catch { return 0; }
       },

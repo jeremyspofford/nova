@@ -11,15 +11,17 @@
 // reach only provider/NAME (a provider's secret://NAME); every other kind is kept and removed by the
 // part of Nova that uses it (Connections, Sites, Capture, Infrastructure and network) or is one of
 // Nova's own keys. Deleting rewrites the file under a new key, so a copy from before doesn't open
-// with the key in use. POST /vault/reset ({confirm: true}, tier 3) starts a new, empty vault and sets
-// the old file aside as secrets.json.unopenable-<time>; on Nova's own screen the confirm needs a
-// passkey approval of exactly that request, while a paired phone or browser sends confirm alone.
+// with the key in use. The vault is tier 3 (owner ruling 2026-11-09): DELETE /vault/{NAME} and POST
+// /vault/reset each need {confirm: true}, every time, and only a device allowed to approve may send
+// them. On Nova's own screen the confirm needs a passkey approval of exactly that request; a paired
+// phone or browser allowed to approve sends confirm alone, as for every tier-3 route. A reset starts
+// a new, empty vault and sets the old file aside as secrets.json.unopenable-<time>.
 //
 // What the backend doesn't have, so these frames don't draw it as working: no route says which
 // part of Nova uses a secret (the page would read it from the name, and match a provider's secret
-// against the providers' settings); DELETE asks for no confirm and no passkey; a reset doesn't remove
-// the old key, so the file set aside could still be opened with it; and GET /vault lists every name
-// to any paired phone or browser. Those are flagged, not hidden. Its CSS is ui/styles/compositions.css
+// against the providers' settings); a reset doesn't remove the old key, so the file set aside could
+// still be opened with it; and GET /vault lists every name to any paired phone or browser. Those are
+// flagged, not hidden. Its CSS is ui/styles/compositions.css
 // (.vt-*, and the .au-* panes it shares with the Automations compositions); the narrow layout is
 // layout.css's .au-panes rule.
 import { ICONS, passkeyAction, passkeyConfirm } from './components.js';
@@ -31,13 +33,13 @@ export const VT_FRAMES = [
   ['list', 'The vault at rest: every secret by name, grouped by the part of Nova that uses it, never a value; where its key is', 'list'],
   ['empty', 'Nothing saved yet', 'list'],
   ['secret', 'A provider’s secret opened: its name, the provider whose settings name it, replacing its value', 'detail'],
-  ['delete-confirm', 'Deleting a provider’s secret: what stops working, said before it happens. The core asks no confirm and no passkey for this (flagged)', 'detail'],
+  ['delete-confirm', 'Deleting a provider’s secret (tier 3), on Nova’s own screen with a passkey: what stops working, said before it happens', 'detail'],
   ['deleted', 'Just deleted: the provider that needs a key again', 'detail'],
   ['elsewhere', 'A connection’s secret opened: it is removed where it is used, not here; where each kind goes', 'detail'],
   ['own-key', 'One of Nova’s own keys (the backup key): made by Nova, not deleted here', 'detail'],
   ['reset-confirm', 'Starting a new, empty vault (tier 3), on Nova’s own screen with a passkey: everything it leaves behind', 'detail'],
   ['reset-no-passkey', 'The same, with no passkey added yet: nothing can be confirmed until one is', 'detail'],
-  ['reset-paired', 'The same from a paired phone: the core asks only for the box, no passkey (flagged)', 'detail'],
+  ['reset-paired', 'The same from a paired phone allowed to approve: the box alone, no passkey, as for every tier-3 route', 'detail'],
   ['reset-done', 'A new, empty vault: the old file set aside, and what to set again', 'detail'],
   ['file-key', 'No system keychain here: the key is in a file next to the vault, said plainly', 'list'],
   ['keychain-waiting', 'Can’t open now: the keychain isn’t answering. Nova waits rather than starting over (the backend’s words)', 'detail'],
@@ -195,12 +197,12 @@ ${facts([
 <form class="au-form" data-sg-inert novalidate aria-labelledby="${id}-rep"><h4 class="uc-group au-group-head" id="${id}-rep">Replace its value</h4>
 <div class="au-field"><label class="au-label" for="${id}-value">New value</label><input class="uc-input" id="${id}-value" type="password" value="" autocomplete="off" spellcheck="false" aria-describedby="${id}-value-note"><p class="au-note" id="${id}-value-note">Paste it here, not in chat. The old value is gone once this is saved; Nova keeps only the latest, and doesn’t check it when you save it.</p></div>
 <div class="au-actions"><button type="submit" class="btn primary" data-vt-demo>Save the new value</button></div></form>
-<div class="au-danger"><a class="btn quiet" href="#${id}-delete">Delete CLOUD_MODELS_KEY</a><p class="au-note">${esc(who)} stops working until a key is saved again.</p></div>`;
+<div class="au-danger"><a class="btn quiet" href="#${id}-delete">Delete CLOUD_MODELS_KEY</a><p class="au-note">${esc(who)} stops working until a key is saved again. Asks every time (tier 3), with your passkey on Nova’s own screen.</p></div>`;
 }
 
 function remove(id) {
   const [who] = USERS.CLOUD_MODELS_KEY;
-  return `${back(id)}<form class="au-form vt-confirm" data-sg-inert novalidate aria-labelledby="${id}-title">${kind('Delete a secret')}<h3 class="uc-h" id="${id}-title">Delete CLOUD_MODELS_KEY?</h3>
+  return `${back(id)}<form class="au-form vt-confirm" data-sg-inert novalidate aria-labelledby="${id}-title">${kind('Asks every time')}<h3 class="uc-h" id="${id}-title">Delete CLOUD_MODELS_KEY?</h3>
 <p class="au-sentence">It can’t be brought back.</p>
 <h4 class="uc-group au-group-head" id="${id}-what">What happens</h4>
 ${notes([
@@ -208,8 +210,9 @@ ${notes([
     `${esc(who)}’s settings still name it (${mono('secret://CLOUD_MODELS_KEY')}). Nothing else changes.`,
     'Nova saves the vault again under a new key, so a copy of the vault from before doesn’t open with the key in use now.',
   ])}
-<p class="au-note">Nova doesn’t ask for your passkey for this. (Flagged for the owner: the core deletes a provider’s secret with no confirm and no passkey, from this screen or any paired phone or browser.)</p>
-<div class="au-actions"><button type="submit" class="btn primary" data-vt-demo>Delete CLOUD_MODELS_KEY</button><button type="button" class="btn quiet">Cancel</button></div></form>`;
+<p class="au-note">Deleting a secret is tier 3: on a paired phone or browser allowed to approve, the box alone confirms it; one that can’t approve can’t delete.</p>
+${passkeyConfirm({ state: 'ready' })}
+<div class="au-actions">${passkeyAction({ state: 'ready' })}<button type="button" class="btn quiet">Cancel</button></div></form>`;
 }
 
 function deleted(id) {
@@ -264,7 +267,7 @@ ${passkeyConfirm({ state })}
 function resetPaired(id) {
   return `<form class="au-form vt-confirm" data-sg-inert novalidate aria-labelledby="${id}-title">${resetHead(id)}
 <label class="confirm"><input type="checkbox" name="confirm" required> I understand, and I want Nova to do this.</label>
-<p class="au-note">On a paired phone the core asks only for this box: no passkey, and any paired phone or browser can send it. (Flagged for the owner.)</p>
+<p class="au-note">On a paired phone allowed to approve, this box is the confirmation: no passkey, as for every tier-3 route. A phone or browser that can’t approve can’t start a new vault.</p>
 <div class="au-actions"><button type="submit" class="btn primary" data-vt-go disabled>Start a new vault</button><button type="button" class="btn quiet">Cancel</button></div></form>`;
 }
 

@@ -65,7 +65,7 @@ test('a provider’s key comes from the vault, reaches the server, and appears i
     core.log.problem('test', `The server said no to ${KEY}.`);
     const shown = JSON.stringify([await get('/problems'), await get(`/receipts?task_id=${t.id}`), await get('/providers'), await get('/vault'), await get(`/tasks/${t.id}`)]);
     assert.ok(!shown.includes(KEY), 'not in problems, receipts, provider settings, the vault view or the task');
-    assert.equal((await call('DELETE', '/vault/OTHER_KEY')).body.deleted, false);
+    assert.equal((await call('DELETE', '/vault/OTHER_KEY', { confirm: true })).body.deleted, false);
     // Every file in the home once Nova has stopped (the database's write-ahead log folded in).
     await stop();
     stopped = true;

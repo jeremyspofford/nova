@@ -2,7 +2,9 @@
 // real browser: the reviewer's probe, whose plan expects text the site's records never show, used
 // to send the form three times. Now it sends once, waits as Needs you with "May already have
 // happened" and what didn't match, and the person, in the PWA, sees Retry (which asks for the OK
-// again: the form plan is tier 2) and Cancel. Runs where Chromium can start (scripts/ui-test.sh).
+// again for a task at tier 2) and Cancel. A form plan on its own site is tier 1 since the owner's
+// ruling of 2026-11-09, so this task asks for tier 2 itself, to keep the asks-again path covered.
+// Runs where Chromium can start (scripts/ui-test.sh).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sleep, stop } from '../acceptance/support.ts';
@@ -20,8 +22,9 @@ test('the reviewer’s resubmit probe: evidence that doesn’t hold up after a f
   try {
     await finishSetup(m);
     const plan = { ...formPlan(site, { person: false }), verify: { url: `${site.url}/records`, expect: ['Ada Example', 'Text the site never shows'] } };
-    const r = await delegate(m, plan, 'Sign up, then check for something that isn’t there');
+    const r = await delegate(m, plan, 'Sign up, then check for something that isn’t there', { approval_tier: 2 });
     assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal(r.body.approval_tier, 2);
     const held = await waitTask(m, r.body.id, (x) => (x.state === 'waiting' && MAY.test(x.reason ?? '')) || ['done', 'failed'].includes(x.state), 120_000);
     assert.equal(held.state, 'waiting', held.reason ?? '');
     assert.match(held.reason!, MAY);

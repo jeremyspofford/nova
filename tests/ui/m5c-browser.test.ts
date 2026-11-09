@@ -26,7 +26,7 @@ test('M5c: a browser task fills the form on its own and ends Verified, checked b
     const r = await delegate(m, formPlan(site, { person: false }));
     assert.equal(r.status, 201, JSON.stringify(r.body));
     assert.equal(r.body.privacy_mode, 'local-only', 'a local site is fine for a local-only task');
-    assert.equal(r.body.approval_tier, 2, 'sending a form asks first');
+    assert.equal(r.body.approval_tier, 1, 'sending a form on its own site is act and report (owner ruling 2026-11-09; it asked first before)');
     const task = await waitTask(m, r.body.id, settled);
     assert.equal(task.state, 'done', task.reason ?? '');
     assert.equal(task.verification!.ok, true);

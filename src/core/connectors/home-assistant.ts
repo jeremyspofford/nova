@@ -1,17 +1,23 @@
 // Home Assistant as a connector (M5 plan §2). Set up with the address of the person's Home Assistant
 // and a long-lived access token, which goes into the vault. Through Home Assistant's own APIs:
 //  - reading entity states (REST, tier 0: Nova just looks);
-//  - calling a service (REST): changing devices or home state, so tier 2, asked first
-//    (NOVA-SPEC §6), and tier 3 for domains the person marks (locks and alarms to start with). It
-//    runs as a Work Ledger task for this connector's worker, so the ledger's approval gate holds it,
-//    and Nova reads the entity back from Home Assistant itself as the evidence;
+//  - calling a service (REST): changing devices or home state. A call the person asks for is tier 1,
+//    act and report (owner ruling 2026-11-09, docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md,
+//    overriding NOVA-SPEC §6's tier 2 for the home): it runs without an approval and the ledger
+//    records it with what changed. The service tier is a setting (2 asks first again), and domains
+//    the person marks are tier 3, confirmed every time (none by default). It runs as a Work Ledger
+//    task for this connector's worker, so the ledger's gate holds whatever tier applies, and Nova
+//    reads the entity back from Home Assistant itself as the evidence; a read-back that doesn't show
+//    the change holds the task for the person. From chat (home_call) it is a guarded step: after the
+//    run read outside content it asks first, whatever the tier (src/runner.js, GUARDED);
 //  - state changes (WebSocket, subscribe_events state_changed), which become event trigger records
 //    for the entities a rule listens to. A dropped socket is reopened with growing pauses.
 // Egress is local for an address on this network or the mesh, remote otherwise; local-only never
 // contacts a remote Home Assistant. Disconnecting deletes the token from Home Assistant itself
 // (auth/delete_refresh_token, named by the token's own issuer) and then from the vault.
 import { CoreError } from '../errors.ts';
-import { reportOf, type Brief, type Evidence } from '../envelope.ts';
+import { reportOf, type Brief, type Evidence, type Tier } from '../envelope.ts';
+import type { Task } from '../ledger.ts';
 import type { Egress } from '../workers.ts';
 import type { Route } from '../api.ts';
 import type { Connector, ConnectorContext, ConnectorStatus } from './index.ts';
@@ -21,8 +27,14 @@ import { NO_REDIRECT, reachProblem } from '../providers/types.ts';
 
 export const HA_ID = 'home-assistant';
 const TOKEN = 'HA_TOKEN';
-// Locks and alarms always need an explicit confirmation, until the person says otherwise.
-export const DEFAULT_TIER3 = ['lock', 'alarm_control_panel'];
+// Domains that need an explicit confirmation every time. None by default (owner ruling 2026-11-09:
+// "If I ask nova to unlock the door, it should just do it."); the person can mark any, locks and
+// alarms included, in its settings.
+export const DEFAULT_TIER3: readonly string[] = [];
+// Every other service call: 1, act and report, by default; the person can make it 2, ask first.
+export const DEFAULT_SERVICE_TIER = 1;
+const SERVICE_TIERS = [1, 2] as const;
+type ServiceTier = (typeof SERVICE_TIERS)[number];
 const DOMAIN = /^[a-z_][a-z0-9_]{0,63}$/;
 const ENTITY = /^[a-z_][a-z0-9_]{0,63}\.[a-z0-9_]{1,128}$/;
 // What a service should leave its entity showing, when that is certain.
@@ -36,10 +48,10 @@ export const HA_MANIFEST = {
   capabilities: ['home.states.read', 'home.services.call', 'home.events'],
   permissions: [
     { kind: 'network' as const, target: 'your Home Assistant, at the address you give', why: 'to read your devices and hear when they change' },
-    { kind: 'device' as const, target: 'devices Home Assistant controls', why: 'to change them, only after you say yes each time' },
+    { kind: 'device' as const, target: 'devices Home Assistant controls', why: 'to change them when you ask, telling you what changed' },
   ],
   secrets: [TOKEN],
-  config_schema: { type: 'object', properties: { url: { type: 'string' }, tier3_domains: { type: 'array', items: { type: 'string' } } } },
+  config_schema: { type: 'object', properties: { url: { type: 'string' }, tier3_domains: { type: 'array', items: { type: 'string' } }, service_tier: { type: 'integer', enum: [1, 2] } } },
   setup_flow: { fields: ['url', 'token'] },
   health_check: { kind: 'http', path: '/api/' },
   nova_compat: '>=0.1.0 <1.0.0',
@@ -48,7 +60,12 @@ export const HA_MANIFEST = {
 
 interface State { entity_id: string; state: string; attributes?: Record<string, unknown>; last_changed?: string; last_updated?: string }
 // resolved_local: a bare name in the address that resolved to this network when it was connected.
-interface Config { url?: string; since?: string; name?: string | null; broken?: boolean; tier3_domains?: string[]; resolved_local?: string }
+interface Config { url?: string; since?: string; name?: string | null; broken?: boolean; tier3_domains?: string[]; service_tier?: ServiceTier; resolved_local?: string }
+
+// What a call through home_call (chat) or the API asks for.
+export interface ServiceCall { entity_id?: unknown; data?: unknown }
+// The connector, with the service call chat's home_call makes (src/tools.js).
+export type HomeAssistantConnector = Connector & { callService(domain: string, service: string, body: ServiceCall): Task };
 
 export interface HomeAssistantOptions {
   // Pauses between reconnects: the first, and the most it grows to.
@@ -110,7 +127,7 @@ async function wsCommand(base: string, token: string, command: Record<string, un
 }
 
 export function homeAssistant(o: HomeAssistantOptions = {}) {
-  return (ctx: ConnectorContext): Connector => {
+  return (ctx: ConnectorContext): HomeAssistantConnector => {
     const f = o.fetch ?? globalThis.fetch;
     const timeoutMs = o.timeoutMs ?? 15_000;
     const backoff = o.reconnectMs ?? { first: 1000, max: 60_000 };
@@ -242,16 +259,36 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
       entity_id: s.entity_id, domain: s.entity_id.split('.')[0], name: typeof s.attributes?.friendly_name === 'string' ? s.attributes.friendly_name : s.entity_id,
       state: s.state, last_changed: s.last_changed ?? null,
     });
-    const tier3 = () => cfg().tier3_domains ?? DEFAULT_TIER3;
-    const tierFor = (domain: string): 2 | 3 => (tier3().includes(domain) ? 3 : 2);
+    const tier3 = (): readonly string[] => cfg().tier3_domains ?? DEFAULT_TIER3;
+    const serviceTier = (): ServiceTier => (SERVICE_TIERS.includes(cfg().service_tier as ServiceTier) ? cfg().service_tier! : DEFAULT_SERVICE_TIER as ServiceTier);
+    const tierFor = (domain: string): Tier => (tier3().includes(domain) ? 3 : serviceTier());
     // From the domain and every entity the call names: homeassistant.turn_off on a lock is a lock.
-    const tierOf = (domain: string, entities: string[]): 2 | 3 => (entities.some((e) => tierFor(e.split('.')[0]!) === 3) ? 3 : tierFor(domain));
+    const tierOf = (domain: string, entities: string[]): Tier => (entities.some((e) => tierFor(e.split('.')[0]!) === 3) ? 3 : tierFor(domain));
 
-    // ---- the worker: one service call per task, after the ledger's approval ----------------
+    // A service call as a task for the worker below, at the tier its domain and entities need.
+    function callService(domain: string, service: string, body: ServiceCall): Task {
+      if (!DOMAIN.test(domain) || !DOMAIN.test(service)) throw new CoreError('validation', 'A service is named by its domain and service, like light and turn_on.');
+      if (!cfg().url || !token()) throw new CoreError('conflict', 'Home Assistant isn’t connected. Connect it in Settings, under Connections.');
+      const { data, entities } = checkServiceData(body.data, body.entity_id);
+      const entity = entities.length === 1 ? entities[0] : undefined;
+      const tier = tierOf(domain, entities);
+      // Everything the call carries is in the task's goal, in words.
+      const settings = Object.entries(data).filter(([k]) => k !== 'entity_id').map(([k, v]) => `${k} ${Array.isArray(v) ? v.join(', ') : String(v)}`);
+      const expect = entity && EXPECT[service] ? EXPECT[service] : undefined;
+      return ctx.delegate({
+        title: `${service.replace(/_/g, ' ')}${entities.length ? ` ${entities.join(', ')}` : ''} (Home Assistant)`.slice(0, 200),
+        goal: `Home Assistant runs ${domain}.${service}${entities.length ? ` on ${entities.join(', ')}` : ''}${settings.length ? `, with ${settings.join('; ')}` : ''}${expect ? `, and ${entity} shows ${expect}` : ''}.`,
+        approval_tier: tier,
+        evidence_required: [{ kind: 'confirmation' }],
+        inputs: { domain, service, data, ...(expect ? { expect } : {}) },
+      });
+    }
+
+    // ---- the worker: one service call per task, at its tier --------------------------------
     const worker = {
       id: HA_ID,
       name: 'Home Assistant',
-      about: 'Changes things in your home through Home Assistant, after your OK.',
+      about: 'Changes things in your home through Home Assistant when you ask, and reports what changed. Domains you mark confirm every time.',
       get egress() { return egress(); },
       evidence: ['confirmation' as const],
       // A service call changes the home (and `toggle` a second time undoes the first): after a
@@ -267,7 +304,7 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
         let entities: string[];
         try { entities = checkServiceData(i.data, undefined).entities; } catch (e) { return report('failed', (e as Error).message); }
         const need = tierOf(i.domain, entities);
-        if (brief.approval_tier < need) return report('blocked', `This changes your home, so it needs your OK first (tier ${need}).`, [], [`Tier ${need} is needed for ${i.domain}.`]);
+        if (brief.approval_tier < need) return report('blocked', need === 1 ? 'This changes your home, so it runs as a task Nova reports on (tier 1), not silently.' : `This changes your home, so it needs your OK first (tier ${need}).`, [], [`Tier ${need} is needed for ${i.domain}.`]);
         if (signal.aborted) return report('failed', 'Stopped before calling Home Assistant.');
         const changed = await api<State[]>(`/api/services/${i.domain}/${i.service}`, { method: 'POST', body: i.data ?? {} });
         const entity = typeof i.data?.entity_id === 'string' ? i.data.entity_id : null;
@@ -310,55 +347,43 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
       },
       {
         method: 'POST', path: '/services/{domain}/{service}', status: 201,
-        summary: 'Home Assistant: call a service. It changes your home, so it becomes a task that waits for your OK (tier 2; tier 3 for the domains you marked).',
+        summary: 'Home Assistant: call a service, as a task. It runs and is reported, with Nova’s own read-back as the evidence (tier 1, act and report); it waits for your OK when the service tier setting is 2, and needs an explicit confirmation every time for the domains you marked (tier 3).',
         body: '{entity_id?, data?}',
-        handle: ({ params, body }) => {
-          const { domain, service } = params as { domain: string; service: string };
-          if (!DOMAIN.test(domain) || !DOMAIN.test(service)) throw new CoreError('validation', 'A service is named by its domain and service, like light and turn_on.');
-          if (!cfg().url || !token()) throw new CoreError('conflict', 'Home Assistant isn’t connected. Connect it in Settings, under Connections.');
-          const { data, entities } = checkServiceData(body.data, body.entity_id);
-          const entity = entities.length === 1 ? entities[0] : undefined;
-          const tier = tierOf(domain, entities);
-          // Everything the call carries is in the approval, in words.
-          const settings = Object.entries(data).filter(([k]) => k !== 'entity_id').map(([k, v]) => `${k} ${Array.isArray(v) ? v.join(', ') : String(v)}`);
-          const expect = entity && EXPECT[service] ? EXPECT[service] : undefined;
-          return ctx.delegate({
-            title: `${service.replace(/_/g, ' ')}${entities.length ? ` ${entities.join(', ')}` : ''} (Home Assistant)`.slice(0, 200),
-            goal: `Home Assistant runs ${domain}.${service}${entities.length ? ` on ${entities.join(', ')}` : ''}${settings.length ? `, with ${settings.join('; ')}` : ''}${expect ? `, and ${entity} shows ${expect}` : ''}.`,
-            approval_tier: tier,
-            evidence_required: [{ kind: 'confirmation' }],
-            inputs: { domain, service, data, ...(expect ? { expect } : {}) },
-          });
-        },
+        handle: ({ params, body }) => callService(params.domain!, params.service!, body),
       },
       {
-        method: 'GET', path: '/settings', summary: 'Home Assistant: which domains need an explicit confirmation every time (tier 3).',
-        handle: () => ({ tier3_domains: tier3(), default: DEFAULT_TIER3 }),
+        method: 'GET', path: '/settings', summary: 'Home Assistant: the tier a service call runs at (service_tier: 1, act and report, or 2, ask first), and which domains need an explicit confirmation every time (tier3_domains, tier 3).',
+        handle: () => ({ tier3_domains: tier3(), default: DEFAULT_TIER3, service_tier: serviceTier(), default_service_tier: DEFAULT_SERVICE_TIER }),
       },
       {
-        method: 'PUT', path: '/settings', summary: 'Mark which domains need an explicit confirmation every time. Taking a domain off the list loosens a gate, so it needs {confirm: true}.',
-        body: '{tier3_domains: [], confirm?}',
+        method: 'PUT', path: '/settings', summary: 'Set the service tier (1, act and report, or 2, ask first) and mark which domains need an explicit confirmation every time. Lowering the service tier or taking a domain off the list loosens a gate, so it needs {confirm: true}.',
+        body: '{tier3_domains?: [], service_tier?: 1 | 2, confirm?}',
         handle: ({ body }) => {
           const list = body.tier3_domains;
-          if (!Array.isArray(list) || !list.every((d) => typeof d === 'string' && DOMAIN.test(d))) throw new CoreError('validation', 'tier3_domains is a list of domains, like lock.');
-          const loosened = tier3().filter((d) => !list.includes(d));
-          if (loosened.length && body.confirm !== true) throw new CoreError('validation', `Taking ${loosened.join(', ')} off the list means Nova asks just once, not with a confirmation every time. Send confirm: true to do that.`);
+          const st = body.service_tier;
+          if (list === undefined && st === undefined) throw new CoreError('validation', 'Send tier3_domains, service_tier, or both.');
+          if (list !== undefined && (!Array.isArray(list) || !list.every((d) => typeof d === 'string' && DOMAIN.test(d)))) throw new CoreError('validation', 'tier3_domains is a list of domains, like lock.');
+          if (st !== undefined && !SERVICE_TIERS.includes(st as ServiceTier)) throw new CoreError('validation', 'service_tier is 1 (act and report) or 2 (ask first). A domain that needs a confirmation every time goes in tier3_domains.');
+          const loosened = list === undefined ? [] : tier3().filter((d) => !(list as string[]).includes(d));
+          if (loosened.length && body.confirm !== true) throw new CoreError('validation', `Taking ${loosened.join(', ')} off the list means Nova no longer asks for a confirmation every time. Send confirm: true to do that.`);
+          if (st !== undefined && (st as number) < serviceTier() && body.confirm !== true) throw new CoreError('validation', 'Lowering the service tier to 1 means Nova changes your home when you ask, without waiting for your OK, and tells you what it did. Send confirm: true to do that.');
           if (!cfg().url) throw new CoreError('conflict', 'Connect Home Assistant first.');
-          ctx.config.set({ tier3_domains: [...new Set(list as string[])] });
-          return { tier3_domains: tier3(), default: DEFAULT_TIER3 };
+          ctx.config.set({ ...(list !== undefined ? { tier3_domains: [...new Set(list as string[])] } : {}), ...(st !== undefined ? { service_tier: st } : {}) });
+          return { tier3_domains: tier3(), default: DEFAULT_TIER3, service_tier: serviceTier(), default_service_tier: DEFAULT_SERVICE_TIER };
         },
       },
     ];
 
     return {
       manifest: HA_MANIFEST,
-      summary: 'Your smart home: Nova can see what your devices are doing, hear when they change, and change them when you say yes.',
+      callService,
+      summary: 'Your smart home: Nova can see what your devices are doing, hear when they change, and change them when you ask.',
       can: [
         'See the state of your lights, sensors, locks and other devices.',
         'Notice when something changes, for the rules you set up.',
-        'Turn things on and off, after asking you first.',
+        'Turn things on and off when you ask, and tell you what changed.',
       ],
-      never: ['Change anything without your OK.', 'Unlock or disarm without an explicit confirmation.'],
+      never: ['Change anything unless you, or a rule you set up, asks.', 'Change anything from a chat that has read something from outside, without asking you first.'],
       setup: {
         kind: 'form',
         fields: [

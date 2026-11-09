@@ -85,20 +85,45 @@ test('DELETE /security/passkeys/{id} removes a passkey with a valid approval, an
   }
 });
 
+// (DELETE /vault/{name} was this test's route until the owner's ruling of 2026-11-09 made it tier 3,
+// with a body; forgetting a memory is a DELETE that still takes none.)
 test('a DELETE route that takes no body works with no body, and with an empty one', async () => {
   const b = await bootCore();
   try {
     const base = b.origin;
-    assert.equal((await b.call('PUT', '/vault/SOME_KEY', { value: 'placeholder-value' })).status, 200);
+    const remember = async (content: string) => {
+      const r = await b.call('POST', '/memory', { kind: 'fact', content });
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      return r.body.id as string;
+    };
+    const [one, two, three] = [await remember('The first placeholder fact.'), await remember('The second placeholder fact.'), await remember('The third placeholder fact.')];
+    const ids = async () => (await b.get('/memory')).map((m: { id: string }) => m.id);
     // No body and no content-type at all.
-    const bare = await raw(base, 'DELETE', '/vault/SOME_KEY');
+    const bare = await raw(base, 'DELETE', `/memory/${one}`);
     assert.equal(bare.status, 200, JSON.stringify(bare.body));
-    assert.deepEqual(bare.body, { name: 'SOME_KEY', deleted: true });
     // A content-type but no body (what the screen's own client sends).
-    const res = await fetch(`${base}/api/v1/vault/SOME_KEY`, { method: 'DELETE', headers: { 'x-nova': '1', 'content-type': 'application/json' } });
+    const res = await fetch(`${base}/api/v1/memory/${two}`, { method: 'DELETE', headers: { 'x-nova': '1', 'content-type': 'application/json' } });
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { name: 'SOME_KEY', deleted: false });
-    assert.deepEqual((await raw(base, 'DELETE', '/vault/SOME_KEY', {})).body, { name: 'SOME_KEY', deleted: false });
+    assert.equal((await raw(base, 'DELETE', `/memory/${three}`, {})).status, 200);
+    const left = await ids();
+    assert.ok(![one, two, three].some((id) => left.includes(id)), 'all three are forgotten');
+  } finally {
+    await b.stop();
+  }
+});
+
+test('DELETE /vault/{name} is tier 3 since the owner’s ruling: its {confirm: true} arrives in the body', async () => {
+  const b = await bootCore();
+  try {
+    const base = b.origin;
+    assert.equal((await b.call('PUT', '/vault/SOME_KEY', { value: 'placeholder-value' })).status, 200);
+    const bare = await raw(base, 'DELETE', '/vault/SOME_KEY');
+    assert.equal(bare.status, 400);
+    assert.match(bare.body.error, /needs \{confirm: true\}/);
+    assert.equal((await raw(base, 'DELETE', '/vault/SOME_KEY', {})).status, 400);
+    assert.equal((await raw(base, 'DELETE', '/vault/SOME_KEY', { confirm: true })).status, 403, 'a passkey on Nova’s own screen');
+    assert.deepEqual((await b.call('DELETE', '/vault/SOME_KEY', { confirm: true })).body, { name: 'SOME_KEY', deleted: true });
+    assert.deepEqual((await b.call('DELETE', '/vault/SOME_KEY', { confirm: true })).body, { name: 'SOME_KEY', deleted: false });
   } finally {
     await b.stop();
   }

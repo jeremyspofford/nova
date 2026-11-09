@@ -1,8 +1,9 @@
 // The Home Assistant connector (M5 plan §2) against the stand-in Home Assistant
 // (scripts/fake-home-assistant.js, REST and WebSocket): connecting with an address and a
-// long-lived token (kept in the vault), reading states (tier 0), a service call that waits for an
-// OK (tier 2) and Nova's own read-back as evidence, a marked domain that needs a confirmation
-// every time (tier 3), state changes becoming event trigger records for the entities a rule
+// long-lived token (kept in the vault), reading states (tier 0), a service call that is made and
+// reported (tier 1, owner ruling 2026-11-09; the service tier is a setting) with Nova's own
+// read-back as evidence and a hold when it doesn't show the change, a marked domain that needs a
+// confirmation every time (tier 3), state changes becoming event trigger records for the entities a rule
 // listens to, reconnecting after the socket drops, a token Home Assistant stops accepting, egress
 // and local-only, and disconnecting: the token deleted at Home Assistant and in the vault, the
 // rules and the subscription gone. Neutral placeholders only.
@@ -33,7 +34,10 @@ test('connecting: plain words when it is wrong; the token goes into the vault, t
     const view = list.find((c: { id: string }) => c.id === 'home-assistant');
     assert.equal(view.connected, false);
     assert.equal(view.recommended, true, 'the one Nova recommends connecting, local-only being the default');
-    assert.ok(view.can.some((s: string) => /after asking you first/.test(s)));
+    // Owner ruling 2026-11-09: a change the person asks for is made and reported (it said “after
+    // asking you first” before).
+    assert.ok(view.can.some((s: string) => /when you ask, and tell you what changed/.test(s)));
+    assert.ok(!view.can.some((s: string) => /after asking you first/.test(s)));
     assert.deepEqual((await get('/extensions')).filter((x: { kind: string }) => x.kind === 'connector'), [], 'nothing in the extension host until it is connected');
 
     assert.match((await call('POST', `${HA}/connect`, { url: 'not an address', token: 'x' })).body.error, /Enter your Home Assistant’s address/);
@@ -75,27 +79,27 @@ test('reading states is tier 0: Nova looks, and no task or approval is involved'
   } finally { await done(); }
 });
 
-test('a service call is tier 2: it waits for your OK, then Nova reads the result back itself as evidence', async () => {
+// Owner ruling 2026-11-09 (docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md): a call the person
+// asks for is tier 1, act and report. Before it, a service call was tier 2 and waited for an OK.
+test('a service call is tier 1, act and report: it runs without an approval, and Nova reads the result back itself as evidence', async () => {
   const { ha, nova, done } = await connected();
   try {
     const made = await nova.call('POST', `${HA}/services/light/turn_on`, { entity_id: 'light.kitchen' });
     assert.equal(made.status, 201);
-    const task = await until(() => nova.get(`/tasks/${made.body.id}`), (t) => t.state === 'waiting');
-    assert.deepEqual([task.state, task.approval_tier, task.owner], ['waiting', 2, 'home-assistant']);
-    assert.match(task.reason, /Needs your OK/);
-    await sleep(100);
-    assert.equal(ha.state.calls.length, 0, 'nothing changed in the home before the OK');
-    assert.equal(ha.state.entities.get('light.kitchen').state, 'off');
-
-    assert.equal((await nova.call('POST', `/tasks/${task.id}/approve`, {})).status, 200);
-    const finished = await until(() => nova.get(`/tasks/${task.id}`), (t) => ['done', 'failed', 'blocked'].includes(t.state));
+    assert.equal(made.body.approval_tier, 1);
+    const finished = await until(() => nova.get(`/tasks/${made.body.id}`), (t) => ['done', 'failed', 'waiting'].includes(t.state));
     assert.equal(finished.state, 'done', JSON.stringify(finished));
+    assert.deepEqual([finished.approval_tier, finished.owner, finished.approved_at], [1, 'home-assistant', null]);
     assert.equal(ha.state.entities.get('light.kitchen').state, 'on');
     assert.deepEqual(ha.state.calls, [{ domain: 'light', service: 'turn_on', data: { entity_id: 'light.kitchen' } }]);
+    // Reported: the ledger's record says what changed, with Nova's own read-back as the evidence.
+    assert.match(finished.reason, /light\.turn_on: light\.kitchen is on now/);
     assert.equal(finished.verification.ok, true);
     assert.match(finished.verification.checks[0].why, /Nova read light\.kitchen from Home Assistant itself after the call: on/);
+    const events = (await nova.get(`/tasks/${made.body.id}/events`)).map((e: { kind: string }) => e.kind);
+    assert.ok(!events.includes('approved') && !events.includes('gated'), `no approval asked or given: ${events.join(', ')}`);
     // The trace: a reactive trigger record for the request.
-    assert.ok((await nova.get('/triggers')).some((t: { ledger_task_id: string; source: string }) => t.ledger_task_id === task.id && t.source === 'connector:home-assistant'));
+    assert.ok((await nova.get('/triggers')).some((t: { ledger_task_id: string; source: string }) => t.ledger_task_id === made.body.id && t.source === 'connector:home-assistant'));
 
     // A task can't lower its own gate: tier 0 straight to the worker is refused without a call.
     const sneaky = await nova.call('POST', '/tasks', { title: 'Switch the fan on', owner: 'home-assistant', goal: 'The fan is on.', approval_tier: 0, evidence_required: [{ kind: 'confirmation' }], inputs: { domain: 'switch', service: 'turn_on', data: { entity_id: 'switch.fan' } } });
@@ -106,10 +110,23 @@ test('a service call is tier 2: it waits for your OK, then Nova reads the result
   } finally { await done(); }
 });
 
+// Owner ruling 2026-11-09: no domain confirms every time by default (locks and alarms did before);
+// the list stays a setting, so the person can put them back.
 test('a domain the person marks is tier 3: an explicit confirmation every time; unmarking needs one too', async () => {
   const { ha, nova, done } = await connected();
   try {
-    assert.deepEqual((await nova.get(`${HA}/settings`)).tier3_domains, ['lock', 'alarm_control_panel']);
+    const defaults = await nova.get(`${HA}/settings`);
+    assert.deepEqual([defaults.tier3_domains, defaults.default], [[], []]);
+    // By default an unlock the person asks for just happens, and is reported.
+    const direct = (await nova.call('POST', `${HA}/services/lock/unlock`, { entity_id: 'lock.back_door' })).body;
+    assert.equal(direct.approval_tier, 1);
+    assert.equal((await until(() => nova.get(`/tasks/${direct.id}`), (t) => ['done', 'failed', 'waiting'].includes(t.state))).state, 'done');
+    assert.equal(ha.state.entities.get('lock.back_door').state, 'unlocked');
+    ha.setState('lock.back_door', 'locked');
+    ha.state.calls.length = 0;
+
+    // Putting locks and alarms back on the list tightens the gate: no confirmation needed for that.
+    assert.deepEqual((await nova.call('PUT', `${HA}/settings`, { tier3_domains: ['lock', 'alarm_control_panel'] })).body.tier3_domains, ['lock', 'alarm_control_panel']);
     const made = (await nova.call('POST', `${HA}/services/lock/unlock`, { entity_id: 'lock.back_door' })).body;
     assert.equal(made.approval_tier, 3);
     await until(() => nova.get(`/tasks/${made.id}`), (t) => t.state === 'waiting');
@@ -126,7 +143,54 @@ test('a domain the person marks is tier 3: an explicit confirmation every time; 
     assert.equal(loosen.status, 400);
     assert.match(loosen.body.error, /Taking lock, alarm_control_panel off the list/);
     assert.equal((await nova.call('PUT', `${HA}/settings`, { tier3_domains: ['switch'], confirm: true })).status, 200);
-    assert.equal((await nova.call('POST', `${HA}/services/lock/lock`, { entity_id: 'lock.back_door' })).body.approval_tier, 2);
+    assert.equal((await nova.call('POST', `${HA}/services/lock/lock`, { entity_id: 'lock.back_door' })).body.approval_tier, 1);
+  } finally { await done(); }
+});
+
+test('the service tier is a setting: 1 by default (act and report), 2 asks first; lowering it again needs a confirmation', async () => {
+  const { ha, nova, done } = await connected();
+  try {
+    const s = await nova.get(`${HA}/settings`);
+    assert.deepEqual([s.service_tier, s.default_service_tier], [1, 1]);
+    assert.equal((await nova.call('PUT', `${HA}/settings`, { service_tier: 3 })).status, 400, 'only 1 or 2: tier 3 is per domain');
+    // Raising it tightens the gate: no confirmation needed.
+    assert.equal((await nova.call('PUT', `${HA}/settings`, { service_tier: 2 })).body.service_tier, 2);
+    const made = await nova.call('POST', `${HA}/services/light/turn_on`, { entity_id: 'light.kitchen' });
+    assert.equal(made.body.approval_tier, 2);
+    const task = await until(() => nova.get(`/tasks/${made.body.id}`), (t) => t.state === 'waiting');
+    assert.match(task.reason, /Needs your OK/);
+    await sleep(100);
+    assert.equal(ha.state.calls.length, 0, 'nothing changed in the home before the OK');
+    assert.equal((await nova.call('POST', `/tasks/${task.id}/approve`, {})).status, 200);
+    assert.equal((await until(() => nova.get(`/tasks/${task.id}`), (t) => ['done', 'failed'].includes(t.state))).state, 'done');
+    assert.equal(ha.state.entities.get('light.kitchen').state, 'on');
+    // A tier-1 task can't pass the raised gate by asking for less.
+    const sneaky = await nova.call('POST', '/tasks', { title: 'Switch the fan on', owner: 'home-assistant', goal: 'The fan is on.', approval_tier: 1, evidence_required: [{ kind: 'confirmation' }], inputs: { domain: 'switch', service: 'turn_on', data: { entity_id: 'switch.fan' } } });
+    assert.notEqual((await until(() => nova.get(`/tasks/${sneaky.body.id}`), (t) => !['queued', 'active'].includes(t.state))).state, 'done');
+    assert.equal(ha.state.entities.get('switch.fan').state, 'off');
+
+    // Lowering it loosens the gate: it says so and needs {confirm: true}.
+    const loosen = await nova.call('PUT', `${HA}/settings`, { service_tier: 1 });
+    assert.equal(loosen.status, 400);
+    assert.match(loosen.body.error, /confirm: true/);
+    assert.equal((await nova.call('PUT', `${HA}/settings`, { service_tier: 1, confirm: true })).body.service_tier, 1);
+    assert.equal((await nova.call('POST', `${HA}/services/light/turn_off`, { entity_id: 'light.kitchen' })).body.approval_tier, 1);
+  } finally { await done(); }
+});
+
+test('at tier 1 a read-back that doesn’t show the change holds the task for the person; Nova doesn’t call again', async () => {
+  const { ha, nova, done } = await connected();
+  try {
+    // The lock answers, but takes longer to turn than Nova waits before reading it back.
+    ha.state.lagMs = 3000;
+    const made = (await nova.call('POST', `${HA}/services/lock/unlock`, { entity_id: 'lock.back_door' })).body;
+    assert.equal(made.approval_tier, 1);
+    const held = await until(() => nova.get(`/tasks/${made.id}`), (t) => ['done', 'failed', 'waiting'].includes(t.state));
+    assert.equal(held.state, 'waiting', JSON.stringify(held));
+    assert.match(held.reason, /May already have happened/);
+    assert.match(held.reason, /it is locked, not unlocked/);
+    await sleep(200);
+    assert.equal(ha.state.calls.length, 1, 'called once: not again by itself');
   } finally { await done(); }
 });
 

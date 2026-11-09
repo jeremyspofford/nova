@@ -1,6 +1,7 @@
 // Browser plans after the M5 review, without a browser: what a plan may change outside (it never
 // reruns by itself once it typed, chose, clicked or handed the page to the person), which plans ask
-// first (filling in and sending a form is tier 2), which plans can be proven done at all (a `url`
+// first (filling in and sending a form on the task's own sites is tier 1, act and report, since the
+// owner's ruling of 2026-11-09; it was tier 2), which plans can be proven done at all (a `url`
 // requirement needs `verify.expect`; a plan with outside effects needs `url` evidence on a page the
 // plan names, `verify.url`), how the `url` checker weighs Nova's own re-fetch against the page's
 // DOM, and what counts as a local host (only addresses, never a name that merely sounds local).
@@ -47,21 +48,30 @@ test('effects: a plan that types, chooses, clicks or hands the page to the perso
   assert.equal(w.commits!(brief({ ...form(), steps: [nav, { do: 'fill', selector: '#name', value: 'Ada' }, { do: 'click', selector: '#submit', commits: true }] })), true);
 });
 
-test('tiers: filling in and sending a form asks first; looking, or a step only you do, doesn’t', async () => {
+// Owner ruling 2026-11-09: filling in and sending a form on the task's own sites is tier 1, act and
+// report (it asked first, tier 2, before). Raising a task's tier still holds it for the OK.
+test('tiers: filling in and sending a form on its own sites is act and report; looking, or a step only you do, is 0', async () => {
   const w = worker();
-  assert.equal(w.minTier!({ inputs: form(), evidence_required: [{ kind: 'url' }] }), 2);
-  assert.equal(w.minTier!({ inputs: { ...form(), steps: [nav, { do: 'select', selector: '#plan', value: 'plus' }] }, evidence_required: [{ kind: 'url' }] }), 2);
+  assert.equal(w.minTier!({ inputs: form(), evidence_required: [{ kind: 'url' }] }), 1);
+  assert.equal(w.minTier!({ inputs: { ...form(), steps: [nav, { do: 'select', selector: '#plan', value: 'plus' }] }, evidence_required: [{ kind: 'url' }] }), 1);
   assert.equal(w.minTier!({ inputs: { allowed_hosts: [SITE], steps: [nav, read] }, evidence_required: [{ kind: 'url' }] }), 0);
   assert.equal(w.minTier!({ inputs: { ...form(), steps: [nav, { do: 'person', why: 'Sign in.' }] }, evidence_required: [{ kind: 'url' }] }), 0);
 
+  const saved = process.env.NOVA_CHROMIUM;
+  process.env.NOVA_CHROMIUM = '/nonexistent/chromium';
   const h = await hub({ mesh: false });
   try {
-    const task = (inputs: unknown) => ({ title: 'Sign up', owner: 'browser', goal: 'Signed up.', evidence_required: [{ kind: 'screenshot' }, { kind: 'url' }], inputs });
+    const task = (inputs: unknown, tier?: number) => ({ title: 'Sign up', owner: 'browser', goal: 'Signed up.', evidence_required: [{ kind: 'screenshot' }, { kind: 'url' }], inputs, ...(tier ? { approval_tier: tier } : {}) });
     const r = await h.c('POST', '/tasks', task(form()));
     assert.equal(r.status, 201, JSON.stringify(r.body));
-    assert.deepEqual([r.body.approval_tier, r.body.state, r.body.reason], [2, 'waiting', 'Needs your OK before it runs.']);
+    assert.equal(r.body.approval_tier, 1);
+    assert.notEqual(r.body.reason, 'Needs your OK before it runs.', 'it doesn’t wait for an OK');
+    // A caller (or the person) may still ask for more: a tier-2 task waits.
+    const asked = await h.c('POST', '/tasks', task(form(), 2));
+    assert.deepEqual([asked.body.approval_tier, asked.body.state, asked.body.reason], [2, 'waiting', 'Needs your OK before it runs.']);
   } finally {
     await h.stop();
+    if (saved === undefined) delete process.env.NOVA_CHROMIUM; else process.env.NOVA_CHROMIUM = saved;
   }
 });
 

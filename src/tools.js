@@ -374,6 +374,33 @@ export const TOOLS = {
       };
     },
   },
+  // Home Assistant through chat (owner ruling 2026-11-09, docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md):
+  // a change the person asks for is made and reported (tier 1), with Nova's own read-back from Home
+  // Assistant as the evidence; a domain the person marked still confirms every time, in Tasks. In a
+  // run that read outside content it asks first, as the ingest gate's guarded steps do (runner.js
+  // GUARDED).
+  home_call: {
+    signature: '{"domain": "light", "service": "turn_on", "entity_id": "light.kitchen", "data": {"brightness": 120}}',
+    doc: 'Change something in the person’s home through their Home Assistant, when they ask: a service by its domain and name (light turn_on, lock unlock, cover open_cover), the entity it acts on, and any settings in "data" (plain values only). Nova makes the call and reads the device back from Home Assistant itself as the evidence; the person sees it in Tasks. A domain they marked to confirm every time waits for them in Tasks instead. Only for a change they asked for, never on your own initiative.',
+    needsApproval: false,
+    available: (ctx) => ctx.homeControl,
+    async run(args, { homeControl: home, signal }) {
+      const a = args ?? {};
+      const made = home.call(String(a.domain ?? ''), String(a.service ?? ''), { ...(a.entity_id !== undefined ? { entity_id: a.entity_id } : {}), ...(a.data !== undefined ? { data: a.data } : {}) });
+      // Wait a little for the result, so the reply can say what happened.
+      let t = made;
+      for (let i = 0; i < 100 && !signal?.aborted && ['queued', 'active', 'verifying'].includes(t.state); i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        t = home.task(made.id);
+      }
+      const asks = t.state === 'waiting' && t.approval_tier >= 2 && !t.approved_at;
+      const output = t.state === 'done' ? `Done, and checked: ${t.reason} Nova read it back from Home Assistant itself.`
+        : asks ? `“${t.title}” waits for the person’s ${t.approval_tier === 3 ? 'explicit confirmation' : 'OK'} in Tasks: their Home Assistant settings ask first for this. Nothing has changed yet.`
+          : t.state === 'waiting' || t.state === 'failed' ? `“${t.title}” didn’t finish: ${t.reason}`
+            : `Home Assistant is still on “${t.title}”; the result shows in Tasks.`;
+      return { output, summary: t.title, link: '/tasks' };
+    },
+  },
   // Nova's own state, read in process from its registries (src/core/self.ts). Read-only; names and
   // states only, never a secret.
   nova_instance: {
@@ -461,8 +488,8 @@ export const TOOLS = {
 
 // The tools on offer right now: Gmail's only while it's connected, use_skill
 // only when a skill is installed, delegate only in a conversation with the person.
-export function availableTools({ gmail = false, skills = 0, delegate = false, self = false, coding = false, ops = false } = {}) {
-  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate, self, coding, ops }));
+export function availableTools({ gmail = false, skills = 0, delegate = false, self = false, coding = false, ops = false, homeControl = false } = {}) {
+  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate, self, coding, ops, homeControl }));
 }
 
 // Local-only means nothing leaves the person's devices, so tools that reach the internet (the

@@ -4,9 +4,11 @@
 // the house rules: no sideways scroll, 44 px targets, every control labelled, no duplicate ids, one
 // status icon (the top bar's) and none in a row, at most one primary control. The words are the real
 // model's (src/core/connectors/home-assistant.ts): the door is Settings › Connections; the token is
-// tried before the vault keeps it; Nova sees state only; a change asks first (tier 2), locks and
-// alarms confirm every time (tier 3) with the passkey; Nova reads the device back and asks rather
-// than calling again; each failure quotes the backend's own words. On a phone (390×844) and a Duo's
+// tried before the vault keeps it; Nova sees state only; a change the person asks for is made and
+// reported (tier 1, owner ruling 2026-11-09; it asked first, tier 2, before), the service tier is a
+// setting, kinds the person marks confirm every time (tier 3, none by default) with the passkey, and
+// a chat that read something from outside asks first; Nova reads the device back and holds the task
+// rather than calling again; each failure quotes the backend's own words. On a phone (390×844) and a Duo's
 // cover screen (380×900) each frame is one column filling the screen: one pane, full width, down to
 // the foot, no dead band. With NOVA_UI_SHOTS set (scripts/ui-test.sh), Chromium writes the owner's
 // screenshots (docs/screenshots/home-assistant-compositions-2026-11-09 for this entry).
@@ -21,11 +23,12 @@ import { createNova } from '../../src/server.js';
 import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
 
-const FRAMES = ['connect', 'connected', 'devices', 'approve', 'approve-lock', 'check-failed', 'confirm-list', 'disconnect', 'disconnected-note', 'unreachable', 'bad-token', 'not-ha', 'outside', 'token-revoked', 'reconnecting', 'paused'];
+// 'done' replaced 'approve' (a light waiting for an OK) with the owner's ruling of 2026-11-09.
+const FRAMES = ['connect', 'connected', 'devices', 'done', 'approve-lock', 'check-failed', 'confirm-list', 'disconnect', 'disconnected-note', 'unreachable', 'bad-token', 'not-ha', 'outside', 'token-revoked', 'reconnecting', 'paused'];
 const NARROW_FRAMES = ['connect', 'connected', 'devices', 'approve-lock', 'token-revoked'];
 const LIGHT_TOO = new Set(['connect', 'connected', 'devices']);
 const SIZES = { desktop: { width: 1440, height: 900, name: 'desktop-1440x900', touch: false }, phone: { width: 390, height: 844, name: 'phone-390x844', touch: true }, duo: { width: 380, height: 900, name: 'duo-cover-380x900', touch: true } };
-const INSIDE = new Set(['devices', 'approve', 'approve-lock', 'check-failed']);
+const INSIDE = new Set(['devices', 'done', 'approve-lock', 'check-failed']);
 
 async function fixture(run: (base: string) => Promise<void>) {
   const dir = mkdtempSync(join(tmpdir(), 'nova-ha-styleguide-'));
@@ -104,7 +107,8 @@ const SAID: Record<string, string> = {
   paused: 'Paused: it’s outside your network and Nova is set to local-only.',
   reconnecting: 'The live connection dropped; Nova is reconnecting.',
   'disconnected-note': 'Couldn’t reach Home Assistant. Delete the token in your Home Assistant profile, under Long-lived access tokens.',
-  'confirm-list': 'Taking lock off the list means Nova asks just once, not with a confirmation every time.',
+  'confirm-list': 'Taking lock off the list means Nova no longer asks for a confirmation every time. Send confirm: true to do that.',
+  done: 'light.turn_off: light.kitchen is off now.',
   'check-failed': 'May already have happened: The evidence didn\'t hold up: Nova read light.kitchen from Home Assistant itself: it is on, not off. Check, then retry or cancel.',
 };
 
@@ -116,7 +120,8 @@ async function words(page: Page, frame: string, label: string) {
   const has = (s: string) => assert.ok(text.toLowerCase().includes(s.toLowerCase()), `${label}: says “${s}”`);
   const lacks = (s: string) => assert.ok(!text.toLowerCase().includes(s.toLowerCase()), `${label}: doesn’t say “${s}”`);
   // Nothing the backend doesn't have, and not the softened claim's strong words.
-  for (const s of ['after asking you first, every time', 'brightness:', 'Set the temperature', 'Ask Nova to']) lacks(s);
+  // Nor the words the owner's ruling of 2026-11-09 retired: a change the person asks for doesn't wait.
+  for (const s of ['after asking you first', 'Asks first (tier 2)', 'Chat can’t', 'chat can’t change', 'brightness:', 'Set the temperature', 'Ask Nova to']) lacks(s);
   if (SAID[frame]) has(SAID[frame]!);
   if (INSIDE.has(frame)) {
     assert.equal(await f.locator('.uc-title').innerText(), 'Home Assistant', `${label}: Home Assistant`);
@@ -136,27 +141,29 @@ async function words(page: Page, frame: string, label: string) {
   }
   if (['unreachable', 'bad-token', 'not-ha'].includes(frame)) has('Nothing was kept');
   if (frame === 'outside') has('Nothing was sent there');
-  if (frame === 'connect') { has('Turn things on and off, after asking you first.'); has('Never: change anything without your OK'); }
+  if (frame === 'connect') { has('Turn things on and off when you ask, and tell you what changed.'); has('Never: change anything unless you, or a rule you set up, asks'); has('without asking you first'); }
   if (frame === 'connected' || frame === 'reconnecting' || frame === 'paused') {
-    for (const s of ['Connected to Home since', 'Without asking (tier 0)', 'Asks first (tier 2)', 'Locks and alarms (tier 3)', 'One rule listens to it']) has(s);
+    for (const s of ['Connected to Home since', 'Without asking (tier 0)', 'Made when you ask (tier 1), and reported', 'None by default', 'confirm every time (tier 3)', 'Nova asks you first before any change', 'One rule listens to it']) has(s);
     assert.equal(await f.getByRole('link', { name: 'Disconnect' }).count(), 1, `${label}: the way out`);
   }
   if (frame === 'connected') has('Hearing changes as they happen.');
   if (frame === 'reconnecting') has('a rule listening misses them');
-  if (frame === 'devices') { has('21.5'); has('Asks first (tier 2)'); assert.equal(await f.getByRole('button', { name: 'Turn off' }).count(), 1, `${label}: one change, for the open light`); }
-  if (frame === 'approve') {
-    has('Waiting for your OK'); has('Home Assistant runs light.turn_off on light.kitchen, and light.kitchen shows off.'); has('Nova doesn’t call again by itself');
-    assert.equal(await f.getByRole('button', { name: 'Approve' }).count(), 1, `${label}: Approve`);
+  if (frame === 'devices') { has('21.5'); has('Made when you ask (tier 1), and reported'); has('in chat'); assert.equal(await f.getByRole('button', { name: 'Turn off' }).count(), 1, `${label}: one change, for the open light`); }
+  if (frame === 'done') {
+    has('Done and reported'); has('tier 1, act and report'); has('Nova read light.kitchen from Home Assistant itself after the call: off.'); has('Nova doesn’t call again by itself');
+    assert.equal(await f.getByRole('button', { name: 'Approve' }).count(), 0, `${label}: nothing to approve`);
   }
   if (frame === 'approve-lock') {
-    has('Asks every time'); has('Home Assistant runs lock.unlock on lock.front_door');
+    has('Asks every time'); has('Home Assistant runs lock.unlock on lock.front_door'); has('you marked locks'); has('Unmarked, an unlock you ask for just happens');
     assert.ok(await f.getByRole('button', { name: 'Confirm with passkey' }).isDisabled(), `${label}: the passkey waits for the box`);
   }
   if (frame === 'check-failed') assert.equal(await f.getByRole('button', { name: 'Retry' }).count(), 1, `${label}: Retry, by the person`);
   if (frame === 'confirm-list') {
-    has('not your passkey');
-    assert.equal(await f.getByRole('checkbox', { name: /Locks/ }).isChecked(), false, `${label}: locks taken off`);
-    assert.equal(await f.getByRole('checkbox', { name: /Alarms/ }).isChecked(), true, `${label}: alarms still on`);
+    has('not your passkey'); has('Flagged for the owner');
+    assert.equal(await f.getByRole('radio', { name: /Make the change and tell me/ }).isChecked(), true, `${label}: tier 1 is the default`);
+    assert.equal(await f.getByRole('radio', { name: /Ask me first/ }).isChecked(), false, `${label}: tier 2 is a choice`);
+    assert.equal(await f.getByRole('checkbox', { name: /Locks/ }).isChecked(), true, `${label}: locks being marked`);
+    assert.equal(await f.getByRole('checkbox', { name: /Alarms/ }).isChecked(), false, `${label}: alarms not marked`);
   }
   if (frame === 'disconnect') { has('Nova asks Home Assistant to delete its token'); assert.equal(await f.getByRole('button', { name: 'Keep it' }).count(), 1, `${label}: Keep it`); }
   if (frame === 'token-revoked') { has('Home Assistant needs you'); assert.equal(await f.getByRole('button', { name: 'Connect again' }).count(), 1, `${label}: Connect again`); }
