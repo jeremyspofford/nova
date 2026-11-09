@@ -28,3 +28,26 @@ test('an error answer that is cut off still fails with its status', async () => 
   reply = json('{"error":"Not fo', 404);
   await assert.rejects(core.request('GET', '/example'), (e) => e.status === 404);
 });
+
+// The page's one HTTP client (core.js reach): app.js's post and getJson go through it too.
+test('no answer at all is Unreachable, in the caller’s words; an error answer keeps its status', async () => {
+  reply = () => { throw new TypeError('Failed to fetch'); };
+  await assert.rejects(core.request('GET', '/example'), (e) => e instanceof core.Unreachable && e.message === 'Nova’s server didn’t answer.');
+  await assert.rejects(core.reach('/api/example', {}, "Nova's server didn't answer."), (e) => e instanceof core.Unreachable && e.message === "Nova's server didn't answer.");
+  reply = json('{"error":"Example refused."}', 409);
+  const res = await core.reach('/api/example');
+  const e = core.refused(res, await res.json());
+  assert.equal(e.message, 'Example refused.');
+  assert.equal(e.status, 409);
+  assert.equal(core.refused({ status: 500 }, {}).message, 'Something went wrong.');
+});
+
+test('every request sends the same headers', async () => {
+  let sent = null;
+  globalThis.fetch = async (url, init) => { sent = init; return new Response('{}', { headers: { 'content-type': 'application/json' } }); };
+  try {
+    await core.request('POST', '/example', {});
+    assert.equal(sent.headers['x-nova'], '1');
+    assert.equal(sent.headers['content-type'], 'application/json');
+  } finally { globalThis.fetch = async () => reply(); }
+});

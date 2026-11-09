@@ -28,6 +28,27 @@ export class Unreachable extends Error {}
 // cache never counts as Nova being reachable.
 export const fromCache = (res) => res.headers.get('x-nova-offline') === '1';
 
+// The page's one way to reach Nova over HTTP; every helper that talks to the server goes through
+// here (request below, and app.js's post and getJson). No answer at all (Nova out of reach) is
+// Unreachable, saying `message`; any answer, error or not, comes back for the caller to read.
+// (/pair carries its own: it may load only public files, src/core/mesh/access.ts PUBLIC_PATHS.)
+export const NOVA_HEADERS = Object.freeze({ 'content-type': 'application/json', 'x-nova': '1' });
+export async function reach(url, init = {}, message = 'Nova’s server didn’t answer.') {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new Unreachable(message);
+  }
+}
+
+// An error answer as an Error: the server's own words when it gave some, its status and details.
+export function refused(res, data) {
+  const e = new Error((data && data.error) || 'Something went wrong.');
+  e.details = data?.details ?? [];
+  e.status = res.status;
+  return e;
+}
+
 // The answer and whether it came from the offline cache, kept together so concurrent requests
 // can't mix up whose answer was stale.
 // A read the hub hasn't answered in this long is no answer: the page says Nova is out of reach
@@ -39,13 +60,8 @@ export async function request(method, path, body, retried = false) {
   const bare = path.split('?')[0];
   const signed = body?.confirm === true && !body.passkey_approval && !/^\/changes\/[^/]+\/rollback$/.test(bare) ? await approvalFor(api, method, bare, body) : null;
   if (signed) body = { ...body, passkey_approval: signed };
-  let res;
-  try {
-    const signal = method === 'GET' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(NO_ANSWER_MS) : undefined;
-    res = await fetch(`${V1}${path}`, { method, headers: { 'content-type': 'application/json', 'x-nova': '1' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), ...(signal ? { signal } : {}) });
-  } catch {
-    throw new Unreachable('Nova’s server didn’t answer.');
-  }
+  const signal = method === 'GET' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(NO_ANSWER_MS) : undefined;
+  const res = await reach(`${V1}${path}`, { method, headers: NOVA_HEADERS, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), ...(signal ? { signal } : {}) });
   // Only a paired device ever hears 401 (the hub's own screen never does): its session ended, so
   // it signs in again once with its key, or goes back to /pair.
   if (res.status === 401 && !retried) {
@@ -64,12 +80,7 @@ export async function request(method, path, body, retried = false) {
     data = null;
   }
   if (signed) show(res.ok ? 'confirmed' : res.status === 403 && /passkey/i.test(data?.error ?? '') ? (/expired/.test(data.error) ? 'expired' : 'failed') : 'ready');
-  if (!res.ok) {
-    const e = new Error((data && data.error) || 'Something went wrong.');
-    e.details = data?.details ?? [];
-    e.status = res.status;
-    throw e;
-  }
+  if (!res.ok) throw refused(res, data);
   return { data, stale };
 }
 

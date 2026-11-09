@@ -1,0 +1,5 @@
+**2026-11-09 · UI · One HTTP client for the app**
+- What changed: the owner queue's "one HTTP client to avoid app.js collisions". ui/js/core.js was already the shared client; it now exports the one fetch (reach), the headers and the error builder, and app.js's post, getJson, conversation list and health check, plus reset.js's polls, go through it. Messages, headers, the error's status and the offline handling are unchanged. The pairing page keeps its own small client: it may only load publicly served files, and widening that list is ruled out.
+- What you can now do: nothing visible; the next app.js change has one place to change how Nova talks to its server.
+- Still unfinished: pair.js keeps its own client, by the owner's public-files ruling.
+- Checked: tests/ui-core-request.test.js with two new tests, the unit tests that use these helpers 73/73, ui-review, styleguide-coverage and evals 25/25, the UI tests csp, sw-upgrade, m9-progress, offline, m9-skeleton, ui-fixes, passkey-flow, m4a-webkit-pair, m6a-capture and m7-reset, lint:tokens, typecheck.

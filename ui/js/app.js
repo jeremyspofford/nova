@@ -7,7 +7,7 @@ import { applyEvent, emptySession } from './reduce.js';
 import { escapeHtml, renderMarkdown } from './markdown.js';
 import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { apply as applyTheme } from './theme.js';
-import { api, fromCache, on as onCore, stream as coreStream } from './core.js';
+import { NOVA_HEADERS, api, fromCache, on as onCore, reach, refused, stream as coreStream } from './core.js';
 import { approvalFor, loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
 import { bindConfig, bindConfigForm, loadConfigForm, renderConfig, renderConfigForm } from './config.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
@@ -77,23 +77,25 @@ const approvalsShown = new Set();
 
 // ---- server --------------------------------------------------------------
 
+// Era 2's paths (not under /api/v1), through core.js's one client. No answer means Nova is out of
+// reach, and the page says so.
 async function post(path, body = {}) {
   let res;
   try {
-    res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify(body) });
-  } catch {
+    res = await reach(path, { method: 'POST', headers: NOVA_HEADERS, body: JSON.stringify(body) }, "Nova's server didn't answer.");
+  } catch (e) {
     setReachable(false);
-    throw new Error("Nova's server didn't answer.");
+    throw e;
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong.'), { status: res.status });
+  if (!res.ok) throw refused(res, data);
   return data;
 }
 
 async function loadList() {
   const seen = outage;
   try {
-    const res = await fetch('/api/sessions');
+    const res = await reach('/api/sessions');
     if (!res.ok) throw new Error();
     state.list = await res.json();
     since(seen, !fromCache(res));
@@ -102,7 +104,7 @@ async function loadList() {
 }
 
 // A GET that fails the same way whether the server is gone or answers with an error.
-const getJson = (path) => fetch(path).then((r) => { if (!r.ok) throw new Error(); return r.json(); });
+const getJson = (path) => reach(path).then((r) => { if (!r.ok) throw new Error(); return r.json(); });
 
 // A view whose data couldn't be read: what failed, why, and a way to try again.
 const errorEmpty = (title, msg, retry) => `<div class="empty"><p class="empty-line">${title}</p><p class="memory-lede">${msg}</p><button type="button" class="btn" data-action="${retry}">Try again</button></div>`;
@@ -253,7 +255,7 @@ function setReachable(ok) {
   renderCore();
   clearTimeout(healthTimer);
   if (!ok) {
-    const check = () => fetch('/api/health').then((r) => {
+    const check = () => reach('/api/health').then((r) => {
       if (!r.ok || fromCache(r)) throw new Error();
       setReachable(true);
       loadList();
