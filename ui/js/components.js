@@ -2,7 +2,7 @@
 // the style reference and the appearance preview all draw the same components. Every visual
 // value is a token (components.css); nothing here carries a colour, size or font.
 import { escapeHtml as esc } from './markdown.js';
-import { ORB_WORDS, STATUS, isOpen, label, needsApproval, statusOf } from './status.js';
+import { ORB_WORDS, STATUS, isOpen, label, needsApproval, statusOf, taskIconState } from './status.js';
 import { qrSvg } from './qr.js';
 import { waitingLine } from './wait.js';
 
@@ -109,8 +109,11 @@ export function taskRow(t, { now = new Date(), compact = false } = {}) {
   const st = statusOf(t);
   const when = ago(t.updated_at ?? t.created_at, now);
   const why = st === 'needs-you' && needsApproval(t) ? 'Needs your OK before it runs.' : t.reason ?? '';
+  // The task's own state as a 16 px status icon, drawn in place by shell.js (decorative: the
+  // status beside it says the state in words).
+  const icon = taskIconState(t);
   return `<li class="task-row" data-status="${st}" data-task="${esc(t.id)}">
-  <button type="button" class="task-open" data-action="open-task" data-task="${esc(t.id)}"><span class="task-title">${esc(clip(t.title, 80))}</span>${compact ? '' : `<span class="task-meta">${esc(clip(why, 90))}${why && when ? ' · ' : ''}${when ? `<time>${esc(when)}</time>` : ''}</span>`}</button>
+  ${icon ? `<span class="task-icon-slot" data-task-icon="${icon}" data-task="${esc(t.id)}" aria-hidden="true"></span>` : ''}<button type="button" class="task-open" data-action="open-task" data-task="${esc(t.id)}"><span class="task-title">${esc(clip(t.title, 80))}</span>${compact ? '' : `<span class="task-meta">${esc(clip(why, 90))}${why && when ? ' · ' : ''}${when ? `<time>${esc(when)}</time>` : ''}</span>`}</button>
   ${status(st, { task: st === 'verified' ? t.id : null })}
 </li>`;
 }

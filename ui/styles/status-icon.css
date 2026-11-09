@@ -12,3 +12,6 @@
 .si-tile-hero { padding: var(--space-1); border-radius: var(--radius-card); }
 .si-sheet { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); align-items: center; justify-items: center; gap: var(--space-2) var(--space-4); max-width: calc(var(--space-8) * 6); }
 .si-sheet > .sg-name:nth-child(4n + 1) { justify-self: start; }
+
+/* In the app (shell.js): the live state in the rail, the top bar and the heroes, and a task row's own state. */
+.task-icon { flex: none; }

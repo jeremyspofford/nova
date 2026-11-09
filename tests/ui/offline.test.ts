@@ -25,10 +25,10 @@ test('M3: with the server down, the PWA stays honestly offline, and recovers whe
     await page.reload();
     await ready(page);
     assert.equal(await page.evaluate(() => !!navigator.serviceWorker.controller), true, 'the service worker controls the page');
-    await page.waitForFunction(() => document.querySelector('.orb[data-orb-live]')?.getAttribute('data-state') === 'idle');
+    await page.waitForFunction(() => document.querySelector('.status-icon[data-presence]')?.getAttribute('data-state') === 'idle');
 
-    const orb = () => page.evaluate(() => document.querySelector('.orb[data-orb-live]')?.getAttribute('data-state'));
-    const toState = (want: string, timeout = 15000) => page.waitForFunction((w) => document.querySelector('.orb[data-orb-live]')?.getAttribute('data-state') === w, want, { timeout });
+    const orb = () => page.evaluate(() => document.querySelector('.status-icon[data-presence]')?.getAttribute('data-state'));
+    const toState = (want: string, timeout = 15000) => page.waitForFunction((w) => document.querySelector('.status-icon[data-presence]')?.getAttribute('data-state') === w, want, { timeout });
     // Two outages: after the first, the reconnect check has succeeded once, which is when a cached
     // health answer could exist to fool the second.
     for (const round of [1, 2]) {
@@ -77,8 +77,8 @@ test('M3: an answer begun before an outage never brings the orb back', async (t)
     await page.evaluate(() => navigator.serviceWorker.ready);
     await page.reload();
     await ready(page);
-    const orb = () => page.evaluate(() => document.querySelector('.orb[data-orb-live]')?.getAttribute('data-state'));
-    await page.waitForFunction(() => document.querySelector('.orb[data-orb-live]')?.getAttribute('data-state') === 'idle');
+    const orb = () => page.evaluate(() => document.querySelector('.status-icon[data-presence]')?.getAttribute('data-state'));
+    await page.waitForFunction(() => document.querySelector('.status-icon[data-presence]')?.getAttribute('data-state') === 'idle');
     // From here, the core's work-costs read waits in the page until the test lets it go; every other
     // read goes straight through and is counted until it settles.
     await page.evaluate(() => {
@@ -103,7 +103,7 @@ test('M3: an answer begun before an outage never brings the orb back', async (t)
     assert.equal(await orb(), 'idle');
     // The server goes down while the slow part is still out; the page says so.
     await stop(nova);
-    await page.waitForFunction(() => document.querySelector('.orb[data-orb-live]')?.getAttribute('data-state') === 'offline', null, { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('.status-icon[data-presence]')?.getAttribute('data-state') === 'offline', null, { timeout: 10000 });
     // The slow part now meets a dead server (the cached copy, marked offline), and the refresh ends.
     await page.evaluate(() => (window as unknown as { __release: () => void }).__release());
     await page.waitForFunction(() => (window as unknown as Record<string, unknown>).__heldDone === true);

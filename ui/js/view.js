@@ -99,7 +99,7 @@ const SKY_BAND = `<svg class="chat-sky" viewBox="0 0 400 100" preserveAspectRati
 
 // An empty chat, the main conversation or a fresh one (UI rebuild PR 4): the orb, under it the
 // greeting, and the composer below it, centred (body[data-empty]) with three suggestions under it.
-// `orb` is the page's live hero orb (shell.js liveOrb), passed in so this stays a pure builder.
+// `orb` is the page's live hero, the status icon (shell.js liveIcon), passed in so this stays a pure builder.
 export function renderEmpty(now = new Date(), { name = '', orb = '' } = {}) {
   return `<div class="empty chat-empty"><div class="chat-hero">${SKY_BAND}${orb}</div><h2 class="greeting">${esc(greeting(now, name))}</h2></div>`;
 }

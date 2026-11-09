@@ -39,11 +39,14 @@ async function reachable(page: Page): Promise<string[]> {
   return [...seen].sort();
 }
 
+// The live state: the orb before status icons part B, the status icon since (owner, 2026-11-08). The
+// icon is one ribbon on one canvas, drawn by status-icon.js from its states' forms only.
 async function orbs(page: Page) {
-  return page.$$eval('.orb', (els) => els.map((o) => ({
+  return page.$$eval('.orb, .status-icon[data-presence]', (els) => els.map((o) => ({
+    icon: o.classList.contains('status-icon'),
     visible: (o as HTMLElement).checkVisibility(),
-    parts: [...o.querySelectorAll('*')].map((c) => c.className.toString()).sort(),
-    media: o.querySelectorAll('img, svg, picture, canvas').length,
+    parts: o.classList.contains('status-icon') ? [...o.children].map((c) => `${c.localName}${c.getAttribute('aria-hidden') === 'true' ? ':hidden' : ''}`) : [...o.querySelectorAll('*')].map((c) => c.className.toString()).sort(),
+    media: o.querySelectorAll(o.classList.contains('status-icon') ? 'img, svg, picture, video' : 'img, svg, picture, canvas').length,
   })));
 }
 
@@ -70,11 +73,11 @@ test('M3 gate: posture sweep — layout, no overflow, the same destinations ever
         const overflow = await d.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         assert.ok(overflow <= 0, `${at}: ${overflow}px of sideways scrolling`);
         // Home draws its hero orb once its data arrives; on a busy machine that can trail "ready".
-        await d.page.waitForFunction(() => [...document.querySelectorAll('.orb')].some((o) => (o as HTMLElement).checkVisibility()), null, { timeout: 5000 }).catch(() => {});
+        await d.page.waitForFunction(() => [...document.querySelectorAll('.orb, .status-icon[data-presence]')].some((o) => (o as HTMLElement).checkVisibility()), null, { timeout: 5000 }).catch(() => {});
         const found = await orbs(d.page);
         assert.ok(found.some((o) => o.visible), `${at}: an orb is on screen`);
         for (const o of found) {
-          assert.deepEqual(o.parts, ORB_PARTS, `${at}: the orb has only its four layers, no features`);
+          assert.deepEqual(o.parts, o.icon ? ['canvas:hidden'] : ORB_PARTS, `${at}: the orb has only its ${o.icon ? 'one canvas' : 'four layers'}, no features`);
           assert.equal(o.media, 0, `${at}: no image or drawing inside the orb`);
         }
         if (shots) await shoot(d.page, join(shots, `sweep-${width}-${posture}.png`));

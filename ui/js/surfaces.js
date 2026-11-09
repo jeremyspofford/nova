@@ -5,7 +5,7 @@ import { api, deviceId, request, Unreachable } from './core.js';
 import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, promotionActionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard, workCosts, diagnosticsDownload } from './components.js';
 import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
-import { closeSheet, layout, liveOrb, openSheet, sheetOpen, toast } from './shell.js';
+import { closeSheet, layout, liveIcon, openSheet, sheetOpen, toast } from './shell.js';
 import { MODES, current as appearance, endPreview, fixContrast, follow, preview, previewingNow, rollback, setMode, syncedId, undoFix, use } from './theme.js';
 import { recommend } from './contrast.js';
 import { contrastView, undoPlan } from './look.js';
@@ -136,7 +136,7 @@ export function renderHome(el, now = new Date()) {
     ? card({ kind: 'needs-you-card', title: 'Needs you', icon: 'handling', body: `<ul class="task-list">${asking.slice(0, 3).map((t) => taskRow(t, { now })).join('')}</ul>` })
     : '';
   el.innerHTML = `${unread.slice(0, 2).map(proactiveBanner).join('')}
-<header class="home-hero">${liveOrb('hero')}
+<header class="home-hero">${liveIcon('hero')}
   <h2 class="greeting">${esc(greeting(now, name))}</h2>
   <p class="greeting-sub">${esc(today(now))} · ${esc(summary())}</p>
 </header>

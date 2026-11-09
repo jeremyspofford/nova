@@ -14,7 +14,7 @@ import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { destination, routeOf } from './nav.js';
 import { greeting, problemTone, stoppingProblems } from './status.js';
 import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
-import { closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, setRecent, signal, toast as notify, toggleAside, liveOrb } from './shell.js';
+import { closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, setRecent, signal, toast as notify, toggleAside, liveIcon } from './shell.js';
 import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
 import { bindSites, loadSites, renderSites } from './sites.js';
@@ -212,6 +212,7 @@ function showSignals() {
     stopped,
     needsYou: asking + state.busy.waiting + (problems.length - stopped),
     speaking: state.view === 'chat' && state.live?.phase === 'streaming',
+    thinking: state.view === 'chat' && viewLive()?.phase === 'thinking',
     working: core.working() + state.busy.working + (state.pending || state.live ? 1 : 0),
   });
 }
@@ -512,7 +513,7 @@ function renderThread() {
     // Drawn again only when what it says changes (the name arriving), so it doesn't rise twice.
     const key = state.missing ? 'missing' : greeting(new Date(), name);
     if (!el.thread.querySelector('.empty') || key !== emptyKey) {
-      el.thread.innerHTML = state.missing ? MISSING : renderEmpty(new Date(), { name, orb: liveOrb('hero') });
+      el.thread.innerHTML = state.missing ? MISSING : renderEmpty(new Date(), { name, orb: liveIcon('hero') });
       emptyKey = key;
       rendered = new Map();
     }
@@ -2173,7 +2174,7 @@ readLayout();
 // The composer lines up with the conversation: as wide as the scroller's content, which is
 // narrower by its scrollbar gutters (none for overlay scrollbars).
 new ResizeObserver(() => $('main').style.setProperty('--gutter', `${el.scroller.offsetWidth - el.scroller.clientWidth}px`)).observe(el.scroller);
-el.topbarOrb.innerHTML = liveOrb('mini');
+el.topbarOrb.innerHTML = liveIcon('mini');
 applyTheme();
 coreStream();
 keepSession();

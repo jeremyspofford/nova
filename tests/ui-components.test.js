@@ -48,6 +48,18 @@ test('the orb has every state and no face, ever', () => {
   assert.match(orb({ size: 'avatar', decorative: true }), /aria-hidden="true"/);
 });
 
+// Status icons part B: a task row leaves a slot for its own state's icon (shell.js draws it), decorative
+// because the status beside it says the state in words; a cancelled task has none.
+test('a task row carries its own state’s icon slot', () => {
+  const row = (state, more = {}) => taskRow({ ...verified, id: `x-${state}`, state, verification: null, ...more });
+  assert.match(row('active'), /<span class="task-icon-slot" data-task-icon="working" data-task="x-active" aria-hidden="true"><\/span>/);
+  assert.match(row('waiting', { approval_tier: 2 }), /data-task-icon="needs-you"/);
+  assert.match(row('queued'), /data-task-icon="idle"/);
+  assert.match(row('failed'), /data-task-icon="stopped"/);
+  assert.match(taskRow(verified), /data-task-icon="success"/);
+  assert.doesNotMatch(row('cancelled'), /data-task-icon/);
+});
+
 test('Verified always carries its evidence affordance', () => {
   assert.match(status('verified', { task: 'v1' }), /<button[^>]+data-action="evidence"[^>]+data-task="v1"/);
   assert.match(taskRow(verified), /data-action="evidence"/);

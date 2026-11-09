@@ -5,7 +5,7 @@
 // welcome task's VerifiedResultCard with its evidence one tap away, and ONE suggested first action.
 import { Unreachable, api, on } from './core.js';
 import { ICONS, chatBubble, evidenceViewer, lookingIntoItCard, verifiedResultCard } from './components.js';
-import { liveOrb, openSheet, toast } from './shell.js';
+import { liveIcon, openSheet, toast } from './shell.js';
 import { escapeHtml as esc } from './markdown.js';
 import { forgetHere } from './forget-here.js';
 import { waitingLine } from './wait.js';
@@ -141,7 +141,7 @@ function render() {
     ? `<div class="dock"><button type="button" class="btn${view.first ? '' : ' primary'}" data-action="setup-continue">Continue to Nova</button></div>`
     : `<div class="dock">${choices()}<form class="composer" id="setup-form"><label class="sr-only" for="setup-input">Answer Nova</label><textarea id="setup-input" rows="1" placeholder="Your answer…" autocomplete="off"></textarea><button type="submit" class="send" aria-label="Send">${ICONS.send}</button></form></div>`;
   el.innerHTML = `<div class="setup-panel" role="dialog" aria-modal="true" aria-labelledby="setup-title">
-  <header class="setup-head">${liveOrb('rail')}<div><h1 class="setup-title" id="setup-title">Setting up Nova</h1><p class="setup-sub">A few quick questions. You can change most answers later in Settings.</p></div></header>
+  <header class="setup-head">${liveIcon('rail')}<div><h1 class="setup-title" id="setup-title">Setting up Nova</h1><p class="setup-sub">A few quick questions. You can change most answers later in Settings.</p></div></header>
   <div class="setup-log" id="setup-log" aria-live="polite">${resetCard()}${log}${firstView()}${result()}</div>
   ${dock}
 </div>`;
