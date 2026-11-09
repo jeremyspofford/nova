@@ -22,7 +22,7 @@
   - A schedule.
   - A Health entry, which needs the owner's approval of a rendered entry.
   - Also: with Nova running, a reader necessarily touches SQLite's nova.db-shm index file. The test proves no file is created and nova.db is byte-identical, not that -shm is untouched.
-- Checked:
+- Checked: locally, before CI.
   - typecheck.
   - tests/core/integrity.test.ts 9/9: a corrupt database, a full disk, redaction, the time bound, nothing written, damaged checkpoints, the guards and cool-down, the ext4 counter.
   - Diagnostics tests 16/16.
