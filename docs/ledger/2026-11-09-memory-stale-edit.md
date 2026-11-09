@@ -1,0 +1,5 @@
+**2026-11-09 · Memory · A stale edit no longer replaces a newer correction**
+- What changed: editing a memory from the Memory view named the version the page showed, but the server corrected whichever version was newest. So an edit from a second device still showing older words silently replaced a correction made elsewhere. The server now refuses that edit (409) and keeps the newer correction; the page shows the refusal and reloads the newest wording. After a save, the page also tracks the new record's id, so a second edit in a row is not mistaken for a stale one.
+- What you can now do: edit the same memory from two devices without one silently wiping the other.
+- Still unfinished: hand edits to MEMORY.md still apply to the newest version, by design; the core /api/v1/memory routes already refused this case.
+- Checked: tests/memory.test.js 21 tests including a new one for the stale edit, tests/server.test.js and the memory-gate and person ingest tests, tests/ui/m9-progress.test.ts, typecheck.
