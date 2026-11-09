@@ -298,7 +298,13 @@ export function collapseLines(lines) {
 // What Nova kept from this exchange, in the margin, linked to the Memory view.
 const HELD_WORDS = 'this came after reading something from outside';
 export function renderKept(ops, memory = new Map(), when = null) {
-  return collapseLines(ops.filter((o) => o.ok && !o.existing).map((o) => {
+  // A memory the memory gate skipped was never kept, so it has no line.
+  return collapseLines(ops.filter((o) => o.ok && !o.existing && !o.skipped).map((o) => {
+    // The memory gate's flag: it waits because it conflicts with what Nova remembers.
+    if (o.held && o.conflict) {
+      return ['conflict', '<p class="margin-note"><a class="margin-link" href="/memory#waiting">waiting for your OK</a>: this conflicts with what Nova remembers</p>',
+        (n) => `<p class="margin-note"><a class="margin-link" href="/memory#waiting">${n} things waiting for your OK</a>: they conflict with what Nova remembers</p>`];
+    }
     // The ingest gate: memory from a conversation that read outside content waits for the person.
     // Several at once are one line that says how many (each is its own candidate in Memory).
     if (o.held) {
@@ -509,6 +515,12 @@ function memoryItem(e, titles, now) {
 function waitingItem(c) {
   const from = [...new Set((c.taint ?? []).map((x) => x.origin))].slice(0, 3).join(', ');
   const what = c.op === 'forget' ? (c.target_text ? `Forget “${c.target_text}”` : 'Forget one of your memories') : c.content;
+  // The memory gate's flag: it waits because it conflicts with what Nova remembers, and says with what.
+  if (c.reason) {
+    return `<li class="memory-item" data-candidate="${esc(c.id)}"><p class="memory-text">${esc(what)}</p>
+<p class="memory-source">Nova heard something that conflicts with what it remembers. ${esc(c.reason)}</p>
+<div class="memory-actions"><button type="button" class="act" data-action="keep-candidate">Keep</button><button type="button" class="act" data-action="drop-candidate">Drop</button></div></li>`;
+  }
   return `<li class="memory-item" data-candidate="${esc(c.id)}"><p class="memory-text">${esc(what)}</p>
 <p class="memory-source">${String(c.source ?? '').startsWith('device:') ? 'A note from one of your devices, waiting because Nova couldn’t fully check it'
     : String(c.source ?? '').startsWith('imported from ') ? `${esc(String(c.source).replace(/^imported from /, 'Imported from '))}${(c.taint ?? []).some((t) => t.verdict !== 'pass') ? '; Nova couldn’t fully check it' : ''}`
@@ -521,7 +533,7 @@ export function renderMemory(data, now = new Date()) {
   const days = data?.days ?? [];
   const waiting = data?.candidates ?? [];
   const held = waiting.length ? `<section class="memory-section" id="waiting" aria-labelledby="ms-waiting"><h2 class="memory-heading" id="ms-waiting">Waiting for your OK</h2>
-<p class="memory-kind">Nova read something from outside before it wanted to keep these, so they wait for you. Nova doesn't see them until you keep them.</p>
+<p class="memory-kind">${waiting.some((c) => !c.reason) ? 'Nova read something from outside before it wanted to keep these' : 'These conflict with what Nova remembers'}${waiting.some((c) => c.reason) && waiting.some((c) => !c.reason) ? ', or they conflict with what it remembers' : ''}, so they wait for you. Nova doesn't see them until you keep them.</p>
 <ul class="memory-list">${waiting.map(waitingItem).join('')}</ul></section>` : '';
   const count = sections.reduce((n, s) => n + s.entries.length, 0) + days.reduce((n, d) => n + d.entries.length, 0);
   if (!count) {

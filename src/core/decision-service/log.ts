@@ -3,7 +3,7 @@
 // and field names (never its content), the full answers and every shadow answer, the bands,
 // outcome, action, tier and autonomy, the trust and verdict, and why. It goes to the Work Ledger:
 // with the task's id when the decision was made inside a task. The core writes it to the
-// decision_record table (DbLog, migration 0019); MemoryLog remains for tests.
+// decision_record table (DbLog, migration 0019; `source` from 0027); MemoryLog remains for tests.
 import type { DecisionRecord } from './types.ts';
 
 export interface DecisionLog { write(r: DecisionRecord): void }
@@ -30,11 +30,11 @@ export class DbLog implements DecisionLog {
     try {
       this.#db.run(
         `INSERT INTO decision_record (id, at, task_id, subsystem, template_id, version, seat, model_asked, model, privacy_mode, egress, opt_in,
-          state_sha256, state_fields, pieces, requests, usage, answers, bands, shadows, failures, outcome, action, tier, autonomy, quality, trust, verdict_ref, why)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          state_sha256, state_fields, pieces, requests, usage, answers, bands, shadows, failures, outcome, action, tier, autonomy, quality, trust, verdict_ref, why, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         r.id, r.at, r.task_id, r.subsystem, r.template_id, r.version, r.seat, r.model_asked, r.model, r.privacy_mode, r.egress, r.opt_in,
         r.state_sha256, j(r.state_fields), r.pieces, r.requests, j(r.usage), r.answers ? j(r.answers) : null, r.bands ? j(r.bands) : null, j(r.shadows), j(r.failures),
-        r.outcome, r.action, r.tier, r.autonomy, r.quality, r.trust, r.verdict_ref, r.why,
+        r.outcome, r.action, r.tier, r.autonomy, r.quality, r.trust, r.verdict_ref, r.why, r.source ?? null,
       );
     } catch (e) { this.#onError?.(e as Error); }
   }

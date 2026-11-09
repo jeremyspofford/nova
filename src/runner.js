@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { runAgent, AgentError } from './agent.js';
-import { DEFAULT_LINK_CAPS, Ingest, cleanOrigin, escapeProtocol, permits, sha256 } from './core/index.ts';
+import { DEFAULT_LINK_CAPS, Ingest, MEMORY_GATE_V1, cleanOrigin, escapeProtocol, permits, sha256 } from './core/index.ts';
 import { buildPrompt, buildSystem, helperSection, runSection, schedulesSection, skillsSection } from './context.js';
 import { Memory } from './memory.js';
 import { Skills } from './skills.js';
@@ -57,6 +57,16 @@ const canonUrl = (u) => { try { return new URL(String(u ?? '')).href; } catch { 
 const linkFromText = (u) => { try { const x = new URL(String(u ?? '').replace(/[.,;:!?]+$/, '')); x.hash = ''; return x.href; } catch { return null; } };
 const OWN_TOP = new Set(['memory', 'schedules', 'permissions.md']);
 
+// The memory gate's fields as the template caps them: the service never cuts a field, so the
+// consumer leaves out context that won't fit rather than fail the ask.
+const GATE_ANSWER_MAX = MEMORY_GATE_V1.fields.nova_answer.max_chars;
+const GATE_EXISTING_MAX = MEMORY_GATE_V1.fields.existing_memories.max_chars;
+// Why a flagged memory waits: what it may conflict with, from the memories the gate was shown.
+const clipLine = (s, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+export const conflictReason = (near) => (near.length
+  ? `It may conflict with what Nova remembers: ${near.slice(0, 2).map((m) => `“${clipLine(m)}”`).join('; ')}.`
+  : 'It may conflict with what Nova remembers.');
+
 // Files a skill may carry that aren't text, by name, and what each must start with.
 export const BINARY_FILE = /\.(png|jpe?g|gif|webp|ico|bmp|pdf|woff2?|ttf|otf|eot|zip|gz|mp3|mp4|wav|ogg|webm)$/i;
 const MAGIC = [
@@ -92,7 +102,10 @@ export class Runner extends EventEmitter {
   // nothing the model says can set it.
   // decisions: the Decision Service's ask (core.decisionService.ask), for the Interstitial Research
   // hook; only ever used while config.features.interstitial is on.
-  constructor(config, store, { agent = runAgent, records = null, vault = null, ingest = null, fetchAllow = null, linkCaps = null, decisions = null } = {}) {
+  // memoryGate: (fields, { source, task_id, privacy_mode }) → the memory-gate decision, asked by
+  // keep() before an untainted remember is written; only while config.features.memoryGate is on.
+  // The server passes the Decision Service's ask, which routes it as `private`.
+  constructor(config, store, { agent = runAgent, records = null, vault = null, ingest = null, fetchAllow = null, linkCaps = null, decisions = null, memoryGate = null } = {}) {
     super();
     this.config = config;
     this.store = store;
@@ -100,6 +113,7 @@ export class Runner extends EventEmitter {
     this.ingest = ingest ?? new Ingest({ db: null });
     this.fetchAllow = fetchAllow;
     this.decisions = decisions;
+    this.memoryGate = memoryGate;
     this.ledger = null; // set by the server: where the Interstitial Research hook files a proposal
     // How many links a tainted run may follow on its own (the ingest gate); tests alone pass others.
     this.linkCaps = { ...DEFAULT_LINK_CAPS, ...(linkCaps ?? {}) };
@@ -415,7 +429,8 @@ export class Runner extends EventEmitter {
       if (visible) this.record(sessionId, { type: 'assistant', ...tag, id: shortId(), text: visible });
       if (ir?.checked) this.record(sessionId, { type: 'interstitial', ...tag, phase: 'verify', words: ir.words, claims: ir.verdicts.map(({ claim, field, source, outcome, label }) => ({ claim, field, source, outcome, label })) });
       run.live.text = '';
-      if (ops.length && !run.helper) this.keep(sessionId, tag, ops, run); // memory is kept in the conversation that asked
+      // Memory is kept in the conversation that asked, before the reply goes on (the gate may ask a model).
+      if (ops.length && !run.helper) await this.keep(sessionId, tag, ops, run, { said: visible, task, mode });
       // Claims just checked: the model writes its answer with the verdicts in hand.
       if (!call && !error && ir?.checked && step < this.config.maxSteps) continue;
       if (!call && !error) { this.record(sessionId, { type: 'done', ...tag }); return; }
@@ -616,26 +631,88 @@ export class Runner extends EventEmitter {
   // changed by id only; the words live in the core's memory and the day notes.
   // In a run that read outside content, memory isn't written: each block becomes a candidate,
   // held with where it came from, out of every prompt until the person keeps it (a forget too).
-  keep(sessionId, tag, ops, run = { taint: [] }) {
+  // In a run that read nothing from outside, with features.memoryGate on, a remember asks the memory
+  // gate first (gated()). said: the reply's visible text, the gate's context only.
+  async keep(sessionId, tag, ops, run = { taint: [] }, { said = '', task = null, mode = null } = {}) {
     const from = `${sessionId}/${tag.turn}`;
     const held = run.taint.length > 0;
-    const results = ops.map((o) => {
+    const results = [];
+    for (const o of ops) {
       try {
         if (held) {
           const id = this.ingest.candidate({ op: o.op, ...(o.kind ? { kind: o.kind } : {}), ...(o.text ? { content: o.text } : {}), ...(o.op === 'forget' ? { target: o.id } : {}), ...(o.replaces ? { replaces: o.replaces } : {}), source: from, taint: run.taint });
-          return { op: o.op, ok: true, held: true, id };
+          results.push({ op: o.op, ok: true, held: true, id });
+        } else if (o.op === 'remember') results.push(await this.gated(o, { from, run, said, task, mode }));
+        else if (o.op === 'note') results.push(this.memory.note({ ...o, from }));
+        else {
+          const removed = this.memory.forget(o.id, { by: 'nova' });
+          if (removed.length) this.emit('forgot', removed);
+          results.push({ op: 'forget', ok: removed.length > 0, id: o.id, also: removed.length > 1 ? removed.length - 1 : undefined });
         }
-        if (o.op === 'remember') return this.memory.remember({ ...o, from });
-        if (o.op === 'note') return this.memory.note({ ...o, from });
-        const removed = this.memory.forget(o.id, { by: 'nova' });
-        if (removed.length) this.emit('forgot', removed);
-        return { op: 'forget', ok: removed.length > 0, id: o.id, also: removed.length > 1 ? removed.length - 1 : undefined };
       } catch (e) {
-        return { op: o.op, ok: false, error: e.message };
+        results.push({ op: o.op, ok: false, error: e.message });
       }
-    }).map(({ op, ok, id, kind, replaced, existing, day, also, held: h }) => ({ op, ok, id, kind, replaced, existing, day, also, ...(h ? { held: true } : {}) }));
-    this.record(sessionId, { type: 'memory', ...tag, ops: results });
+    }
+    const out = results.map(({ op, ok, id, kind, replaced, existing, day, also, held: h, skipped, conflict, gate }) => ({ op, ok, id, kind, replaced, existing, day, also, ...(h ? { held: true } : {}), ...(skipped ? { skipped: true } : {}), ...(conflict ? { conflict: true } : {}), ...(gate ? { gate } : {}) }));
+    this.record(sessionId, { type: 'memory', ...tag, ops: out });
     this.emit('memory');
+  }
+
+  memoryGateOn() { return !!this.config.features?.memoryGate && typeof this.memoryGate === 'function'; }
+
+  // The memory gate's consumer (docs/plans/ds2-memory-gate.md NOTES 1–3). It asks memory-gate with
+  // the person's exact words this turn, the reply as context only, the candidate, and the nearest
+  // memories Nova already has, then:
+  //   skip  → nothing is written;
+  //   merge → the existing memory stays, nothing new is written;
+  //   flag  → it waits for the person as a candidate, with the conflict as its reason;
+  //   save  → written as today: an unreviewed memory.
+  // Nova relies on an outcome only when a model that passed the template's eval answered, or Nova's
+  // own deterministic check decided (an exact duplicate, an empty candidate). No gate, no template,
+  // an untrusted answer, or no answer (a seat failed, or the ask threw): today's write, unchanged.
+  // The decision record keeps this conversation and turn; the memory keeps them as its source, as
+  // before; the session's memory event names the decision.
+  async gated(o, { from, run, said, task, mode }) {
+    const write = (gate) => ({ ...this.memory.remember({ ...o, from }), ...(gate ? { gate } : {}) });
+    if (!this.memoryGateOn()) return write(null);
+    const near = this.nearestMemories(o.text ?? '');
+    let d = null;
+    try {
+      d = await this.memoryGate({
+        person_said: run.question ?? '',
+        // Context only, so it is left out rather than cut when it is over the field's cap.
+        ...(said && said.length <= GATE_ANSWER_MAX ? { nova_answer: said } : {}),
+        candidate: o.text ?? '',
+        existing_memories: near.join('\n'),
+      }, { source: from, task_id: task ?? null, ...(mode ? { privacy_mode: mode } : {}) });
+    } catch { d = null; }
+    const relied = !!d && (d.trust !== 'none' || d.quality === 'high');
+    const gate = { decision: d?.id ?? null, outcome: d?.outcome ?? null, relied };
+    if (!relied) return write(gate);
+    if (d.outcome === 'skip') return { op: 'remember', ok: true, skipped: true, gate };
+    if (d.outcome === 'merge') return { op: 'remember', ok: true, existing: true, gate };
+    if (d.outcome === 'flag') {
+      const id = this.ingest.candidate({ op: 'remember', ...(o.kind ? { kind: o.kind } : {}), content: o.text, ...(o.replaces ? { replaces: o.replaces } : {}), source: from, taint: [], reason: conflictReason(near) });
+      return { op: 'remember', ok: true, held: true, conflict: true, id, gate };
+    }
+    return write(gate);
+  }
+
+  // The memories nearest a candidate, one line each, as many of the closest five as fit the gate's
+  // field (none is ever cut).
+  nearestMemories(text) {
+    if (!this.memory.records || !String(text).trim()) return [];
+    let found = [];
+    try { found = this.memory.store().search(text, { limit: 5 }).records; } catch { return []; }
+    const out = [];
+    let size = 0;
+    for (const r of found) {
+      const line = String(r.content).replace(/\s+/g, ' ').trim();
+      if (!line || size + line.length + 1 > GATE_EXISTING_MAX) continue;
+      out.push(line);
+      size += line.length + 1;
+    }
+    return out;
   }
 
   // ---- the ingest gate ------------------------------------------------------------------------

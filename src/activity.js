@@ -50,7 +50,7 @@ function steps(turn) {
       });
     }
     if (it.kind === 'memory') {
-      const ok = it.ops.filter((o) => o.ok && !o.existing);
+      const ok = it.ops.filter((o) => o.ok && !o.existing && !o.skipped);
       const kept = ok.filter((o) => o.op !== 'forget').length;
       const forgot = ok.filter((o) => o.op === 'forget').length;
       if (kept || forgot) out.push({ kind: 'memory', kept, forgot });
