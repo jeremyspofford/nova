@@ -145,7 +145,7 @@ function listPane(id, { list = RECEIPTS, current = '', f = ALL, localOnly = fals
   return `<div class="rc-list" data-rc-list data-rc-total="${list.length}"${localOnly ? ' data-rc-local-only' : ''}><p class="rc-intro">Where each model call went, why, and what it was told, by reference.</p>
 ${list.length ? filters(id, list, f) : ''}<p class="rc-count" data-rc-count role="status">${list.length ? shownWords(n, list.length, f) : 'None yet.'}</p>
 <p class="rc-none" data-rc-none${n || !list.length ? ' hidden' : ''}>${esc(none)}</p>${localOnly ? '<p class="rc-intro">Nova is set to Local-only. Receipts record model calls only, not everything Nova sends.</p>' : ''}${groups}
-<a class="uc-row rc-cover" href="#${id}-coverage"><span class="uc-ic" aria-hidden="true">${icon('chevron')}</span><span class="uc-label">What receipts cover</span></a></div>`;
+<div class="rc-cover"><a class="uc-row" href="#${id}-coverage"><span class="uc-ic" aria-hidden="true">${icon('chevron')}</span><span class="uc-label">What receipts cover</span></a></div></div>`;
 }
 
 // ---- one receipt ---------------------------------------------------------------------------------

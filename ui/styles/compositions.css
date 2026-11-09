@@ -403,6 +403,7 @@
 .rc-meta { color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
 .rc-meta.rc-left { color: var(--text-primary); }
 .rc-time { flex: none; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-body); font-variant-numeric: tabular-nums; }
+/* The separator sits on the wrapper: border/subtle is for separators, never a control’s outline. */
 .rc-cover { margin-top: var(--space-5); border-top: 1px solid var(--border-subtle); }
 .rc-icon { display: inline-grid; place-items: center; flex: none; }
 
