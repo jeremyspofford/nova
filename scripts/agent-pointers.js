@@ -8,7 +8,7 @@
 //   node scripts/agent-pointers.js --check   fail if either isn't what this script makes
 //
 // Deterministic: the same packet and package.json always make the same files (no clock, no git).
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const ROOT = join(import.meta.dirname, '..');
@@ -65,6 +65,34 @@ export function generate(root = ROOT) {
     ...GATES.map(([cmd, , what]) => `- \`${cmd}\`: ${what}`),
     '',
   ].join('\n');
+}
+
+// Every run of three consecutive non-empty (trimmed) lines in the packet's Markdown files.
+export function packetWindows(root = ROOT) {
+  const packet = join(root, 'docs', 'builder-packet');
+  const windows = new Set();
+  for (const name of readdirSync(packet, { recursive: true })) {
+    if (!String(name).endsWith('.md')) continue;
+    const lines = readFileSync(join(packet, String(name)), 'utf8').split('\n').map((l) => l.trim()).filter(Boolean);
+    for (let i = 0; i + 3 <= lines.length; i++) windows.add(lines.slice(i, i + 3).join('\n'));
+  }
+  return windows;
+}
+
+// Why a pointer file's text is carrying the packet's content instead of pointing at it: a line over
+// 200 chars, more than 40 lines, or three consecutive non-empty lines found verbatim in the packet
+// (windows from packetWindows()). Empty when it only points.
+export function copiedContent(text, windows) {
+  const problems = [];
+  const all = text.split('\n');
+  for (const l of all) if (l.length > 200) problems.push(`a line of ${l.length} chars: ${l.slice(0, 60)}…`);
+  if (all.length > 40) problems.push(`${all.length} lines; it should stay a short list of pointers`);
+  const lines = all.map((l) => l.trim()).filter(Boolean);
+  for (let i = 0; i + 3 <= lines.length; i++) {
+    const w = lines.slice(i, i + 3).join('\n');
+    if (windows.has(w)) problems.push(`copies three packet lines verbatim:\n${w}`);
+  }
+  return problems;
 }
 
 // The targets whose committed text isn't what generate() makes.
