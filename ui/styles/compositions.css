@@ -501,6 +501,134 @@
 .ha-mono { font-family: var(--font-mono); }
 .ha .confirm { min-height: var(--hit); margin-bottom: var(--space-3); }
 
+/* ---- Coding, infrastructure and network runs in Tasks (2026-11-09; ui/js/sg-task-runs.js) ----
+   The Automations panes (.au-*) again: Tasks' groups on hairlines, one row per run, the open run
+   beside them. Separators sit on the list items, never on a control. Colour only for state: the
+   status pill (amber needs you, red stopped), a stopped run's frame in red, the budget in the accent. */
+.tr .au-list > * { flex-shrink: 0; }
+.tr .au-detail .uc-back { margin-bottom: var(--space-2); }
+.tr .au-detail .uc-h { overflow-wrap: anywhere; }
+.tr-list, .tr-lines { margin: 0; padding: 0; list-style: none; }
+.tr-item + .tr-item, .tr-step + .tr-step, .tr-line-item + .tr-line-item { border-top: 1px solid var(--border-subtle); }
+.tr-list .au-open { align-items: flex-start; padding-block: var(--space-3); }
+.tr-pill { flex: none; }
+.tr-step { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; }
+.tr-step.is-later .au-name { color: var(--text-secondary); }
+.tr-line-item { padding: var(--space-2) 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.tr-kind { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.tr-said { font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); }
+.tr-none, .tr-cant { padding: 0 var(--space-3); }
+.tr-strong { color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.tr-stopped { border-color: var(--status-error); }
+.tr-raw { margin-top: var(--space-4); }
+.tr-pre { margin: 0; padding: var(--space-3); border-radius: var(--radius-input); background: var(--surface-card); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tr-budget { margin: 0 0 var(--space-4); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.tr-bar { display: grid; grid-template-columns: repeat(10, 1fr); gap: var(--space-1); margin: var(--space-3) 0 var(--space-2); }
+.tr-seg { height: var(--space-2); border-radius: var(--radius-input); background: var(--surface-card-hover); }
+.tr-key { display: inline-block; width: var(--space-2); height: var(--space-2); margin-right: var(--space-1); border-radius: var(--radius-input); }
+.tr-seg.is-now, .tr-key.is-now { background: var(--text-secondary); }
+.tr-seg.is-added, .tr-key.is-added { background: var(--accent-primary); }
+.tr .confirm { min-height: var(--hit); }
+/* Where it is asked: Nova's own screen confirms a tier-3 OK with the passkey; a narrow frame is drawn
+   as a paired device, which approves with the box alone (the switch is in layout.css). */
+.tr-device { display: none; }
+
+/* ---- Providers and models (2026-11-09; ui/js/sg-providers.js) ----
+   The Automations panes (.au-*) again: Settings' categories or the providers on hairlines, the open
+   one beside them. Separators sit on the list items, never on a control. Colour only for state: the
+   health dot. What Nova can't do yet is a dashed block of words, never a control. */
+.pv .au-list > * { flex-shrink: 0; }
+.pv .au-detail .uc-back { margin-bottom: var(--space-2); }
+.pv .au-detail .uc-h { overflow-wrap: anywhere; }
+.pv-list { margin: 0; padding: 0; list-style: none; }
+.pv-list > li + li { border-top: 1px solid var(--border-subtle); }
+.pv-list .au-open { align-items: flex-start; padding-block: var(--space-3); }
+.pv-list .au-open .uc-ic { margin-top: var(--space-1); }
+.pv .au-detail .pv-list:not(.pv-lines) { margin-inline: calc(-1 * var(--space-3)); }
+.pv-health { color: var(--text-primary); }
+.pv-line { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; }
+.pv-line.is-now .au-name { color: var(--accent-primary); }
+.pv-role { padding: var(--space-3); }
+.pv-role-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.pv-role-head .au-name { margin: 0; }
+.pv-role .au-meta { margin: var(--space-1) 0 0; }
+.pv-kind { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.pv-said, .pv-gap { margin: var(--space-4) 0; padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.pv-gap { border-style: dashed; background: transparent; }
+.pv-said .uc-state { margin: var(--space-2) 0 0; }
+.pv-said .au-actions { margin-top: var(--space-3); }
+.pv-quote { margin: var(--space-2) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.pv .uc-set-ctl { flex-wrap: wrap; }
+
+/* ---- Releases in Health: the supervisor's deploy and rollback (2026-11-09; ui/js/sg-supervisor.js) ----
+   Health's one column at every width, the release grown inside Keeping Nova running. A gate is its
+   shape first and its word beside it: filled passed, half running now, a square didn't pass, dashed
+   not reached. No red: a stopped deploy leaves Nova running. Amber only for a problem that needs you.
+   Separators sit on sections and list items, never on a control. */
+.sv-col { flex: 1; overflow: auto; padding: var(--space-5) var(--space-4) var(--space-7); border-top: 1px solid var(--border-subtle); }
+.sv-page { max-width: var(--layout-content-max); margin: 0 auto; }
+.sv-icon { display: inline-grid; place-items: center; flex: none; }
+.sv-lede { margin-top: 0; }
+.sv-sec { margin-top: var(--space-6); padding-top: var(--space-4); border-top: 1px solid var(--border-subtle); }
+.sv-h { margin: 0 0 var(--space-3); font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-display); color: var(--text-primary); }
+.sv-sub { margin: var(--space-4) 0 var(--space-2); padding: 0; }
+.sv-kind { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); text-transform: uppercase; }
+.sv-now { margin: 0 0 var(--space-3); font: var(--type-weight-regular) var(--type-h3)/var(--type-line-tight) var(--font-display); color: var(--text-primary); overflow-wrap: anywhere; }
+.sv-ver { font-weight: var(--type-weight-strong); }
+.sv-live, .sv-from { color: var(--text-secondary); font-weight: var(--type-weight-regular); }
+.sv-facts { margin-bottom: var(--space-2); }
+.sv-deploy { margin-top: var(--space-5); }
+.sv-gates, .sv-hist, .sv-probs { margin: var(--space-3) 0 0; padding: 0; list-style: none; }
+.sv-gate, .sv-hrow { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--border-subtle); }
+.sv-mark { flex: none; width: var(--space-4); height: var(--space-4); margin-top: var(--space-1); border: 2px solid var(--text-faint); border-radius: var(--radius-pill); }
+.sv-gate[data-g="pass"] .sv-mark { border-color: var(--status-ok); background: var(--status-ok); }
+.sv-gate[data-g="now"] .sv-mark { position: relative; overflow: hidden; border-color: var(--status-working); }
+.sv-gate[data-g="now"] .sv-mark::after { content: ""; position: absolute; inset: 0 0 0 50%; background: var(--status-working); }
+.sv-gate[data-g="fail"] .sv-mark { border-color: var(--text-primary); border-radius: var(--radius-input); }
+.sv-gate[data-g="fail"] .au-state { color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.sv-gate[data-g="none"] .sv-mark { border-style: dashed; }
+.sv-gate[data-g="none"] .au-name { color: var(--text-secondary); }
+.sv-prob { padding: var(--space-3) 0; }
+.sv-said { margin: var(--space-1) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.sv-who { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-2) 0 var(--space-3); color: var(--text-secondary); font-size: var(--type-small); }
+.sv-tag { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--status-attention); font-weight: var(--type-weight-strong); }
+.sv-tag::before { content: ""; width: var(--space-2); height: var(--space-2); border-radius: var(--radius-pill); background: var(--status-attention); }
+.sv-steps { margin: var(--space-1) 0 0; padding-left: var(--space-5); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.sv-steps > li + li { margin-top: var(--space-1); }
+.sv-raw { margin-top: var(--space-2); }
+.sv-raw > summary { display: flex; align-items: center; min-height: var(--hit); color: var(--text-secondary); font-size: var(--type-small); cursor: pointer; }
+.sv-pre { margin: 0; padding: var(--space-3); border-radius: var(--radius-input); background: var(--surface-card); color: var(--text-primary); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.sv-cmd { margin-top: var(--space-3); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.sv-hub, .sv-away { margin-top: var(--space-4); }
+.sv-rest { margin-top: var(--space-6); }
+.sv-tagin { font-family: var(--font-mono); }
+.sv .confirm { min-height: var(--hit); }
+
+/* ---- Memory: search, confirm, correct, export (2026-11-09; ui/js/sg-memory.js) ----
+   The Automations panes (.au-*) again: search and the memories by kind on hairlines, the opened one
+   beside them. Separators sit on the list items and cards, never on a control. No colour for a
+   memory's state: words say it; the warn edge is only for a refusal or a failure. */
+.mm .au-list > * { flex-shrink: 0; }
+.mm .au-list .mm-search { margin: 0 calc(-1 * var(--space-2)) var(--space-2); }
+.mm .au-detail .uc-back { margin-bottom: var(--space-2); }
+.mm-list, .mm-cards, .mm-chain { margin: 0; padding: 0; list-style: none; }
+.mm-item + .mm-item { border-top: 1px solid var(--border-subtle); }
+.mm-list .au-open { align-items: flex-start; padding-block: var(--space-3); }
+.mm-kind { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.mm .au-detail .uc-h { overflow-wrap: anywhere; }
+.mm-pad, .mm-none { padding-inline: var(--space-3); }
+.mm-acts { margin: var(--space-4) 0 0; }
+.mm-open { margin: 0 0 var(--space-4); }
+.mm-open > .btn { margin-inline: calc(-1 * var(--space-4)); }
+.mm-card { padding: var(--space-4) 0; }
+.mm-card + .mm-card, .mm-step + .mm-step { border-top: 1px solid var(--border-subtle); }
+.mm-cards { margin-bottom: var(--space-4); }
+.mm-step { padding: var(--space-3) 0; }
+.mm-step.is-old .au-block-head { color: var(--text-secondary); font-weight: var(--type-weight-regular); }
+.mm-quote { margin: var(--space-2) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.mm-file { margin: 0 0 var(--space-4); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mm .au-locked { margin-top: var(--space-4); }
+
 /* ---- The vault: names, delete, reset (2026-11-09; ui/js/sg-vault.js) ----
    The Automations panes (.au-*) again: secret names on hairlines, grouped by the part of Nova that
    uses each, the opened one beside them. Separators sit on the list items, never on a control. */
