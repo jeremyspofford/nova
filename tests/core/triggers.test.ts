@@ -414,3 +414,38 @@ test('a message held for quiet hours is withdrawn if its rule is paused, removed
     assert.deepEqual(triggers.messages({ state: 'held' }), [], `and no longer held after ${change}`);
   }
 });
+
+// Nova's own parts (Coding, Infrastructure, Network, Local models) message the person without a
+// rule. Quiet hours hold those messages; they must not be withdrawn for having no rule.
+async function heldPartMessage() {
+  const h = setup({ at: '2026-03-02T23:00:00Z' });
+  h.profile.set('user', 'timezone', 'UTC', 'settings');
+  h.profile.set('policy', 'quiet_hours', { start: '22:00', end: '07:00' }, 'settings');
+  const t = await h.triggers.fire({ class: 'proactive', source: 'coding', name: 'Coding', payload: { key: 'run-1' }, dedup_key: 'run-1', action: { kind: 'message', text: 'A coding run finished.' } });
+  assert.equal(t?.triage.decision, 'queue');
+  assert.equal(h.triggers.messages({ state: 'held' }).length, 1);
+  return h;
+}
+
+test('a message from one of Nova’s own parts, held for quiet hours, is delivered when they end', async () => {
+  const { triggers, db, at } = await heldPartMessage();
+  const delivered: string[] = [];
+  triggers.on('message', (m) => delivered.push(m.id));
+  await triggers.tick(at('2026-03-03T07:00:30Z'));
+  const [msg] = triggers.messages();
+  assert.equal(msg?.text, 'A coding run finished.', 'held, not dropped');
+  assert.equal(msg?.delivered_at, '2026-03-03T07:00:30.000Z');
+  assert.equal(msg?.hold, null);
+  assert.deepEqual(delivered, [msg!.id]);
+  assert.equal(db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM message WHERE hold = 'withdrawn'`)?.n, 0);
+});
+
+test('a held message from one of Nova’s own parts is withdrawn if that part, or its class, is turned off meanwhile', async () => {
+  for (const off of [['coding'], ['proactive']]) {
+    const { triggers, profile, at } = await heldPartMessage();
+    profile.set('policy', 'proactive_off', off, 'settings');
+    await triggers.tick(at('2026-03-03T07:00:30Z'));
+    assert.deepEqual(triggers.messages(), [], `not delivered with ${off[0]} off`);
+    assert.deepEqual(triggers.messages({ state: 'held' }), [], `and no longer held with ${off[0]} off`);
+  }
+});
