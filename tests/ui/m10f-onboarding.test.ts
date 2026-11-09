@@ -16,7 +16,7 @@ import { createServer } from 'node:net';
 import type { Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
 import { Joiner } from '../core/mesh-support.ts';
-import { fakeMdns, fakeRuntime, freePort } from '../support/fake-mdns.ts';
+import { discoveryStandIns } from '../support/fake-mdns.ts';
 import { NOTE_WORD, seedUserHome } from '../support/onboard-home.ts';
 import { blank, browser, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
 
@@ -81,11 +81,10 @@ for (const c of OS_CASES) {
 test('M10f: the whole first session on Linux by clicking, ending on the first view and the first win in Memory, timed', async (t) => {
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
-  const m = blank('nova-ui-m10f-path-');
+  const m = blank('nova-ui-m10f-path-', t);
   seedUserHome(m.env.HOME);
-  const runtime = await fakeRuntime();
-  const mdns = await fakeMdns();
-  const nova = await m.start({ NOVA_DETECT_OS: 'linux', NOVA_DISCOVERY_PORTS: `model-runtime=${runtime.port},screenpipe=${await freePort()},home-assistant=${await freePort()}`, NOVA_DISCOVERY_MDNS: `127.0.0.1:${mdns.port}` });
+  const { runtime, env: discovery } = await discoveryStandIns((close) => t.after(close));
+  const nova = await m.start({ NOVA_DETECT_OS: 'linux', ...discovery });
   const shots = shotDir();
   try {
     const { page, errors } = await device(b, { width: 390, height: 844, touch: true });
@@ -140,7 +139,7 @@ test('M10f: the whole first session on Linux by clicking, ending on the first vi
     console.log(`browser first win: ${ms} ms\n  ${path.join('\n  ')}`);
     if (shots) writeFileSync(join(shots, 'first-win-browser.txt'), `${ms} ms\n${path.join('\n')}\n`);
     assert.deepEqual(errors, []);
-  } finally { await stop(nova); await runtime.close(); await mdns.close(); }
+  } finally { await stop(nova); }
 });
 
 test('M10f: pairing with roles on the hub’s approval sheet, a candidacy confirmed on its own; roles changed in Settings › Devices at their tiers; Settings › Services', async (t) => {

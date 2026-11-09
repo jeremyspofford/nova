@@ -13,7 +13,7 @@ import {
 } from '../../src/core/index.ts';
 import { CLAIMS } from '../evals/claims.ts';
 import { TASKS } from '../evals/tasks/index.ts';
-import { HOME_ANSWERS, fakeMdns, fakeRuntime, freePort } from '../support/fake-mdns.ts';
+import { HOME_ANSWERS, discoveryStandIns } from '../support/fake-mdns.ts';
 import { NOTE_WORD, seedUserHome } from '../support/onboard-home.ts';
 import { hub } from './mesh-support.ts';
 
@@ -87,11 +87,10 @@ test('the mDNS codec: a query, an answer with compressed names, and garbage refu
   assert.throws(() => decodeMdns(Buffer.concat([head, Buffer.from([0xc0, 0xff])])));
 });
 
-test('discovery, on loopback stand-ins only: found and named, never connected; the network query bound to 127.0.0.1', async () => {
-  const runtime = await fakeRuntime();
-  const mdns = await fakeMdns();
-  try {
-    const t = loopbackTransport({ ports: { 'model-runtime': runtime.port, screenpipe: await freePort(), 'home-assistant': await freePort() }, mdns: mdns.port });
+test('discovery, on loopback stand-ins only: found and named, never connected; the network query bound to 127.0.0.1', async (ctx) => {
+  const { runtime, mdns, screenpipe, homeAssistant } = await discoveryStandIns((close) => ctx.after(close));
+  {
+    const t = loopbackTransport({ ports: { 'model-runtime': runtime.port, screenpipe: screenpipe.port, 'home-assistant': homeAssistant.port }, mdns: mdns.port });
     const here = await discover({ scope: 'device', transport: t, timeoutMs: 400 });
     assert.deepEqual(here.found.map((f) => [f.kind, f.name, f.where, f.connected]), [['model-runtime', 'Ollama 0.35.1', 'this computer', false]]);
     assert.equal(mdns.queries.length, 0, 'this computer only: no query onto the network');
@@ -108,7 +107,9 @@ test('discovery, on loopback stand-ins only: found and named, never connected; t
     // The environment's stand-ins are loopback only.
     assert.equal(transportFromEnv({ NOVA_DISCOVERY_MDNS: '192.0.2.1:5353' })?.name, 'loopback stand-ins');
     assert.equal(transportFromEnv({}), null);
-  } finally { await runtime.close(); await mdns.close(); }
+    // Both looks reached the ports held absent for Screenpipe and Home Assistant, and were refused.
+    assert.deepEqual([screenpipe.attempts, homeAssistant.attempts], [2, 2]);
+  }
 });
 
 test('import sources: listed by place without reading a file; only what is picked is read, screened, and left waiting', async () => {
@@ -144,12 +145,11 @@ test('import sources: listed by place without reading a file; only what is picke
   ]);
 });
 
-test('setup, end to end in the core: the ADR’s order, discovery and import on loopback, the populated first view with one action', async () => {
+test('setup, end to end in the core: the ADR’s order, discovery and import on loopback, the populated first view with one action', async (ctx) => {
   const userHome = mkdtempSync(join(tmpdir(), 'nova-onboard-user-'));
   seedUserHome(userHome);
-  const runtime = await fakeRuntime();
-  const mdns = await fakeMdns();
-  const transport = loopbackTransport({ ports: { 'model-runtime': runtime.port, screenpipe: await freePort(), 'home-assistant': await freePort() }, mdns: mdns.port });
+  const { runtime, mdns, screenpipe, homeAssistant } = await discoveryStandIns((close) => ctx.after(close));
+  const transport = loopbackTransport({ ports: { 'model-runtime': runtime.port, screenpipe: screenpipe.port, 'home-assistant': homeAssistant.port }, mdns: mdns.port });
   const h = await hub({ core: { onboarding: { os: 'macos', transport, userHome, platform: 'linux' } } });
   try {
     const say = async (text: string) => { const r = await h.c('POST', '/setup/messages', { text }); assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body; };
@@ -197,7 +197,7 @@ test('setup, end to end in the core: the ADR’s order, discovery and import on 
     assert.equal((await h.c('GET', `/memory/search?q=${NOTE_WORD}`)).body.records.length, 0);
     assert.equal(runtime.hits.length, 1, 'found, not connected: one GET, nothing after');
     assert.deepEqual((await h.c('GET', '/services/backend')).body.options.map((o: { id: string }) => o.id), ['supervisor']);
-  } finally { await h.stop(); await runtime.close(); await mdns.close(); }
+  } finally { await h.stop(); }
 });
 
 test('the closing rule: every first action is backed by regression tasks, and every onboarding claim is registered and backed or worded to its evidence', () => {
