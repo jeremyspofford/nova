@@ -297,6 +297,16 @@ A binding ties one ref to one target. **Matching is exact on the canonical form.
 | Lock | The person, any time. Nova may lock at tier 1, for example on a security problem |
 | Unlock | The person only, with their own factor |
 
+*Amended 2026-11-09 (owner ruling, `docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md`):* using a
+saved browser sign-in, and typing, choosing and clicking on a browser task's declared sites, is tier
+1, and a Home Assistant call the person asks for is tier 1. The owner's words: "If they have access
+to a credential, they should be able to use it freely." The `use` rows above (tier 2 without a
+standing consent, and for the sensitive class) were written before the ruling and would ask first
+for those uses. Today's code (`vault.ts`, not the broker) follows the ruling; when the broker takes
+over browser sign-ins (row 9 of §9) and Home Assistant (row 6), these rows must be brought in line
+with it, or the difference taken to the owner. Deleting a secret and starting a new vault stay tier
+3, as the `create`/`update` row already says.
+
 ## 7. Approval cards
 
 **A card shows metadata only:**
@@ -363,7 +373,7 @@ Rows match §2. "Size" is the change to existing code.
 | 3 | The outbound guard loses its list of vault values and keeps its pattern checks (key shapes, high-entropy strings). A stated limit: it can't recognise an echoed value exactly | Small |
 | 4 | `http` target bound to the provider's `base_url` origin, with scope set to the endpoints Nova calls. The broker sends the request, and a streamed response (SSE) flows back scrubbed. `NOVA_SECRET_<NAME>` is for tests only, and refused when the broker is on | Medium |
 | 5 | `use` with `sign` (the broker computes the header and sends the request), and `verify` for callbacks, which returns valid or not | Small |
-| 6 | `ctx.secrets.get` goes; connectors call `use`. Home Assistant gets an `http` target (scope: state reads at standing consent, service calls outside it, so tier 2, which matches its rule today) and a `ws` target for its event stream. The token's issuer is kept as metadata at entry, so revoking needs no value in core | Medium |
+| 6 | `ctx.secrets.get` goes; connectors call `use`. Home Assistant gets an `http` target (scope: state reads at standing consent, service calls outside it, so tier 2, which matched its rule when this was written; *amended 2026-11-09: the owner ruling `docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md` makes a call the person asks for tier 1 (`service_tier`, 1 by default), so the binding must let service calls run at the connector's tier rather than require a tier-2 approval; to settle when row 6 is built*) and a `ws` target for its event stream. The token's issuer is kept as metadata at entry, so revoking needs no value in core | Medium |
 | 7 | OAuth: the broker holds the PKCE verifier, exchanges the code and keeps the refresh and access tokens. Gmail API calls are `http` uses. IMAP becomes a `stream` target whose prelude is `LOGIN`. Era 2's files are imported by the broker's migrate step | Medium. IMAP is the larger part; until it lands, the IMAP path can't meet the rule |
 | 8 | `http` target bound to the source's origin. Capture polls often, so the cost of an IPC round trip per call is measured in the gate | Small |
 | 9 | **The browser relay.** Chromium's debugging pipe is held by the broker's launcher in relay mode, not by core: core's worker starts the launcher, and the launcher starts Chromium. The relay passes core's CDP traffic through, and on a `use` it types the value itself after the origin checks of §5. It scrubs every value it typed from every CDP message to core, for the life of the session (M10b's `Redactor`, moved). `saveLogin` takes a sealed value. M10b's other rules stay in core | Larger: it changes M10b's launch path |
