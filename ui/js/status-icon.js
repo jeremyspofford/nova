@@ -356,7 +356,9 @@ function paint(ic, now, pals) {
 }
 
 function shade(g, ctx, size, pts, cols, bright, small) {
-  if (glCanvas.width < size) glCanvas.width = glCanvas.height = size;
+  // The shared canvas starts at 300×150: grow it whenever either side is short of this draw, and never
+  // shrink it. The viewport sits at its bottom left, so the copy below reads its bottom `size` rows.
+  if (glCanvas.width < size || glCanvas.height < size) glCanvas.width = glCanvas.height = Math.max(glCanvas.width, glCanvas.height, size);
   g.viewport(0, 0, size, size);
   g.clearColor(0, 0, 0, 0);
   g.clear(g.COLOR_BUFFER_BIT);

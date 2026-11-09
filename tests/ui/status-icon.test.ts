@@ -279,6 +279,65 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
   });
 }
 
+// At 2× (#icon-clip, 2026-11-08): the shader draws on one shared canvas that starts at 300×150, and
+// only its width was ever grown, so a draw of 151 to 300 device px (the 96 px empty-chat hero, the
+// 112 px phone Home and /pair) read rows above that canvas and lost the icon's top. Each state's
+// topmost lit row, as a share of its height, must match the 48 px icon's (96 device px, never
+// clipped), and a 48 px icon drawn after the big ones must come out exactly as it did before them.
+test('Status icon chromium at 2×: 96 and 112 px keep their top; a small icon after a big one is unchanged', { timeout: 300_000 }, async () => {
+  let b: Browser | undefined;
+  try {
+    b = await webglChromium();
+    await fixture(async (base) => {
+      const d = await device(b!, { width: 1024, height: 768, scheme: 'dark', serviceWorkers: 'block', scale: 2 });
+      await d.page.goto(`${base}/styleguide?entry=status-icon`);
+      await d.page.waitForSelector('[data-si-hero] .status-icon');
+      const out = await d.page.evaluate(async (states) => {
+        const { statusIcon, setReducedMotion } = await import('/js/status-icon.js' as string);
+        setReducedMotion(true); // still frames, so two draws of one state are the same pixels
+        const row = document.createElement('div');
+        row.style.cssText = 'position:fixed;inset:0 auto auto 0;z-index:9;display:flex;flex-wrap:wrap;gap:4px';
+        document.body.append(row);
+        const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const draw = async (s: string, size: number) => { const el = statusIcon({ status: s, size }); row.append(el); await settle(); return el.querySelector('canvas') as HTMLCanvasElement; };
+        const read = (c: HTMLCanvasElement) => {
+          const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+          let top = -1;
+          for (let i = 3; i < data.length && top < 0; i += 4) if (data[i]! > 64) top = Math.floor((i - 3) / 4 / c.width);
+          return { px: c.width, renderer: (c.parentElement as HTMLElement).dataset.renderer, top: top / c.height, pixels: Array.from(data) };
+        };
+        const res: Record<string, { px: number; renderer?: string; top: number }[]> = {};
+        const again: Record<string, number> = {};
+        for (const s of states) {
+          const first = read(await draw(s, 48));
+          const big = [read(await draw(s, 96)), read(await draw(s, 112))];
+          const after = read(await draw(s, 48));
+          res[s] = [first, ...big, after].map(({ px, renderer, top }) => ({ px, renderer, top }));
+          again[s] = first.pixels.reduce((m, v, i) => Math.max(m, Math.abs(v - after.pixels[i]!)), 0);
+        }
+        row.remove();
+        return { res, again, dpr: devicePixelRatio };
+      }, ['idle', 'listening', 'needs-you', 'stopped', 'paused', 'offline']);
+      assert.equal(out.dpr, 2, 'a 2× screen');
+      for (const [s, [first, i96, i112, after]] of Object.entries(out.res)) {
+        console.log(`${s}: top ${[first, i96, i112, after].map((x) => `${x!.px}px ${(x!.top * 100).toFixed(1)}%`).join(', ')}`);
+        assert.deepEqual([first!.px, i96!.px, i112!.px, after!.px], [96, 192, 224, 96], `${s}: backing stores at 2×`);
+        for (const x of [first, i96, i112, after]) assert.equal(x!.renderer, 'webgl', `${s}: the shader draws`);
+        assert.ok(first!.top >= 0, `${s}: the 48 px icon is drawn`);
+        for (const x of [i96, i112]) {
+          // Two device px either way, at 48 px's resolution (96 px), for the larger icons' finer rows.
+          assert.ok(Math.abs(x!.top - first!.top) <= 2 / 96, `${s} at ${x!.px / 2} px: topmost lit row at ${(x!.top * 100).toFixed(1)}%, the full form's is ${(first!.top * 100).toFixed(1)}%`);
+        }
+        assert.ok(out.again[s]! <= 2, `${s}: a 48 px icon drawn after 96 and 112 px matches the one before them (max channel diff ${out.again[s]})`);
+      }
+      assert.deepEqual(d.errors, [], 'no page errors');
+      await d.ctx.close();
+    });
+  } finally {
+    await b?.close();
+  }
+});
+
 // No WebGL at all (a browser without it, or one whose context is refused): the Canvas2D fallback
 // draws every state, at every size, sized from creation and not blank; and changes still land.
 for (const [engine, launch] of [['chromium', webglChromium], ['webkit', webkitBrowser]] as const) {

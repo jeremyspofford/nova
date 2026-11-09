@@ -107,8 +107,8 @@ export function shotsDir(): string | null {
 
 // A browser context is one device: it gets its own device id, as the PWA keeps it in localStorage.
 // `touch` makes it a phone you tap (touch events, no hover); `scheme` is the system's light or dark.
-export async function device(b: Browser, { width = 1280, height = 820, id = `ui-test-${Math.random().toString(36).slice(2, 10)}`, scheme = 'light' as 'light' | 'dark', touch = false, timezone = '', serviceWorkers = 'allow' as 'allow' | 'block' } = {}): Promise<{ ctx: BrowserContext; page: Page; id: string; errors: string[] }> {
-  const ctx = await b.newContext({ viewport: { width, height }, colorScheme: scheme, serviceWorkers, ...(touch ? { hasTouch: true, isMobile: true } : {}), ...(timezone ? { timezoneId: timezone } : {}) });
+export async function device(b: Browser, { width = 1280, height = 820, id = `ui-test-${Math.random().toString(36).slice(2, 10)}`, scheme = 'light' as 'light' | 'dark', touch = false, timezone = '', serviceWorkers = 'allow' as 'allow' | 'block', scale = 1 } = {}): Promise<{ ctx: BrowserContext; page: Page; id: string; errors: string[] }> {
+  const ctx = await b.newContext({ viewport: { width, height }, colorScheme: scheme, serviceWorkers, ...(touch ? { hasTouch: true, isMobile: true } : {}), ...(timezone ? { timezoneId: timezone } : {}), ...(scale !== 1 ? { deviceScaleFactor: scale } : {}) });
   await ctx.addInitScript((d) => { try { localStorage.setItem('nova.device', d); } catch { /* a sandboxed frame */ } }, id);
   await ctx.addInitScript(authenticator, { jwk: PASSKEY.jwk, spki: PASSKEY.spki, base: PASSKEY.base });
   const page = await ctx.newPage();
