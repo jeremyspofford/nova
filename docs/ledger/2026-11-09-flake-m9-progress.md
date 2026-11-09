@@ -1,0 +1,5 @@
+**2026-11-09 · Tests · The M9 progress test holds the server even when the service worker wins the race**
+- What changed: tests/ui/m9-progress.test.ts holds Core reads with page.route, which doesn't see requests made through the service worker. On a fresh page the worker could claim the page before boot's reads, which then went straight to the server, so Tasks drew its real content and the "waiting" line never appeared (CI on #439). The test now opens its page with the service worker blocked, as about ten other UI tests already do. The worker passing API reads to the network is intended.
+- What you can now do: trust an M9 progress failure in CI.
+- Still unfinished: a second, separate cause found here. The page's 10 s no-answer deadline is real time, not the test's fake clock, and it is the same 10 s as the "after 10 s" band, so a person may never see that band's words before the page says Nova is out of reach. Being fixed on its own.
+- Checked: with /api/v1/setup held until the worker took control, the test failed 3 of 3 before ("the view says it is waiting") and passed 3 of 3 after; 6 idle runs passed; the whole file passed.
