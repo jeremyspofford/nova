@@ -122,7 +122,12 @@ export function createNova(config = loadConfig(), deps = {}) {
   // The ingest gate (Amendment 2026-10-30-C Part 3) screens what the agent reads from outside.
   // The Decision Service's ask, for the Interstitial Research hook (used only with its flag on).
   // deps.decisionAsk: tests only (a stand-in that answers with chosen probabilities).
-  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault, ingest: core.ingest, decisions: deps.decisionAsk ?? core.decisionService.ask });
+  // The memory gate (runner keep(), only with features.memoryGate on): the same service, template
+  // memory-gate, feature `private`. The service routes it: the person's own conversation goes to a
+  // cloud seat only in cloud mode, never in local-first or local-only, whatever opt-in is on; and the
+  // run's own mode, when stricter, wins (privacy_mode). deps.memoryGate: tests only.
+  const memoryGate = deps.memoryGate ?? ((fields, o) => core.decisionService.ask('memory-gate', fields, { ...o, subsystem: 'memory' }));
+  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault, ingest: core.ingest, decisions: deps.decisionAsk ?? core.decisionService.ask, memoryGate });
   // Era 2's Gmail as a connector: its secrets in the vault, Settings › Connections, mail events.
   core.connectors.register(gmailConnector(runner.gmail));
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.

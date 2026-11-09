@@ -177,6 +177,8 @@ export interface DecisionRecord extends Decided {
   at: string;
   task_id: string | null;
   subsystem: string;
+  // Where it was asked when that isn't a task: a conversation's `<session>/<turn>` (migration 0027).
+  source?: string | null;
   model_asked: string | null;
   privacy_mode: PrivacyMode;
   egress: 'none' | 'local' | 'remote:typesafe';

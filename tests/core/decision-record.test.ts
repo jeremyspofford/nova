@@ -39,7 +39,7 @@ test('local-only refuses a remote receipt unless it names the screening opt-in, 
 test('migration 0019: the decision_record table, receipt.opt_in, and the receipt carried to a standby with it', () => {
   const { db, receipts } = setup();
   const cols = db.all<{ name: string }>("SELECT name FROM pragma_table_info('decision_record')").map((c) => c.name);
-  assert.deepEqual(cols, ['id', 'at', 'task_id', 'subsystem', 'template_id', 'version', 'seat', 'model_asked', 'model', 'privacy_mode', 'egress', 'opt_in', 'state_sha256', 'state_fields', 'pieces', 'requests', 'usage', 'answers', 'bands', 'shadows', 'failures', 'outcome', 'action', 'tier', 'autonomy', 'quality', 'trust', 'verdict_ref', 'why']);
+  assert.deepEqual(cols, ['id', 'at', 'task_id', 'subsystem', 'template_id', 'version', 'seat', 'model_asked', 'model', 'privacy_mode', 'egress', 'opt_in', 'state_sha256', 'state_fields', 'pieces', 'requests', 'usage', 'answers', 'bands', 'shadows', 'failures', 'outcome', 'action', 'tier', 'autonomy', 'quality', 'trust', 'verdict_ref', 'why', 'source']);
   assert.ok(db.all<{ name: string }>("SELECT name FROM pragma_table_info('receipt')").some((c) => c.name === 'opt_in'));
   // Not replicated: no sync triggers on decision_record. Receipts are, with the new column.
   assert.equal(db.all("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'decision_record'").length, 0);

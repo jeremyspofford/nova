@@ -107,6 +107,8 @@ const DEVICE_CONFIG_KEY = /^[a-z][a-z0-9_.-]{0,63}$/;
 
 export { render as renderIdentity } from './identity.ts';
 export { permits } from './workers.ts';
+// The memory gate's template, for its consumer (runner keep()): its field caps, never a seat.
+export { MEMORY_GATE_V1 } from './decision-service/index.ts';
 export { ENVELOPE_VERSION, reportOf } from './envelope.ts';
 export { sha256, writeAtomic, writeJson } from './workspace.ts';
 export { SKILL_DATA } from './backups.ts';
