@@ -38,10 +38,14 @@ for (const step of s.steps) {
   out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: String(done.output).slice(0, 2000), ...(done.error ? { is_error: true } : {}) }] }, parent_tool_use_id: null, session_id: session });
 }
 await sleep(s.delay_ms);
+// The exit code is set, not forced: stdout into a pipe is written asynchronously, and process.exit()
+// would drop whatever the reader hasn't taken yet (a long script's last lines, the result among
+// them). Ending on its own, the process first writes out everything it said.
 if (s.error) {
   out({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, num_turns: turns, result: s.error, session_id: session, total_cost_usd: 0.001, usage });
-  process.exit(s.exit || 1);
+  process.exitCode = s.exit || 1;
+} else {
+  out(message([{ type: 'text', text: s.result }]));
+  out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, duration_api_ms: 8, num_turns: turns, result: s.result, session_id: session, total_cost_usd: 0.0042, usage });
+  process.exitCode = s.exit;
 }
-out(message([{ type: 'text', text: s.result }]));
-out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, duration_api_ms: 8, num_turns: turns, result: s.result, session_id: session, total_cost_usd: 0.0042, usage });
-process.exit(s.exit);
