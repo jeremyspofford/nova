@@ -24,6 +24,7 @@ import { bindInbox, ibEntry, ibFrame, isIbFrame } from './sg-inbox.js';
 import { bindComputer, isNcFrame, ncEntry, ncFrame } from './sg-computer.js';
 import { bindInfraForms, ifEntry, ifFrame, isIfFrame } from './sg-infra-forms.js';
 import { bindSupervisor, isSvFrame, svEntry, svFrame } from './sg-supervisor.js';
+import { bindVault, isVtFrame, vtEntry, vtFrame } from './sg-vault.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -44,6 +45,8 @@ const computerFrame = only === 'computer-door' && isNcFrame(params.get('frame'))
 const infraFrame = only === 'infra-forms' && isIfFrame(params.get('frame')) ? params.get('frame') : null;
 // And for releases in Health, the supervisor's deploy and rollback (?entry=supervisor&frame=<state>).
 const supervisorFrame = only === 'supervisor' && isSvFrame(params.get('frame')) ? params.get('frame') : null;
+// And for the vault: names, delete and reset (?entry=vault&frame=<state>).
+const vaultFrame = only === 'vault' && isVtFrame(params.get('frame')) ? params.get('frame') : null;
 
 // ---- sample content: what Nova really shows, with neutral names ------------------------------
 
@@ -805,6 +808,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['computer-door', 'Nova’s computer: the door (for the owner’s reaction)', 'Design first, nothing wired: where you meet Nova’s computer and what is inside. Proposed as a category in Settings › What Nova works with, not a new place in the rail (a question for the owner). Drawn from the real model (src/core/computer/, GET /api/v1/computer): Docker on this machine, a workspace per project with one folder, no network unless declared, each command a task with a checkpoint before any change. There is no terminal, screen or file browser, and no on or off: Nova checks Docker and its image, and a workspace is ready, broken or being made. Chat can’t use it yet. Failures are the backend’s own words.', () => ncEntry((l, h) => state(l, h))],
       ['infra-forms', 'Infrastructure projects and network targets (for the owner’s reaction)', 'Design first, nothing wired, every project, target and host made up, no secret value drawn: both lists and their empty state, adding a project and a target with in-place validation in the core’s words, the credential step (the value goes into Nova’s vault and isn’t shown again), a failed first use, and editing. Drawn from the real model (src/core/infra, src/core/network; /api/v1/infra and /network): a project changes only its budget and price sheet, a target only its token. The backend has no remove, rename or readdress route and no connection test on save (the first plan, or a change’s snapshot, is the first use); adding, editing and saving a secret need no passkey; only applies are tier 3, confirmed in Tasks. Those gaps are flagged, not drawn as working.', () => ifEntry((l, h) => state(l, h))],
       ['supervisor', 'Releases in Health: deploy and go back (for the owner’s reaction)', 'Design first, nothing wired, every version and time made up: the release grown inside Health’s Keeping Nova running, one column at every width. Drawn from the real model (src/supervisor, GET /api/v1/resilience, /supervisor and /version): a release is a git tag; a deploy goes through fixed gates (its slot, its tests, a sandbox start on a copy of your home, five smoke probes, the switch, a canary window, promoted) and goes back by itself if the canary fails; going back by hand is to the one release kept, refused when it would lose what was written since a database upgrade. Both are tier 3 on Nova’s own screen only (a passkey); a paired device follows them read-only. No route lists the tags, nothing says beforehand whether going back would be refused, and while Nova restarts Health can only reconnect: flagged, not drawn as working.', () => svEntry((l, h) => state(l, h))],
+      ['vault', 'The vault: secret names, deleting one, starting over (for the owner’s reaction)', 'Design first, nothing wired, every secret made up and no value ever drawn: the names grouped by the part of Nova that uses each, a provider’s secret with replacing and deleting it (what stops, said first), a connection’s secret removed where it is used, one of Nova’s own keys, starting a new vault (tier 3) with a passkey, with none added, and from a paired phone, and a vault that can’t open (the backend’s words). Drawn from the real model (src/core/vault.ts; GET, PUT and DELETE /api/v1/vault/{name}, POST /vault/reset): the vault deletes only providers’ secrets; delete asks no confirm or passkey; a reset sets the old file aside and leaves its key where it was; a paired phone resets with the box alone; no route says which part of Nova uses a secret. Those gaps are flagged, not drawn as working.', () => vtEntry((l, h) => state(l, h))],
       ['jarvis', 'Jarvis rings (proposed)', 'Compositions for the owner’s reaction, not a shipped theme: a HUD instrument of concentric segmented rings, arc sweeps and fine ticks in one cyan family on near-black, for the same ten states as the status icon. Told apart by structure and motion, also in greyscale and under reduced motion. Red only for stopped, amber only for needs-you.', jarvisEntry],
     ]],
     ['Views', [
@@ -867,6 +871,12 @@ function render() {
     bindSupervisor(sg);
     return;
   }
+  if (vaultFrame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => vtFrame(vaultFrame));
+    bindVault(sg);
+    return;
+  }
   const one = ([id, name, about, body]) => `<article class="sg-entry" id="sg-${id}" aria-labelledby="sg-${id}-name"><header class="sg-entry-head"><h3 class="sg-entry-name" id="sg-${id}-name">${name}</h3><a class="sg-alone" href="?entry=${id}">Open alone</a></header><p class="sg-about">${about}</p>${draw(body)}</article>`;
   if (shown) {
     sg.innerHTML = shown.length ? `<p class="sg-back"><a class="link" href="/styleguide#sg-${only}">The whole styleguide</a></p>${shown.map(one).join('')}` : `<p class="sg-about">No entry is called “${only.replace(/[<>&"]/g, '')}”. <a class="link" href="/styleguide">The whole styleguide</a></p>`;
@@ -893,6 +903,7 @@ function render() {
   bindComputer(sg);
   bindInfraForms(sg);
   bindSupervisor(sg);
+  bindVault(sg);
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }
