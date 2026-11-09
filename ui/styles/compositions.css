@@ -379,3 +379,22 @@
 .au-preview .au-group-head { margin-top: 0; }
 .au-preview .au-sentence { margin-bottom: var(--space-2); }
 .au-form .au-actions { margin-top: 0; }
+
+/* ---- Messages and quiet hours (2026-11-09; ui/js/sg-inbox.js) ----
+   The Automations panes (.au-*) again: messages on hairlines, the opened one beside them. An unread
+   message has a dot and a strong line; the status icon is the top bar's alone, never per message. */
+.ib .au-list > * { flex-shrink: 0; }
+.ib-msgs { margin: 0; padding: 0; list-style: none; }
+.ib-msg + .ib-msg { border-top: 1px solid var(--border-subtle); }
+.ib-msgs .au-open { align-items: flex-start; padding-block: var(--space-3); }
+.ib-mark { flex: none; width: var(--space-2); height: var(--space-2); margin-top: var(--space-2); border-radius: var(--radius-pill); }
+.ib-msg.is-new .ib-mark { background: var(--accent-primary); }
+.ib-msg:not(.is-new) .ib-line { font-weight: var(--type-weight-regular); color: var(--text-secondary); }
+.ib-quiet { align-items: flex-start; padding-block: var(--space-3); }
+.ib-quiet .uc-ic { margin-top: var(--space-1); }
+.ib-from { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.ib-body { margin: var(--space-3) 0 var(--space-5); font: var(--type-weight-regular) var(--type-body)/var(--type-line-body) var(--font-body); color: var(--text-primary); overflow-wrap: anywhere; }
+.ib-link { margin-top: var(--space-4); margin-inline: calc(-1 * var(--space-3)); }
+.ib .au-detail .uc-back { margin-bottom: var(--space-2); }
+.ib .confirm { min-height: var(--hit); }
+.ib-confirm .settings-list { margin: 0; padding: 0; list-style: none; }
