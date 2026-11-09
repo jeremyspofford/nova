@@ -3,7 +3,9 @@
 // When it isn't, a GET is answered from the cache and marked x-nova-offline, and the page says
 // so: an honest offline state, never stale data presented as live. Changes (POST, PUT, DELETE)
 // and the event streams are never cached or answered offline.
-const VERSION = 'nova-shell-v70';
+// The server fills in the cache name when it serves this file: a hash of this worker and the SHELL
+// files (src/sw-version.js). Never edit it by hand; a changed shell file changes it by itself.
+const VERSION = 'nova-shell-__SHELL_HASH__';
 const SHELL = [
   '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/mark-1024.webp',
   '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css', '/styles/stage2.css', '/styles/palette.css', '/styles/status-icon.css',
@@ -37,9 +39,11 @@ self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 
-// Upgrading removes only Nova's versioned offline stores, never another cache on this origin.
+// Upgrading removes only Nova's versioned offline stores, never another cache on this origin:
+// the hash-named ones and the hand-numbered ones before them (nova-shell-v1 to v70).
+const OURS = /^nova-shell-(?:v\d+|[0-9a-f]{12})$/;
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => /^nova-shell-v\d+$/.test(k) && k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => OURS.test(k) && k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 const offline = (res) => {

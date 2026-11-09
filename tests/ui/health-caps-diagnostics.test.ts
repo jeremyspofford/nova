@@ -54,9 +54,11 @@ async function healthLandmarks(p: Page, label: string) {
 // replies and the download still come from production createNova and its private fixture stores.
 async function diagnosticsWorkerUpgrade(b: Browser, m: ReturnType<typeof blank>, nova: ReturnType<typeof createNova>) {
   const legacy = readFileSync(new URL('../support/fixtures/health-sw-v14.js.txt', import.meta.url), 'utf8');
-  const current = readFileSync(new URL('../../ui/sw.js', import.meta.url), 'utf8');
+  // The worker as the server sends it: its cache name is filled in there (src/sw-version.js).
+  const current = await (await fetch(`${m.base}/sw.js`)).text();
   const oldVersion = /const VERSION = '([^']+)'/.exec(legacy)![1]!;
   const newVersion = /const VERSION = '([^']+)'/.exec(current)![1]!;
+  assert.match(newVersion, /^nova-shell-[0-9a-f]{12}$/, 'the served worker carries its hash cache name');
   const normal = nova.server.listeners('request')[0] as RequestListener;
   let serveLegacy = true;
   const serve: RequestListener = (req, res) => {

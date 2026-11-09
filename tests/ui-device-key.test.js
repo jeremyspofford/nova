@@ -20,7 +20,8 @@ const fakeDb = {
 globalThis.indexedDB = { open() { const req = { result: fakeDb }; queueMicrotask(() => req.onsuccess?.()); return req; } };
 const local = new Map([['nova.session', '2026-10-30T10:00:00Z']]);
 globalThis.localStorage = { getItem: (k) => local.get(k) ?? null, setItem: (k, v) => local.set(k, v), removeItem: (k) => local.delete(k) };
-const cached = new Map([['nova-shell-v3', ['/api/v1/tasks', '/api/sessions', '/']]]);
+// A hand-numbered cache from before the cache name was a hash, and a hash-named one (src/sw-version.js).
+const cached = new Map([['nova-shell-v3', ['/api/v1/tasks', '/api/sessions', '/']], ['nova-shell-0123456789ab', ['/api/v1/tasks', '/']]]);
 globalThis.caches = { keys: async () => [...cached.keys()], delete: async (k) => cached.delete(k) };
 
 const key = await import('../ui/js/device-key.js');
