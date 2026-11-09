@@ -280,6 +280,13 @@ body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { displ
   .au-panes[data-au-pane="list"] .au-open.is-on { background: transparent; font-weight: var(--type-weight-regular); }
 }
 
+/* Runs in Tasks' compositions (sg-task-runs.js): a narrow frame is a paired device, so a tier-3 OK
+   is the box and its button there, not the passkey of Nova's own screen. */
+@container uc (max-width: 719px) {
+  .tr-console { display: none; }
+  .tr-device { display: block; }
+}
+
 /* The receipts viewer's compositions (sg-receipts.js): one pane at a time when narrow. */
 @container uc (max-width: 719px) {
   .rc-panes { flex-direction: column; overflow: auto; }

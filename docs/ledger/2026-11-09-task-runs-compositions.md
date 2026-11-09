@@ -1,0 +1,5 @@
+**2026-11-09 · UI rebuild · Coding, infrastructure and network runs in Tasks: compositions for the owner's reaction**
+- What changed: the design-first step of the wiring item "coding / infra / network run lists in Tasks". /styleguide?entry=task-runs, marked for the owner's reaction, has 12 frames built from the real models (src/core/coding, infra and network): one combined list in Tasks' existing groups, each kind waiting for review, running and failed, an infra plan over budget, the network dead-man's switch, a failed revert, cancelled and empty, plus phone and Duo cover layouts. Phone frames draw the real paired-device approval, a checkbox with no passkey. Nothing is wired into the app.
+- What you can now do: react to how runs appear in Tasks before they are built.
+- Still unfinished: the wiring waits for the owner. There's no single runs route, no live output while a plan or apply runs, and no run-again route.
+- Checked: tests/ui/task-runs-styleguide.test.ts 2/2 in Chromium and WebKit, styleguide-coverage, evals, ui-review and lint-scales 33/33, m9-wait 9/9, lint:tokens, typecheck. Screenshots are in docs/screenshots/task-runs-compositions-2026-11-09/.
