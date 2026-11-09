@@ -58,6 +58,9 @@ async function settled(page: Page) {
 }
 async function open(page: Page, base: string) {
   await page.goto(`${base}/styleguide?entry=jarvis`);
+  // The styleguide redraws its catalogue once the appearance arrives (styleguide.js): until then a
+  // ring found here can be replaced under the test (the detached hero, CI on 423c1522).
+  await page.waitForSelector('html[data-sg-appearance]');
   await page.waitForFunction((n) => document.querySelectorAll('[data-jv-cell] .jv-core svg').length >= n && document.querySelector('[data-jv-hero] .jv-core svg'), STATES.length * SIZES.length);
   await settled(page);
 }

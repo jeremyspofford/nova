@@ -579,8 +579,9 @@ let helperRun;
   await p.keyboard.type('Ask a helper to compare commuter e-bikes under $2,000 using my notes');
   await p.keyboard.press('Enter');
   await p.waitForSelector('.handoff.is-helper', { timeout: 20000 });
-  const afterReport = () => { const all = [...document.querySelectorAll('#thread .turn')]; return all[all.indexOf(document.querySelector('.handoff.is-helper')) + 1]; };
-  await p.waitForFunction(`(${afterReport})()?.textContent.includes('My take')`, null, { timeout: 15000 });
+  // Function predicates only: Playwright polls a string predicate by evaluating it in the page,
+  // which Nova's Content-Security-Policy refuses (no 'unsafe-eval').
+  await p.waitForFunction(() => { const all = [...document.querySelectorAll('#thread .turn')]; return all[all.indexOf(document.querySelector('.handoff.is-helper')) + 1]?.textContent.includes('My take'); }, null, { timeout: 15000 });
   await settle(p);
   await p.evaluate(() => document.querySelector('.handoff.is-helper').scrollIntoView({ block: 'start' }));
   await p.waitForTimeout(500);
@@ -588,7 +589,7 @@ let helperRun;
   const report = await p.textContent('.handoff.is-helper');
   check('a helper\'s report comes back to the conversation that asked', /Compare e-bikes · a helper/.test(report) && /Ridgeline C2/.test(report));
   check('the helper read only the notes it was handed', /9 miles with one long hill/.test(report));
-  check("then Nova says what the report means, with no message from you", await p.evaluate(`(() => { const t = (${afterReport})(); return !t.querySelector('.msg-user') && /Ridgeline C2/.test(t.textContent); })()`));
+  check("then Nova says what the report means, with no message from you", await p.evaluate(() => { const all = [...document.querySelectorAll('#thread .turn')]; const t = all[all.indexOf(document.querySelector('.handoff.is-helper')) + 1]; return !t.querySelector('.msg-user') && /Ridgeline C2/.test(t.textContent); }));
   check('the hand-off says where to follow it', /Follow it in Activity/.test(await p.textContent('#thread')));
   const chatUrl = p.url();
   const parent = chatUrl.split('/c/')[1];

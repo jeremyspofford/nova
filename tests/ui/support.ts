@@ -146,6 +146,23 @@ export async function device(b: Browser, { width = 1280, height = 820, id = `ui-
 
 export const ready = (page: Page) => page.waitForSelector('html[data-ready]');
 
+// Navigates once the page has no API read in flight. WebKit logs a read that a navigation cuts off
+// as an error ("… due to access control checks", same origin; m10i-topology.test.ts meets it too),
+// and a test that changes something on the server and then moves on can catch the page refreshing.
+// The event streams stay open for the page's life, so they don't count.
+export function quietNavigation(page: Page): (url: string) => Promise<unknown> {
+  const reads = new Set<unknown>();
+  const done = (r: unknown) => reads.delete(r);
+  page.on('request', (r) => { if (['fetch', 'xhr'].includes(r.resourceType()) && !new URL(r.url()).pathname.endsWith('/events')) reads.add(r); });
+  page.on('requestfinished', done);
+  page.on('requestfailed', done);
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) reads.clear(); });
+  return async (url) => {
+    for (let quiet = 0, i = 0; quiet < 3 && i < 200; i++) { quiet = reads.size ? 0 : quiet + 1; await page.waitForTimeout(50); }
+    return page.goto(url);
+  };
+}
+
 // Hit targets that are short of `min` px tall (44 to a pointer), by the browser's own layout
 // precision: WebKit lays boxes out in 1/64 px units (LayoutUnit), and getBoundingClientRect turns
 // a 44 px box at a fractional position into 43.99993896 (#347, offsetHeight 44), so heights are

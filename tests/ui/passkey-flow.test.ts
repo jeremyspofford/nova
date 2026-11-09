@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { stop, until } from '../acceptance/support.ts';
-import { blank, browser, device, finishSetup, ready, shoot, shotsDir, webkitBrowser } from './support.ts';
+import { blank, browser, device, finishSetup, quietNavigation, ready, shoot, shotsDir, webkitBrowser } from './support.ts';
 
 for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]] as const) test(`T2 ${engine}: tier 3 on Nova’s own screen waits for a passkey; Security adds two; the sheet’s step approves exactly its request`, { timeout: 180_000 }, async (t) => {
   const b = await launch();
@@ -22,6 +22,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     // A passkey works on a name, never an address: Nova's own screen is opened at localhost.
     const base = m.base.replace('//127.0.0.1', '//localhost');
     const { page, errors } = await device(b, { width: 1280, height: 900 });
+    const go = quietNavigation(page);
     const created = (await m.send('POST', '/api/v1/tasks', {
       title: 'Save the vault notes', owner: 'workspace', goal: 'The notes are saved.', approval_tier: 3,
       evidence_required: [{ kind: 'read_back', target: 'workspace:notes/vault.md' }], inputs: { action: 'write', path: 'notes/vault.md', content: '- one\n' },
@@ -30,7 +31,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     assert.equal(task.approval_tier, 3);
     const sheet = page.locator(`#sheet .approval-sheet[data-task="${created.id}"]`);
     const openSheet = async () => {
-      await page.goto(`${base}/tasks`);
+      await go(`${base}/tasks`);
       await ready(page);
       await page.locator(`[data-action="open-task"][data-task="${created.id}"]`).first().click();
       await sheet.waitFor();
@@ -47,7 +48,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     assert.equal((await m.get(`/api/v1/tasks/${created.id}`)).state, 'waiting', 'not approved');
 
     // Settings › Security: the first on trust, then a second; Health warns in between.
-    await page.goto(`${base}/settings#security`);
+    await go(`${base}/settings#security`);
     await ready(page);
     const setup = page.locator('#security .passkey-setup');
     await setup.waitFor();
@@ -59,10 +60,10 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     const health = (await m.get('/api/v1/health')).checks.passkeys;
     assert.equal(health.count, 1);
     assert.match(health.detail, /1 passkey, added \d{4}-\d{2}-\d{2} on trust\. Add a second/);
-    await page.goto(`${base}/health`);
+    await go(`${base}/health`);
     await ready(page);
     await page.locator('.settings-row', { hasText: 'Passkeys' }).locator('.pill.is-warn').waitFor();
-    await page.goto(`${base}/settings#security`);
+    await go(`${base}/settings#security`);
     await ready(page);
     await page.locator('#security [data-action="passkey-setup"]').click();
     await page.locator('#security .passkey-setup[data-passkey-count="2"] [data-passkey-setup-state="added"]').waitFor();
