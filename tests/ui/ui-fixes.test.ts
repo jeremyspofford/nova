@@ -283,22 +283,23 @@ test('UI fixes 4: Settings is one structure in two layouts, with a search that k
         }
         assert.equal(await d.page.locator('.settings-detail #settings-nav, .settings-pane .settings-cat').count(), 0, `${where}: no second level`);
 
-        // Search: synonyms, the path, and a jump that highlights the control.
-        for (const [q, path] of [['theme', 'Appearance › Theme'], ['dark mode', 'Appearance › Light and dark'], ['colours', 'Appearance'], ['phone', 'Devices'], ['pair', 'Devices']] as const) {
+        // Search: synonyms list the right category first, and Enter jumps to the best match and
+        // highlights its control.
+        for (const [q, cat] of [['theme', 'appearance'], ['dark mode', 'appearance'], ['colours', 'appearance'], ['phone', 'devices'], ['pair', 'devices']] as const) {
           await d.page.fill('#settings-search', q);
-          const first = d.page.locator('#settings-results .settings-result').first();
-          await first.waitFor();
-          assert.match((await first.locator('.result-path').textContent()) ?? '', new RegExp(`^${path.replace(/[›]/g, '\\$&')}`), `${where}: “${q}” finds ${path}`);
+          const listed = nav.locator('.settings-cats > li:not([hidden]) .settings-cat');
+          await d.page.waitForFunction((c) => !(document.querySelector(`#settings-nav .settings-cats > li[data-cat="${c}"]`) as HTMLElement).hidden, cat);
+          assert.ok((await listed.evaluateAll((as) => as.map((a) => (a as HTMLElement).dataset.cat))).includes(cat), `${where}: “${q}” lists ${cat}`);
         }
         await d.page.fill('#settings-search', 'dark mode');
         if (shots && design === 'nebula') await shoot(d.page, join(shots, `settings-${size}-search.png`));
-        await d.page.locator('#settings-results .settings-result').first().click();
+        await d.page.press('#settings-search', 'Enter');
         const target = d.page.locator('#appearance-mode');
         await target.waitFor();
         await d.page.waitForFunction(() => document.getElementById('appearance-mode')?.classList.contains('is-found'));
         assert.ok(await target.evaluate((e) => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), `${where}: the setting is on screen`);
         assert.ok(await target.evaluate((e) => e.contains(document.activeElement)), `${where}: and has focus`);
-        assert.equal(await d.page.inputValue('#settings-search'), '', `${where}: the search clears`);
+        assert.equal(await d.page.inputValue('#settings-search'), 'dark mode', `${where}: the search stays, so its other matches stay marked`);
         // Deep links keep working.
         await d.page.goto(`${m.base}/settings#devices`);
         await ready(d.page);

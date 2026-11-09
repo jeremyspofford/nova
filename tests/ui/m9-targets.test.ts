@@ -111,7 +111,7 @@ test('M9 gate, hit areas: every control at a phone’s width is 44×44, 48×48 t
     await page.goto(`${m.base}/settings`);
     await settled(page, 'settings');
     await page.fill('#settings-search', 'theme');
-    await page.waitForSelector('#settings-results .settings-result');
+    await page.waitForSelector('#settings-nav .cat-count:not([hidden])');
     await check('Settings search');
     await page.fill('#settings-search', '');
     const cats = await page.$$eval('#settings-view .settings-cat', (as) => as.map((a) => (a as HTMLElement).dataset.cat!));

@@ -96,3 +96,13 @@ export function searchSettings(query) {
     .sort((a, b) => b.s - a.s || a.i - b.i)
     .map(({ e }) => ({ label: e.label, path: `${categoryOf(e.cat).label} › ${e.label}`, target: e.target, cat: e.cat }));
 }
+
+// The search as Settings shows it (the composition's default, decided): the category list keeps
+// only the categories with a match, each with its count, in the list's own order; the matches
+// themselves are marked in the detail. `found` is best first; `cats` follows CATEGORIES.
+export function filterSettings(query) {
+  const found = searchSettings(query);
+  const counts = new Map();
+  for (const r of found) counts.set(r.cat, (counts.get(r.cat) ?? 0) + 1);
+  return { found, cats: CATEGORIES.filter((c) => counts.has(c.id)).map((c) => ({ id: c.id, count: counts.get(c.id) })) };
+}

@@ -55,8 +55,8 @@ async function use(page: Page, view: string, touch: boolean) {
   } else if (view === 'settings') {
     await press('#settings-search');
     await page.keyboard.type('theme', { delay: 30 });
-    await page.waitForSelector('#settings-results .settings-result');
-    await press('#settings-results .settings-result');
+    await page.waitForSelector('#settings-nav .cat-count:not([hidden])');
+    await press('#settings-nav .settings-cats > li:not([hidden]) .settings-cat');
     await nav('home');
   } else if (view === 'memory') {
     await press('#memory .memory-item .memory-text');

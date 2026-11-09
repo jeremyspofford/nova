@@ -70,7 +70,7 @@ async function drive(page: Page, base: string, size: string) {
   await page.keyboard.press('Escape');
   await nav('settings');
   await page.fill('#settings-search', 'theme');
-  await page.locator('#settings-results .settings-result').first().click();
+  await page.press('#settings-search', 'Enter');
   await page.waitForTimeout(350);
   await page.goto(`${base}${VIEWS.chat}`);
   await settled(page, 'chat');
