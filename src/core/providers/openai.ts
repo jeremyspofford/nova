@@ -157,6 +157,10 @@ export async function chatMessages(c: Config, secret: (v: unknown) => string | n
 // Roles Nova's model manager serves (models/recommend.ts ROLES, the ones that chat). A provider
 // set to one of them talks to Nova's own local models instead of an address (M6 plan §2).
 export const CHAT_ROLES = ['reasoner', 'triage-text'] as const;
+// The probe's words when the server answers but lacks the configured model: it was reached, so the
+// health words lead with this instead of "Unreachable." (the state stays unreachable: not usable).
+export const MODEL_MISSING = 'Model missing.';
+
 export const roleOf = (c: Config): string | null => (CHAT_ROLES as readonly string[]).includes(str(c.role)) ? str(c.role) : null;
 
 export const openaiCompatible: Impl = {
@@ -192,7 +196,7 @@ export const openaiCompatible: Impl = {
       if (!res.ok) return scrub(httpProblem(res.status, await res.text().catch(() => ''), r.host, !!r.key), r.key);
       const body = (await res.json().catch(() => null)) as { data?: { id?: string }[] } | null;
       const ids = Array.isArray(body?.data) ? body!.data.map((m) => m?.id).filter(Boolean) : [];
-      if (ids.length && r.model && !ids.includes(r.model)) return `${r.host} answers, but has no model called ${r.model} (it has ${ids.slice(0, 5).join(', ')}${ids.length > 5 ? ', …' : ''}).`;
+      if (ids.length && r.model && !ids.includes(r.model)) return `${MODEL_MISSING} ${r.host} answers, but has no model called ${r.model} (it has ${ids.slice(0, 5).join(', ')}${ids.length > 5 ? ', …' : ''}).`;
       return null;
     } catch (e) {
       return `Nova couldn’t reach ${r.host}: ${scrub(reachProblem(e), r.key)}.`;

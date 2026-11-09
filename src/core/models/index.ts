@@ -1434,8 +1434,8 @@ export class Models extends EventEmitter {
     const c = this.cloud();
     const perTask = [b.per_task_usd, maxCost].filter((x): x is number => typeof x === 'number' && x >= 0);
     const limited = perTask.length > 0 || typeof b.per_period_usd === 'number';
-    if (limited && o.cloud && c && !this.#priceOf(c.model)) return `Nova can’t tell what ${c.name} costs, so with a budget set it doesn’t use it. Add its price in Settings › Models.`;
-    const unpriced = (u: string[]) => `Nova can’t tell what ${u.join(' and ')} cost (it reported tokens but no price), so with a budget set the cloud waits. Nova needs a price for it (PUT /api/v1/models/prices).`;
+    if (limited && o.cloud && c && !this.#priceOf(c.model)) return `Nova can’t tell what ${c.name} costs, so with a budget set it doesn’t use it. Nova needs its price per million tokens, and no screen in Nova takes one yet: it is added through Nova’s API.`;
+    const unpriced = (u: string[]) => `Nova can’t tell what ${u.join(' and ')} cost (it reported tokens but no price), so with a budget set the cloud waits. Nova needs its price per million tokens, and no screen in Nova takes one yet: it is added through Nova’s API.`;
     if (typeof b.per_period_usd === 'number') {
       const u = this.#usage({ since: this.periodStart(b.period) });
       if (u.unpriced.length) return unpriced(u.unpriced);
