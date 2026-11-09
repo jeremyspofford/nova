@@ -1,0 +1,5 @@
+**2026-11-09 · UI rebuild · Memory: compositions for the owner's reaction**
+- What changed: the design-first step of the wiring item "core memory: search / export / confirm / correct". /styleguide?entry=memory-surface, marked for the owner's reaction, has 17 frames built from the real model (src/core/memory.ts): the list, search, one memory with its source, confirm, correct, the memory gate off and on, export, failures, and phone and Duo cover layouts. Nothing is wired into the app.
+- What you can now do: react to how memory is searched, confirmed, corrected and exported before it is built.
+- Still unfinished: the wiring waits for the owner. The Memory view's own route lacks state, search, confirm and export; its edit path can let a stale edit replace a newer correction; export has no download.
+- Checked: tests/ui/memory-styleguide.test.ts 2/2 in Chromium and WebKit, styleguide-coverage, evals, ui-review and lint-scales 33/33, lint:tokens, typecheck. Screenshots are in docs/screenshots/memory-compositions-2026-11-09/.
