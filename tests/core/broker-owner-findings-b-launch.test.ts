@@ -19,7 +19,8 @@ async function until(check: () => boolean, ms = 4000) {
 }
 function running(pid: number) {
   try { return !/^[^)]*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
-  catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e; }
+  // A process that exits while its stat is read gives ESRCH, not ENOENT: it is gone either way.
+  catch (e) { if (['ENOENT', 'ESRCH'].includes((e as NodeJS.ErrnoException).code ?? '')) return false; throw e; }
 }
 async function program(body: string, permission = false) {
   const home = tmp('nova-owned-launch-');

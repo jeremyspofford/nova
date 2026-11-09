@@ -146,7 +146,10 @@ test('supervisor restart awaits real TERM-resistant credentialed process cleanup
     assert.ok(existsSync(owned[1]));
     assert.equal((await f.sup.restart('owned cleanup test', 100)).ok, true);
     await use;
-    const alive = existsSync(`/proc/${pid}/stat`) && !/^[^)]*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    // Read once: a check-then-read races a process exiting in between (ENOENT or ESRCH means gone).
+    let alive: boolean;
+    try { alive = !/^[^)]*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
+    catch (e) { if (!['ENOENT', 'ESRCH'].includes((e as NodeJS.ErrnoException).code ?? '')) throw e; alive = false; }
     assert.equal(alive, false);
     assert.equal(existsSync(owned[1]), false);
   } finally {
