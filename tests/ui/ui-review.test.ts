@@ -139,7 +139,7 @@ test('review: Undo after Save puts back exactly what Save changed; focus and liv
 
 // ---- Settings -------------------------------------------------------------------------------------------
 
-test('review: Settings — the sidebar from 840px, links open at the top, search is a listbox that focuses what it finds, late data doesn’t jump', async (t) => {
+test('review: Settings — the sidebar from 840px, links open at the top, search filters the list and marks what it finds, late data doesn’t jump', async (t) => {
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
   const { m, nova } = await boot('nova-ui-review-settings-');
@@ -167,36 +167,33 @@ test('review: Settings — the sidebar from 840px, links open at the top, search
     assert.equal(await d.page.evaluate(() => document.getElementById('scroller')!.scrollTop), 0, '#models opens at the top');
     assert.equal(await d.page.locator('.is-found').count(), 0, 'and marks nothing');
 
-    // Search: a combobox and a listbox, a count that is announced, arrows and Enter.
+    // Search (the composition's default): it filters the list, a summary is announced, the arrow
+    // goes into what is listed, and Enter opens the best match with focus on it.
     const box = d.page.locator('#settings-search');
-    assert.equal(await box.getAttribute('role'), 'combobox');
-    assert.equal(await box.getAttribute('aria-expanded'), 'false');
+    assert.equal(await box.getAttribute('type'), 'search');
+    assert.equal(await box.getAttribute('aria-keyshortcuts'), '/');
     await d.page.evaluate(() => { (window as any).__count = document.getElementById('settings-count'); });
     await box.fill('dark');
-    await d.page.locator('#settings-results [role="option"]').first().waitFor();
-    assert.equal(await d.page.locator('#settings-results').getAttribute('role'), 'listbox');
-    assert.equal(await box.getAttribute('aria-expanded'), 'true');
-    assert.match((await d.page.locator('#settings-count').textContent()) ?? '', /^\d+ settings? found$/);
+    await d.page.locator('#settings-nav .cat-count:not([hidden])').first().waitFor();
+    assert.match((await d.page.locator('#settings-count').textContent()) ?? '', /^\d+ settings? match “dark”, in \d+ categor(y|ies)\./);
     assert.equal(await d.page.locator('#settings-count').getAttribute('role'), 'status');
-    assert.equal(await d.page.locator('#settings-results').getAttribute('aria-live'), null, 'the list itself isn’t read out on every keystroke');
+    assert.equal(await d.page.locator('#settings-nav').getAttribute('aria-live'), null, 'the list itself isn’t read out on every keystroke');
     await box.fill('dark mode');
     assert.ok(await d.page.evaluate(() => (window as any).__count === document.getElementById('settings-count')), 'the count is the same live region, updated in place');
     await box.press('ArrowDown');
-    const first = await d.page.locator('#settings-results [role="option"]').first().getAttribute('id');
-    assert.equal(await box.getAttribute('aria-activedescendant'), first);
-    assert.equal(await d.page.locator(`#${first}`).getAttribute('aria-selected'), 'true');
+    assert.equal(await d.page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.cat), 'appearance', 'the arrow goes to the first listed category');
+    await box.focus();
     await box.press('Enter');
     await d.page.waitForFunction(() => document.getElementById('appearance-mode')?.classList.contains('is-found'));
 
-    // Every setting search can reach: it opens, is marked, and has the focus.
-    const entries = ENTRIES.map((e: { label: string; target: string }) => ({ label: e.label, target: e.target }));
+    // Every setting search can reach: its category is listed, opens, and the setting is marked there.
+    const entries = ENTRIES.map((e: { label: string; target: string; cat: string }) => ({ label: e.label, target: e.target, cat: e.cat }));
     for (const e of entries) {
       await box.fill(e.label);
-      const option = d.page.locator(`#settings-results [role="option"][data-target="${e.target}"]`);
-      await option.waitFor({ timeout: 3000 });
-      await option.click();
-      await d.page.waitForFunction((id) => document.getElementById(id)?.classList.contains('is-found'), e.target, { timeout: 3000 });
-      assert.ok(await d.page.evaluate((id) => { const el = document.getElementById(id); return !!el && el.contains(document.activeElement); }, e.target), `${e.label}: focus is on it`);
+      const cat = d.page.locator(`#settings-nav .settings-cats > li:not([hidden]) .settings-cat[data-cat="${e.cat}"]`);
+      await cat.waitFor({ timeout: 3000 });
+      await cat.click();
+      await d.page.waitForFunction(({ id, c }) => { const el = document.getElementById(id); return !!el && el.hasAttribute('data-match') && el.closest('.settings-pane:not([hidden])')?.getAttribute('data-cat') === c; }, { id: e.target, c: e.cat }, { timeout: 3000 });
     }
     assert.deepEqual(d.errors, [], 'no errors in the page');
     await d.ctx.close();

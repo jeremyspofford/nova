@@ -1,0 +1,30 @@
+**2026-11-08 · UI rebuild · Settings rebuilt to the approved composition**
+- What changed: Settings now follows docs/plans/ui-rebuild-compositions-2026-11-06.md §2. The owner said the compositions "look pretty good"; the plan's defaults (search filters the list and marks matches; switches for on/off; radio rows for modes) are decided.
+  - Search at the head of the category column:
+    - `/` focuses it from anywhere in Settings.
+    - Down arrow moves into the list, Enter opens the best match, Esc clears.
+    - While searching, only categories with a match are listed, with a count and one status line.
+    - The searched words are marked in the detail; a setting that matched on a related word gets its name marked.
+    - The old results dropdown is gone.
+    - The pure filter is `filterSettings` in settings-ia.js.
+  - Plain category list on the rail's 44 px rows and current-row style, a hairline between the columns, and each category opening with its name and one line of what it holds.
+  - Zero decoration: the cards are gone, and groups sit under caption headings with rows on hairlines. A part heading that only repeats the category name is for screen readers only. Start over is set apart by a red hairline.
+  - Modes are radio rows, where the whole row is the 44/48 px target. Switches stay switches.
+  - On a phone, Settings is two screens: the list, then the category with a back row that returns focus to where you came from.
+  - Accessibility fixes found on the way:
+    - focus rings for the search field and the radios
+    - the count is plain text (its pill failed contrast in Orb Teal light)
+    - Settings' accent link uses the text colour, underlined (Paper's accent fell just under 4.5:1 without the card)
+    - only a name's own words are marked
+    - a square clear button, so the 44 px target survives a finger
+- What you can now do: find any setting by typing, see where it lives, and change it on one plain row, the same way on a phone, a Duo cover and a desktop.
+- Still unfinished: four owner calls.
+  - No category icons: the composition draws them, but the icon set can't give 13 categories meaningful ones.
+  - Group headings are kept, because the IA test pins "grouped by task"; the composition shows a flat list.
+  - The search stays after Enter, so other matches stay marked.
+  - On desktop, section hairlines run wider than the row hairlines and controls.
+- Checked: locally, before CI.
+  - lint:tokens, typecheck, unit tests 59/59 (including filterSettings).
+  - UI: settings-rebuild 1/1 (new), ui-fixes 4/4, ui-review 3/3, backups-settings 17/17, appearance-redraw 1/1, navigation-drawn 4/4, navigation-reachability 2/2, fold-postures 5/5 (six settings baselines redrawn, the rest kept, then confirmed), m9-targets 2/2, m9-contrast 1/1, m9-motion 1/1, m9-vitals 1/1, posture-sweep 2/2, about-changelog 1/1.
+  - The shots walkthrough passed 133/133.
+  - Screenshots are in docs/screenshots/settings-rebuild-2026-11-08/.
