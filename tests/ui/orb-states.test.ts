@@ -48,6 +48,7 @@ async function stage(page: Page, grey: boolean) {
     if (g) {
       const css = document.createElement('style');
       css.id = 'orb-grey';
+      css.nonce = (document.getElementById('ds') as HTMLStyleElement | null)?.nonce ?? ''; // the page's CSP applies only nonced <style>s
       // One grey for every state: what is left to tell them apart isn't hue.
       css.textContent = '#orb-stage .orb { --orb-c: #8a8a8a !important; --orb-g: rgba(138, 138, 138, 0.45) !important; --orb-hi: #b4b4b4 !important; }';
       document.head.append(css);

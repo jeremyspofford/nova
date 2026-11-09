@@ -124,7 +124,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               await geometry(p, `${engine}/${theme}/${size}/${s}`);
               if (theme === themes[0]) {
                 await still(p);
-                await p.addScriptTag({ content: readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8') });
+                await p.evaluate(readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8'));
                 const axe = await p.evaluate(async () => (window as any).axe.run(document.querySelector('#sg-passkey-approval')));
                 assert.deepEqual(axe.violations.map((v: { id: string }) => v.id), [], `${engine}/${size}/${s}: axe`);
               }

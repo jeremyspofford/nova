@@ -331,7 +331,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
             }
             if (size === 'phone' || size === 'desktop-1440' || size === 'fold-cover') {
               await still(p);
-              if (!await p.evaluate(() => 'axe' in window)) await p.addScriptTag({ content: readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8') });
+              if (!await p.evaluate(() => 'axe' in window)) await p.evaluate(readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8'));
               const axe = await p.evaluate(async () => (window as any).axe.run(document.querySelector('#sg-models-screen')));
               assert.deepEqual(axe.violations.map((v: { id: string; nodes: { target: string[] }[] }) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`), [], `${label}: axe`);
             }

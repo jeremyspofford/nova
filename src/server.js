@@ -23,13 +23,16 @@ import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
 import { toolTier } from '../ui/js/status.js';
-import { BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, ipcBroker, ipcLink, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
+import { BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, htmlSecurityHeaders, ipcBroker, ipcLink, nonceStyles, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
 };
+
+// The paths the app page (ui/index.html) answers, besides a conversation's /c/<id>.
+export const APP_PAGES = ['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture', '/topology', '/about', '/changelog', '/pipeline'];
 
 // The local model manager's settings from the environment (M6b): NOVA_OLLAMA_URL is where the
 // hub's Ollama answers when the profile doesn't say; NOVA_HARDWARE_FILE (JSON, tests and the gate's
@@ -306,13 +309,16 @@ export function createNova(config = loadConfig(), deps = {}) {
   // `clear`: after a factory reset, the hub's own screen is told once to forget what its browser
   // kept of the Nova that was erased (core resilience/reset.ts, clearHeaders).
   // `page`: changes an HTML page before it is sent (the app page's status bar tag).
+  // Every HTML page goes with its Content-Security-Policy (core csp.ts): the script hashes come from
+  // the page as shipped, and its own <style> elements get this response's nonce.
   function serveFile(res, file, clear = {}, page = null) {
     const type = TYPES[extname(file)] ?? 'application/octet-stream';
-    if (page || (config.dev && file.endsWith('.html'))) {
-      let html = readFileSync(file, 'utf8');
+    if (extname(file) === '.html') {
+      const shipped = readFileSync(file, 'utf8');
+      let { html, nonce } = nonceStyles(shipped);
       if (page) html = page(html);
       if (config.dev) html = html.replace('</body>', '<script type="module" src="/js/dev-reload.js"></script></body>');
-      res.writeHead(200, config.dev ? { 'content-type': type, 'cache-control': 'no-store', ...clear } : { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...clear });
+      res.writeHead(200, { 'content-type': type, 'cache-control': config.dev ? 'no-store' : 'no-cache', ...htmlSecurityHeaders(shipped, nonce), ...clear });
       return res.end(html);
     }
     res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...clear });
@@ -328,7 +334,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     // ships: iOS's own strip, readable over any design.
     const appearance = /(?:^|;\s*)nova-appearance=([A-Za-z0-9_-]{8,64})(?:;|$)/.exec(req.headers.cookie ?? '')?.[1] ?? null;
     const statusBar = (html) => { try { return html.replace(STATUS_BAR_TAG, statusBarTag(core.design.active(appearance))); } catch { return html; } };
-    if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture', '/topology', '/about', '/changelog', '/pipeline'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie), statusBar);
+    if (APP_PAGES.includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie), statusBar);
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {

@@ -174,7 +174,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
           assert.equal(await p.getByLabel('Copies to keep', { exact: true }).getAttribute('min'), '1');
           assert.equal(await p.getByLabel('Copies to keep', { exact: true }).getAttribute('max'), '365');
           // Axe checks only this component: the catalogue's inherited heading structure is outside it.
-          await p.addScriptTag({ content: readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8') });
+          await p.evaluate(readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8'));
           for (const state of ['empty', 'error', 'confirm', 'shown', 'paired-viewer']) {
             await choose(p, state);
             const axe = await p.evaluate(async () => (window as any).axe.run(document.querySelector('.backups-settings')));

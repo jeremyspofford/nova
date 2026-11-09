@@ -50,7 +50,10 @@ test('fold error collector still detects genuine CORS and refused mutations', { 
     await withMesh(d.ctx);
     await openFoldView(d.page, `${m.base}/chat`);
     assert.equal(d.errors.length, 0);
-    const corsError = new Promise<void>((resolve) => d.page.on('console', (msg) => { if (msg.type() === 'error' && /access.control|Access-Control|Origin/.test(msg.text())) resolve(); }));
+    // Nova's Content-Security-Policy (connect-src 'self') refuses the cross-origin request before
+    // CORS is ever asked, so the genuine error is that refusal.
+    const crossOrigin = /access.control|Access-Control|Origin|connect-src/;
+    const corsError = new Promise<void>((resolve) => d.page.on('console', (msg) => { if (msg.type() === 'error' && crossOrigin.test(msg.text())) resolve(); }));
     assert.equal(await d.page.evaluate(async (url) => {
       try { await fetch(url); return false; } catch { return true; }
     }, `${m.base.replace('127.0.0.1', 'localhost')}/api/v1/problems`), true);
@@ -58,7 +61,7 @@ test('fold error collector still detects genuine CORS and refused mutations', { 
     const forbiddenError = d.page.waitForEvent('console', (msg) => msg.type() === 'error' && msg.text().includes('403'));
     assert.equal(await d.page.evaluate(async () => (await fetch('/api/v1/problems/1/resolve', { method: 'POST' })).status), 403);
     await forbiddenError;
-    assert.ok(d.errors.some((e) => /access.control|Access-Control|Origin/.test(e)), 'genuine CORS errors are collected');
+    assert.ok(d.errors.some((e) => crossOrigin.test(e)), 'genuine CORS errors are collected');
     assert.ok(d.errors.some((e) => e.includes('403')), 'genuine refused mutation errors are collected');
     await d.ctx.close();
   } finally { await b.close(); await stop(nova); }

@@ -5,7 +5,7 @@
 // approved alone. The schema and the designed scales come from the core (src/core/design.ts).
 const schema = await fetch('/api/v1/design-systems/schema').then((r) => r.json());
 const tokensOf = (test) => schema.tokens.filter(test).map((t) => t.css);
-import { MODES, apply, current, previewCss } from './theme.js';
+import { MODES, apply, current, installCss, previewCss } from './theme.js';
 import { icons, memoryIndex, renderActivity, renderBackupsSettings, renderEmpty, renderGmail, renderHandoff, renderMemory, renderPermissions, renderSchedules, renderSkills, renderToc, renderToday, renderTurn, renderWorkNote } from './view.js';
 import { ICONS, ORB_SIZES, addDeviceSheet, allowApproveSheet, approvalSheet, briefCard, chatBubble, codingSheet, coldPromotionSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, infraSheet, joinRequestSheet, lookingIntoItCard, memoryHighlightCard, networkSheet, orb, proactiveBanner, promoteSheet, promotionActionSheet, promotionSheet, revokeSheet, rolesReviewSheet, rolesSheet, settingsRow, status, takeoverPanel, taskRow, triggerRow, verifiedResultCard, voiceState } from './components.js';
 import { waitingLine } from './wait.js';
@@ -748,9 +748,9 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['chat-bubbles', 'ChatBubble set', 'Your words in a tinted bubble with no tail; Nova’s on the page, full width, with no avatar.',
         () => `<div class="sg-bubbles">${chatBubble({ from: 'person', text: 'What’s on today?' })}${chatBubble({ from: 'nova', text: 'Two small things: the contract is due Thursday, and the car service is booked for Friday at 9.' })}${chatBubble({ from: 'person', text: 'Move the car service to the afternoon if they can.\nAnd remind me about the contract tomorrow morning.' })}</div>`],
       ['composer', 'Composer', 'A control, so it keeps the control radius at every height (UX review F0). Two rows: the field, then a bar with the privacy chip, the microphone and Send or Stop. It grows to about a quarter of the screen, then scrolls inside.',
-        () => `${state('Empty, voice off in local-only', `<div class="dock"><form class="composer composer-rows" onsubmit="return false"><textarea rows="1" placeholder="Ask Nova anything…" aria-label="Sample composer"></textarea><div class="composer-bar"><a class="privacy-chip" href="/settings#privacy" aria-label="Privacy: Local only. Change in Settings">Local only</a><button type="button" class="mic" aria-label="Talk to Nova" disabled>${ICONS.mic}</button><button class="send" aria-label="Send">${icons.send}</button></div></form><p class="voice-note">${voiceState({ privacy: 'local-only' }).reason}</p></div>`)}
-${state('Grown: a long message', `<div class="dock"><form class="composer composer-rows is-grown" onsubmit="return false"><textarea rows="5" aria-label="Sample long message">Draft a reply to the landlord:\n- the boiler service is booked for the 14th\n- I'll be home from 9 to 12\n- the hallway light still flickers\nKeep it short and friendly.</textarea><div class="composer-bar"><a class="privacy-chip" href="/settings#privacy" aria-label="Privacy: Local only. Change in Settings">Local only</a><button type="button" class="mic" aria-label="Talk to Nova" disabled>${ICONS.mic}</button><button class="send" aria-label="Send">${icons.send}</button></div></form></div>`)}
-${state('While Nova replies: Stop', `<div class="dock"><form class="composer composer-rows" onsubmit="return false"><textarea rows="1" placeholder="Ask Nova anything…" aria-label="Sample composer while replying"></textarea><div class="composer-bar"><a class="privacy-chip" href="/settings#privacy" aria-label="Privacy: Local only. Change in Settings">Local only</a><button type="button" class="mic" aria-label="Talk to Nova" disabled>${ICONS.mic}</button><button class="send is-stop" aria-label="Stop">${icons.stop}</button></div></form></div>`)}`],
+        () => `${state('Empty, voice off in local-only', `<div class="dock"><form class="composer composer-rows" data-sg-inert><textarea rows="1" placeholder="Ask Nova anything…" aria-label="Sample composer"></textarea><div class="composer-bar"><a class="privacy-chip" href="/settings#privacy" aria-label="Privacy: Local only. Change in Settings">Local only</a><button type="button" class="mic" aria-label="Talk to Nova" disabled>${ICONS.mic}</button><button class="send" aria-label="Send">${icons.send}</button></div></form><p class="voice-note">${voiceState({ privacy: 'local-only' }).reason}</p></div>`)}
+${state('Grown: a long message', `<div class="dock"><form class="composer composer-rows is-grown" data-sg-inert><textarea rows="5" aria-label="Sample long message">Draft a reply to the landlord:\n- the boiler service is booked for the 14th\n- I'll be home from 9 to 12\n- the hallway light still flickers\nKeep it short and friendly.</textarea><div class="composer-bar"><a class="privacy-chip" href="/settings#privacy" aria-label="Privacy: Local only. Change in Settings">Local only</a><button type="button" class="mic" aria-label="Talk to Nova" disabled>${ICONS.mic}</button><button class="send" aria-label="Send">${icons.send}</button></div></form></div>`)}
+${state('While Nova replies: Stop', `<div class="dock"><form class="composer composer-rows" data-sg-inert><textarea rows="1" placeholder="Ask Nova anything…" aria-label="Sample composer while replying"></textarea><div class="composer-bar"><a class="privacy-chip" href="/settings#privacy" aria-label="Privacy: Local only. Change in Settings">Local only</a><button type="button" class="mic" aria-label="Talk to Nova" disabled>${ICONS.mic}</button><button class="send is-stop" aria-label="Stop">${icons.stop}</button></div></form></div>`)}`],
       ['notices', 'Toast, ProactiveBanner and banner', 'A toast says what just happened, with Undo where it can; a proactive message is one line and one action; the banner says what holds for the whole app.',
         () => `${state('Toasts', '<div class="sg-frame sg-toasts"><div class="toast">Forgotten.<button type="button" class="toast-btn">Undo</button></div><div class="toast" data-tone="alert">The heartbeat couldn’t check the schedules.<button type="button" class="toast-btn">See Health</button></div><div class="toast" data-tone="attention">Saved on this device. Syncing when the hub is back.</div></div>')}${state('Proactive messages', `${proactiveBanner({ id: 'm1', text: 'The weekly review is ready when you are.' })}${proactiveBanner({ id: 'm2', text: 'I held this one because I wasn’t sure it should go out now.', hold: 'needs_ok' })}`)}${state('Banner', '<div class="banner">You’re offline. What you see was saved earlier; nothing new can arrive or be sent until you’re back.</div>')}`],
       ['backups-settings', 'Backups settings', 'Folder settings, retention and the encrypted-copy recovery key, including first setup and console-only repeated reveal.',
@@ -846,8 +846,7 @@ let shownMode = MODES.includes(params.get('mode')) ? params.get('mode') : 'auto'
 async function preview() {
   const res = await fetch(previewCss(shown, shownMode), { cache: 'no-store' });
   if (!res.ok) return;
-  document.getElementById('ds').textContent = await res.text();
-  document.getElementById('ds-boot')?.remove();
+  installCss(await res.text());
   document.documentElement.dataset.sgPreview = `${shown}-${shownMode}`;
   requestAnimationFrame(render);
 }
@@ -863,6 +862,9 @@ window.addEventListener('nova:appearance', () => {
   renderSwitch();
   requestAnimationFrame(render);
 });
+
+// Specimen forms send nothing (the page's Content-Security-Policy allows no inline onsubmit).
+document.addEventListener('submit', (e) => { if (e.target.closest?.('[data-sg-inert]')) e.preventDefault(); });
 
 apply();
 render();

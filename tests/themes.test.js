@@ -22,7 +22,8 @@ test('Nebula is the default, and pages load the applied design system, swappable
   }
   const theme = readFileSync('ui/js/theme.js', 'utf8');
   assert.match(theme, /addEventListener\('design-system'/);
-  assert.match(theme, /getElementById\('ds'\)\.textContent/);
+  // In place: a new <style id="ds"> with the page's nonce takes the old one's place (the CSP, core csp.ts).
+  assert.match(theme, /const old = document\.getElementById\('ds'\);[\s\S]*style\.nonce = old\.nonce;[\s\S]*style\.textContent = text;[\s\S]*old\.replaceWith\(style\)/);
 });
 
 for (const f of packages) {
