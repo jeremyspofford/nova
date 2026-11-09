@@ -6,7 +6,8 @@
 // in its heartbeat, so it imports Node's built-ins only. A tool that isn't there is skipped, not an
 // error: a machine without a GPU tool simply reports no GPU, and says how it looked.
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, statfsSync } from 'node:fs';
+import { readFileSync, statfsSync } from 'node:fs';
+import { access } from 'node:fs/promises';
 import { arch, cpus, freemem, hostname, networkInterfaces, platform, totalmem } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -54,10 +55,12 @@ export const runTool: Run = (program, args) => new Promise((resolve) => {
 const MIB = 1024 * 1024;
 const WHISPER = ['whisper-cli', 'whisper-cpp', 'whisper-server', 'whisper', 'faster-whisper'];
 
-function onPath(names: string[]): string | null {
+// Without holding the event loop: five names across every PATH folder is a stat each, and on a long
+// WSL PATH (/mnt/c folders) that blocked Nova for over a second just after it started.
+async function onPath(names: string[]): Promise<string | null> {
   const dirs = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
   const exts = process.platform === 'win32' ? ['.exe', '.cmd', ''] : [''];
-  for (const n of names) for (const d of dirs) for (const e of exts) if (existsSync(join(d, n + e))) return join(d, n + e);
+  for (const n of names) for (const d of dirs) for (const e of exts) if (await access(join(d, n + e)).then(() => true, () => false)) return join(d, n + e);
   return null;
 }
 
@@ -225,7 +228,7 @@ export async function detectHardware(o: { run?: Run; exec?: ExecFileLike; diskPa
   return {
     at: (o.now ?? (() => new Date()))().toISOString(), platform: os, arch: arch(), hostname: hostname(),
     cpu: { model: (c[0]?.model ?? 'unknown').replace(/\s+/g, ' ').trim(), threads: c.length },
-    ram_bytes: ram, ram_free_bytes: free.bytes, gpus, disk, network: await withWol(nics(), os, run), whisper: onPath(WHISPER), gpu_wired_limit_bytes: wired, sources,
+    ram_bytes: ram, ram_free_bytes: free.bytes, gpus, disk, network: await withWol(nics(), os, run), whisper: await onPath(WHISPER), gpu_wired_limit_bytes: wired, sources,
   };
 }
 

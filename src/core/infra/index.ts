@@ -91,6 +91,8 @@ export class Infra {
     this.#now = o.now ?? (() => new Date());
     this.dir = join(o.home, 'workers', 'infra');
     this.tool = openTofu({ path: () => this.#path() });
+    // The first lookup starts now, so the first health check usually has its answer.
+    this.tool.installed();
     const self = this;
     this.worker = {
       id: INFRA_WORKER,
@@ -110,7 +112,11 @@ export class Infra {
       effects: (brief: Brief) => (brief.inputs?.step === 'apply' ? 'external' : 'none'),
       commits: (brief: Brief) => brief.inputs?.step === 'apply',
       internal: { key: this.#key, why: 'Only Nova’s infrastructure runs make their own tasks. Ask for a plan in chat, or start one with POST /infra/runs.' },
-      health: () => (self.tool.where() ? { ok: true, detail: `${self.tool.name} is on this computer.` } : { ok: true, detail: `${self.tool.name} isn’t on this computer; infrastructure runs can’t plan until it is.` }),
+      // Never a PATH lookup on the health check itself (tool.ts says why).
+      health: () => {
+        const installed = self.tool.installed();
+        return { ok: true, detail: installed === null ? `Nova is checking whether ${self.tool.name} is on this computer.` : installed ? `${self.tool.name} is on this computer.` : `${self.tool.name} isn’t on this computer; infrastructure runs can’t plan until it is.` };
+      },
       run: (brief: Brief, signal: AbortSignal) => self.#run(brief, signal),
     };
     o.verifier.registerConfirmation(CONFIRMATION_SYSTEM, (e, brief) => this.#confirm(e, brief));
