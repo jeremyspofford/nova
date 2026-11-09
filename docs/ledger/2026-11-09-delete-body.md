@@ -1,0 +1,5 @@
+**2026-11-09 · Core API · DELETE requests carry their body again: deleting a sign-in and removing a passkey work**
+- What changed: the core API threw away the body of every DELETE, so the two DELETE routes that need one could never succeed. Deleting a saved browser sign-in was always refused for a missing {confirm: true}, and a passkey could never be removed because its {approval} never arrived. The API now reads a DELETE's body; a DELETE without one reads as {} as before. The approval rules now apply to a DELETE body like any other: on Nova's own screen, {confirm: true} needs a passkey.
+- What you can now do: remove a lost or old passkey, and delete one site's saved sign-in without forgetting the whole site.
+- Still unfinished: nothing in the UI calls either route yet.
+- Checked: tests/core/api-delete-body.test.ts 3/3 through real HTTP (both failures reproduced before the fix, a body-less DELETE unchanged), 33 core, ingest and chaos files touching these routes 237/237, the acceptance files 9/9, evals 12/12, typecheck. The UI files that touch these routes run in CI.

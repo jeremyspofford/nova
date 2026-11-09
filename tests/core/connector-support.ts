@@ -39,5 +39,5 @@ export async function bootCore(over: Partial<CoreOptions> = {}) {
   };
   const get = async (path: string) => (await call('GET', path)).body;
   const stop = async () => { server.closeAllConnections(); server.close(); await core.close(); };
-  return { core, home, call, get, stop };
+  return { core, home, call, get, stop, origin: base.slice(0, -'/api/v1'.length) };
 }

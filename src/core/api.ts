@@ -167,7 +167,9 @@ export function createApi(o: {
       if (!route) { res.writeHead(405, { allow: matches.map((r) => r.method).join(', ') }); res.end(); return true; }
       const decode = (v: string) => { try { return decodeURIComponent(v); } catch { throw new CoreError('validation', 'The address has a malformed escape.'); } };
       const params = Object.fromEntries(Object.entries(route.re.exec(path)!.groups ?? {}).map(([k, v]) => [k, decode(v)]));
-      const body = route.method === 'GET' || route.method === 'DELETE' ? {} : await readBody(req);
+      // A DELETE may carry a body too: tier 3's {confirm: true} and a passkey's {approval} (no body
+      // reads as {}, as before).
+      const body = route.method === 'GET' ? {} : await readBody(req);
       const passkey = o.approval?.(route.method, path, body, who) ?? false;
       const out = await route.handle({ params, query: url.searchParams, body, headers: req.headers, who, passkey });
       if (out instanceof Sse) {
