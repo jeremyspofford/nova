@@ -3,7 +3,7 @@
 // thread.started, turn.started, item.started / item.updated / item.completed (agent_message,
 // reasoning, command_execution, file_change, mcp_tool_call, web_search, todo_list),
 // turn.completed (with usage), turn.failed and error.
-import { childEnv, runLines, tail, which, words } from './cli.ts';
+import { childEnv, runLines, tail, whichKnown, words } from './cli.ts';
 import { summarize } from './prompt.ts';
 import { num, str, type Config, type Impl, type WorkInput, type WorkOutcome } from './types.ts';
 
@@ -21,7 +21,8 @@ export const codex: Impl = {
   unconfigured: (c) => (str(c.command) ? null : 'It needs the codex program’s name or path.'),
   uninstalled(c) {
     const program = words(str(c.command))[0] ?? '';
-    return which(program) ? null : `Nova can’t find \`${program || 'codex'}\` on this computer.`;
+    const at = whichKnown(program);
+    return at === undefined ? undefined : at ? null : `Nova can’t find \`${program || 'codex'}\` on this computer.`;
   },
   model: (c) => str(c.model) || 'codex',
   async work(i: WorkInput): Promise<WorkOutcome> {

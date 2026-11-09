@@ -222,7 +222,7 @@ export async function buildDiagnostics(core: Core, o: DiagnosticsOptions) {
     // Targets and projects by name and state; a change's or run's title comes from the person's
     // words, so changes and runs are counted by state, never listed.
     network: safe(() => { const n = core.network.list(); return { window_s: n.window_s, devices_counted: n.devices.length, targets: n.targets, changes: byState(n.changes) }; }, unread),
-    infra: safe(() => { const i = core.infra.list(); return { tool: i.tool, projects: i.projects.map((p) => ({ id: p.id, name: p.name, folder: p.folder, egress: p.egress, budget_usd_month: p.budget_usd_month, secrets: p.secrets })), runs: byState(i.runs) }; }, unread),
+    infra: await core.infra.list().then((i) => ({ tool: i.tool, projects: i.projects.map((p) => ({ id: p.id, name: p.name, folder: p.folder, egress: p.egress, budget_usd_month: p.budget_usd_month, secrets: p.secrets })), runs: byState(i.runs) }), unread),
     work: {
       ledger: safe(() => core.ledger.counts(), unread),
       by_worker: safe(() => { const out: Record<string, number> = {}; for (const t of core.ledger.list({ limit: 500 })) out[t.owner] = (out[t.owner] ?? 0) + 1; return out; }, unread),

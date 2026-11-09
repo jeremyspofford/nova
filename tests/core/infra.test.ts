@@ -50,7 +50,7 @@ function project(core: Core, o: { budget?: number; conf?: string; prices?: unkno
 
 // Starts a run and takes it to where it stands after the plan.
 async function planned(core: Core, projectId: string, more: Record<string, unknown> = {}) {
-  const { run: { id: run }, task } = core.infra.start({ project: projectId, ...more });
+  const { run: { id: run }, task } = await core.infra.start({ project: projectId, ...more });
   const plan = await settle(core, task.id);
   return { run, plan };
 }
@@ -116,7 +116,7 @@ test('M10d gate: a plan is shown in full before apply, and apply asks at tier 3;
     const again = await planned(core, p.id);
     assert.equal(core.infra.view(again.run).state, 'nothing');
     // The leaky provider printed its token on every plan and apply: it is nowhere Nova keeps things.
-    const kept = JSON.stringify([core.infra.view(run), core.infra.list(), core.ledger.get(plan.id), done, core.ledger.events(apply.id), core.ledger.events(plan.id), core.log.problems()]);
+    const kept = JSON.stringify([core.infra.view(run), await core.infra.list(), core.ledger.get(plan.id), done, core.ledger.events(apply.id), core.ledger.events(plan.id), core.log.problems()]);
     assert.ok(!kept.includes(token), 'not in the run, the tasks, their reports or events');
     assert.match(String(core.infra.view(run).apply_out), /authenticated with token \[redacted\]/, 'the tool said it; Nova redacted it');
     assert.deepEqual(filesHolding(home, [token]), [], 'no file in Nova’s home holds it (the vault keeps it encrypted)');

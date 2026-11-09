@@ -94,8 +94,10 @@ export interface Impl {
   check(c: Config): string[];
   // Why it can't run yet with this configuration, or null.
   unconfigured(c: Config, secret: (v: unknown) => string | null): string | null;
-  // For a command-line provider: why it isn't installed, or null. Never runs the command.
-  uninstalled?(c: Config): string | null;
+  // For a command-line provider: why it isn't installed, or null; undefined while Nova is still
+  // looking for it (cli.ts whichKnown). Never runs the command, and never holds the event loop for a
+  // PATH lookup: the health check asks every enabled provider.
+  uninstalled?(c: Config): string | null | undefined;
   // For an HTTP provider: whether its address answers. Resolves to a reason, or null.
   probe?(c: Config, secret: (v: unknown) => string | null, signal: AbortSignal): Promise<string | null>;
   // The address an HTTP provider talks to, for working out its egress.

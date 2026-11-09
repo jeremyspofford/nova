@@ -55,6 +55,27 @@ export async function whichAsync(program: string, path = process.env.PATH ?? '')
   return null;
 }
 
+// The same, for a check made while Nova serves requests that can't wait for a lookup (a provider's
+// health, which the health check asks every enabled provider for): the last answer for this program
+// and PATH, undefined before the first, looked up again with whichAsync when it is a minute old. A
+// path is one stat and is answered now; an empty name is on no PATH.
+const known = new Map<string, { found: string | null; at: number }>();
+const looking = new Set<string>();
+export function whichKnown(program: string, path = process.env.PATH ?? ''): string | null | undefined {
+  if (!program) return null;
+  if (program.includes('/')) return which(program, path);
+  const key = `${program}\u0000${path}`;
+  const last = known.get(key);
+  if (!looking.has(key) && (!last || Date.now() - last.at > 60_000)) {
+    looking.add(key);
+    void whichAsync(program, path).then((found) => {
+      if (known.size >= 200) known.clear();
+      known.set(key, { found, at: Date.now() });
+    }, () => {}).finally(() => { looking.delete(key); });
+  }
+  return last ? last.found : undefined;
+}
+
 // Inheritance is finite and shared with Era 2. Explicit extras are a trusted caller contract,
 // not another source of ambient parent data; no provider adapter currently supplies extras.
 export function childEnv(extra: Record<string, string> = {}, env: NodeJS.ProcessEnv = process.env): Record<string, string> {

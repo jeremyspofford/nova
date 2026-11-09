@@ -290,6 +290,7 @@ export class Providers extends EventEmitter {
     const c = this.config(id);
     const missing = impl.uninstalled?.(c);
     if (missing) return { state: 'not_installed', words: `Not installed. ${missing}`, checked_at: null };
+    if (impl.uninstalled && missing === undefined) return { state: 'unchecked', words: 'Not checked yet: Nova is looking for its program on this computer.', checked_at: null };
     const unset = impl.unconfigured(c, this.#secret);
     if (unset) return { state: 'not_configured', words: `Not configured. ${unset}`, checked_at: null };
     if (!impl.probe && !roleOf(c)) return { state: 'ready', words: 'Installed.', checked_at: null };

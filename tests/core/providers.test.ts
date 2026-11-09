@@ -113,6 +113,10 @@ test('registry lifecycle: built-ins installed and off; configure checks settings
     assert.equal(core.providers.config('custom-cli').command, 'my-model --flag');
     assert.equal(core.providers.where('custom-cli').receipt, 'remote:my-model');
     core.providers.configure('claude-code', { command: `node ${FAKE_CLAUDE}` });
+    // A bare program name is looked up on PATH without holding the event loop, so the first answer
+    // may be "still looking". wait: on that state ending, the product's own signal; setImmediate
+    // yields to the loop, no clock.
+    for (let i = 0; i < 1_000_000 && /looking for its program/.test(core.providers.health('claude-code').words); i++) await new Promise((r) => setImmediate(r));
     assert.equal(core.providers.health('claude-code').state, 'ready');
     assert.throws(() => core.providers.enable('claude-code'), /needs your OK on its permissions/);
     core.providers.enable('claude-code', { approved: true });

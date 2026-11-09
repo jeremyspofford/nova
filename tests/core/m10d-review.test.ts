@@ -58,7 +58,7 @@ function project(core: Core, folder: string, budget: number) {
   return p;
 }
 async function plan(core: Core, projectId: string) {
-  const { run: { id }, task } = core.infra.start({ project: projectId });
+  const { run: { id }, task } = await core.infra.start({ project: projectId });
   const t = await settle(core, task.id);
   const apply = core.infra.view(id).tasks.find((x) => x.step === 'apply');
   return { id, plan: t, apply: apply ? core.ledger.get(apply.id) : null };
@@ -123,7 +123,7 @@ test('review S6: sensitive attributes are masked wherever Nova stores or shows t
     core.ledger.approve(r2.apply!.id, { confirm: true });
     assert.equal((await settle(core, r2.apply!.id)).state, 'done');
     await core.ledger.idle();
-    assert.ok(!JSON.stringify([core.infra.view(r.id), core.infra.view(r2.id), core.infra.list()]).includes(secret));
+    assert.ok(!JSON.stringify([core.infra.view(r.id), core.infra.view(r2.id), await core.infra.list()]).includes(secret));
     assert.deepEqual(filesHolding(home, [secret]), [], 'no file under Nova’s home holds it: nova.db, its WAL, checkpoints, the state copy');
   } finally { await core.close(); }
 });
