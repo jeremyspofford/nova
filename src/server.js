@@ -420,7 +420,7 @@ export function createNova(config = loadConfig(), deps = {}) {
       if (!action) {
         const { text } = await readBody(req);
         let entry;
-        try { entry = memory.edit(id, text); } catch (e) { return json(res, 400, { error: e.message }); }
+        try { entry = memory.edit(id, text); } catch (e) { return json(res, e.status ?? 400, { error: e.message }); }
         if (!entry) return json(res, 404, { error: 'That memory is gone. It may have been forgotten.' });
         saved();
         return json(res, 200, { entry });

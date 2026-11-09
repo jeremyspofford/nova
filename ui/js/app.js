@@ -86,7 +86,7 @@ async function post(path, body = {}) {
     throw new Error("Nova's server didn't answer.");
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Something went wrong.');
+  if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong.'), { status: res.status });
   return data;
 }
 
@@ -1012,9 +1012,14 @@ function editMemory(item, draft = null) {
       text.textContent = next;
       text.insertAdjacentHTML('afterend', waitingLine('Saving', { key: 'memory-save' }));
       const saving = text.nextElementSibling;
-      try { await post(`/api/memory/${item.dataset.id}`, { text: next }); toast('Saved. Nova will use it from the next message.'); }
-      catch (e) {
+      try {
+        const { entry } = await post(`/api/memory/${item.dataset.id}`, { text: next });
+        if (entry?.id) item.dataset.id = entry.id; // a correction is a new record; the next edit must name it
+        toast('Saved. Nova will use it from the next message.');
+      } catch (e) {
         text.textContent = before;
+        // Changed elsewhere: show the newest wording instead of offering to resend a stale edit.
+        if (e.status === 409) { notify(`${e.message} Your change wasn’t saved.`); loadMemory(); return; }
         notify(`${e.message} Your change wasn’t saved.`, { action: { label: 'Edit again', run: () => { const now = document.getElementById(item.id) ?? item; editMemory(now, next); } } });
       } finally { saving?.remove(); over('memory-save'); }
     }
