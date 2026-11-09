@@ -42,7 +42,11 @@ test('M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real 
   if (typeof b === 'string') return t.skip(b);
   const { m, nova } = await seeded('nova-m9-progress-');
   try {
-    const d = await device(b, DESKTOP);
+    // No service worker: the hold below is a page route, and a request the worker makes for the
+    // page (ui/sw.js, network-first for the API) goes past page routes. On a first visit the worker
+    // installs and claims the page while /setup is answered; when it wins that race, boot's Core
+    // GETs went through it unheld and Tasks drew its data before the first look.
+    const d = await device(b, { ...DESKTOP, serviceWorkers: 'block' });
     await d.page.clock.install();
     // Hold current and future Core GETs, including Caps. Setup precedes boot; events is the
     // live transport. Neither is a counted data part, and both must remain live.
