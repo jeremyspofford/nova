@@ -21,6 +21,7 @@ import { bindJarvis, jarvisEntry } from './sg-jarvis.js';
 import { auEntry, auFrame, bindAutomations, isAuFrame } from './sg-automations.js';
 import { bindReceipts, isRcFrame, rcEntry, rcFrame } from './sg-receipts.js';
 import { bindInbox, ibEntry, ibFrame, isIbFrame } from './sg-inbox.js';
+import { bindInfraForms, ifEntry, ifFrame, isIfFrame } from './sg-infra-forms.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -35,6 +36,8 @@ const automationsFrame = only === 'automations-editor' && isAuFrame(params.get('
 const receiptsFrame = only === 'receipts' && isRcFrame(params.get('frame')) ? params.get('frame') : null;
 // And for messages and quiet hours (?entry=inbox&frame=<state>).
 const inboxFrame = only === 'inbox' && isIbFrame(params.get('frame')) ? params.get('frame') : null;
+// And for infrastructure projects and network targets (?entry=infra-forms&frame=<state>).
+const infraFrame = only === 'infra-forms' && isIfFrame(params.get('frame')) ? params.get('frame') : null;
 
 // ---- sample content: what Nova really shows, with neutral names ------------------------------
 
@@ -793,6 +796,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['automations-editor', 'Automations rule editor (for the owner’s reaction)', 'Design first, nothing wired: the list, create, edit and turning off, Run now and what it led to, and the webhook token shown once. Drawn from the real rule model (src/core/triggers.ts): schedules, webhooks and connection events; a task or a message; no conditions. Rotating a token and its hint need the backend: today Nova keeps only the token’s hash and has no rotate route.', () => auEntry((l, h) => state(l, h))],
       ['receipts', 'Receipts: what Nova sent out, to whom and why (for the owner’s reaction)', 'Design first, nothing wired, every receipt made up: the list by day with filters, one receipt with every field Nova keeps, the empty and Local-only states, and what receipts cover. Drawn from the real model (src/core/receipts.ts, GET /api/v1/receipts): references and hashes, never the text; no size, tokens or cost. Receipts cover model calls and tasks handed to workers, not every way Nova reaches out. The route filters only local or remote, task and conversation, so the destination and privacy-setting filters would work over what was fetched.', () => rcEntry((l, h) => state(l, h))],
       ['inbox', 'Messages and quiet hours (for the owner’s reaction)', 'Design first, nothing wired: what Nova tells you on its own, unread and read, each with where it came from; one opened; what quiet hours hold and what happens when they end; and editing them. Drawn from the real model (src/core/triggers.ts): a message traces to a trigger, from an automation or one of Nova’s own parts; read and Let it through are the only actions; held messages go out one by one after quiet hours end, with no digest. A held message no automation sent is withdrawn today, not sent: flagged for the owner.', () => ibEntry((l, h) => state(l, h))],
+      ['infra-forms', 'Infrastructure projects and network targets (for the owner’s reaction)', 'Design first, nothing wired, every project, target and host made up, no secret value drawn: both lists and their empty state, adding a project and a target with in-place validation in the core’s words, the credential step (the value goes into Nova’s vault and isn’t shown again), a failed first use, and editing. Drawn from the real model (src/core/infra, src/core/network; /api/v1/infra and /network): a project changes only its budget and price sheet, a target only its token. The backend has no remove, rename or readdress route and no connection test on save (the first plan, or a change’s snapshot, is the first use); adding, editing and saving a secret need no passkey; only applies are tier 3, confirmed in Tasks. Those gaps are flagged, not drawn as working.', () => ifEntry((l, h) => state(l, h))],
       ['jarvis', 'Jarvis rings (proposed)', 'Compositions for the owner’s reaction, not a shipped theme: a HUD instrument of concentric segmented rings, arc sweeps and fine ticks in one cyan family on near-black, for the same ten states as the status icon. Told apart by structure and motion, also in greyscale and under reduced motion. Red only for stopped, amber only for needs-you.', jarvisEntry],
     ]],
     ['Views', [
@@ -837,6 +841,12 @@ function render() {
     bindInbox(sg);
     return;
   }
+  if (infraFrame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => ifFrame(infraFrame));
+    bindInfraForms(sg);
+    return;
+  }
   const one = ([id, name, about, body]) => `<article class="sg-entry" id="sg-${id}" aria-labelledby="sg-${id}-name"><header class="sg-entry-head"><h3 class="sg-entry-name" id="sg-${id}-name">${name}</h3><a class="sg-alone" href="?entry=${id}">Open alone</a></header><p class="sg-about">${about}</p>${draw(body)}</article>`;
   if (shown) {
     sg.innerHTML = shown.length ? `<p class="sg-back"><a class="link" href="/styleguide#sg-${only}">The whole styleguide</a></p>${shown.map(one).join('')}` : `<p class="sg-about">No entry is called “${only.replace(/[<>&"]/g, '')}”. <a class="link" href="/styleguide">The whole styleguide</a></p>`;
@@ -860,6 +870,7 @@ function render() {
   bindAutomations(sg);
   bindReceipts(sg);
   bindInbox(sg);
+  bindInfraForms(sg);
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }
