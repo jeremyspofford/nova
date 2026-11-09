@@ -25,6 +25,7 @@ import { render as renderPermissions } from './permissions.js';
 import { toolTier } from '../ui/js/status.js';
 import { BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, ipcBroker, ipcLink, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
+import { shellHash, withShellHash } from './sw-version.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -149,6 +150,9 @@ export function createNova(config = loadConfig(), deps = {}) {
   chatRun.bind({ runner, store, ledger: core.ledger, kinds: { schedule: scheduler, helper: helpers } });
   chatRun.problem = (message, opts) => core.log.problem('chat-run', message, opts);
   const ui = join(config.root, 'ui');
+  // The service worker's cache name, from what it caches (src/sw-version.js). Worked out once; in
+  // development, where ui/ changes under a running server, on every request for it.
+  const shellVersion = shellHash(ui);
   const subscribers = new Map(); // sessionId → Set<res>
 
   const broadcast = (sessionId, event, data) => {
@@ -330,6 +334,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     const statusBar = (html) => { try { return html.replace(STATUS_BAR_TAG, statusBarTag(core.design.active(appearance))); } catch { return html; } };
     if (['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture', '/topology', '/about', '/changelog', '/pipeline'].includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie), statusBar);
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
+    if (path === '/sw.js') return serveFile(res, join(ui, 'sw.js'), {}, (js) => withShellHash(js, config.dev ? shellHash(ui) : shellVersion));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
       res.writeHead(404, { 'content-type': 'text/plain' });
