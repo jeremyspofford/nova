@@ -437,3 +437,27 @@
 .ib .au-detail .uc-back { margin-bottom: var(--space-2); }
 .ib .confirm { min-height: var(--hit); }
 .ib-confirm .settings-list { margin: 0; padding: 0; list-style: none; }
+
+/* ---- Nova's computer, the door (2026-11-09; ui/js/sg-computer.js) ----
+   The Automations panes (.au-*) again: Settings' categories or the workspaces on hairlines, the open
+   one beside them. The separators sit on the list items, never on a control. Colour only for state:
+   the readiness dot, and a live row's line in the accent while a command runs. */
+.nc .au-list > * { flex-shrink: 0; }
+.nc-list { margin: 0; padding: 0; list-style: none; }
+.nc-list > li + li { border-top: 1px solid var(--border-subtle); }
+.nc-list .au-open { align-items: flex-start; padding-block: var(--space-3); }
+.nc-list .au-open .uc-ic { margin-top: var(--space-1); }
+.nc .au-detail .nc-list { margin-inline: calc(-1 * var(--space-3)); }
+.nc .au-detail .uc-back { margin-bottom: var(--space-2); }
+.nc-live { color: var(--accent-primary); }
+.nc-kind { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.nc .au-detail .uc-h { overflow-wrap: anywhere; }
+.nc-top-acts { margin: 0 0 var(--space-2); }
+.nc-said, .nc-cmd { margin: 0 0 var(--space-4); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.nc-cmd .au-actions { margin-top: var(--space-3); }
+.nc-quote { margin: var(--space-2) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.nc-argv { font-family: var(--font-mono); }
+.nc-run { padding-block: var(--space-2); }
+.nc-run-row { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-1) var(--space-3) 0; }
+.nc-run-acts { display: flex; flex-wrap: wrap; gap: var(--space-2); padding-inline: var(--space-1); }
+.nc .confirm { min-height: var(--hit); }
