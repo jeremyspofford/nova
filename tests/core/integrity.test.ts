@@ -51,6 +51,8 @@ test('a healthy stopped home scrubs ok, with every check said', async () => {
   const h = home();
   const r = await runScrub({ home: h, statfs: roomy });
   assert.equal(r.ok, true);
+  assert.equal(r.complete, true, 'SMART and fs_errors that can’t run on this platform don’t make it incomplete');
+  assert.equal(r.format_version, 2);
   assert.equal(r.stops, false);
   assert.equal(r.checks.database.state, 'ok');
   assert.equal(r.checks.checkpoint.state, 'none');
@@ -112,6 +114,8 @@ test('a damaged checkpoint is found against its own sealed manifest; the I/O bud
   const budget = await runScrub({ home: h, statfs: roomy, ioBytes: 10 });
   assert.equal(budget.checks.checkpoint.state, 'partial');
   assert.ok(budget.incomplete.includes('checkpoint'));
+  assert.equal(budget.ok, false, 'partial is never ok');
+  assert.equal(budget.complete, false);
 
   const dir = join(h, 'checkpoints', m.id);
   writeFileSync(join(dir, 'files', 'memory', `${CANARY}.md`), 'changed\n');
@@ -120,6 +124,51 @@ test('a damaged checkpoint is found against its own sealed manifest; the I/O bud
   assert.deepEqual(r.checks.checkpoint.damaged_in, { memory: 1 }, 'where, as Nova’s own entry name only');
   assert.match(r.problems.map((p) => p.message).join(' '), /newest checkpoint is damaged/);
   assert.equal(r.stops, false);
+});
+
+// A home whose checkpoint has a large database copy and three small memory files of 1,000 bytes.
+function bigAndSmall() {
+  const h = home();
+  for (const name of ['a', 'b', 'c']) writeFileSync(join(h, 'memory', `${name}.md`), 'x'.repeat(1000));
+  const m = takeCheckpoint({ home: h, kind: 'auto', reason: 'Example', version: '0.1.0' });
+  return { h, m, dbBytes: m.db.bytes, small: m.files.length };
+}
+
+test('a file over the budget is skipped while the others are still checked, smallest first, and ok stays false', async () => {
+  const { h, dbBytes, small } = bigAndSmall();
+  assert.ok(dbBytes > 100_000, 'the database copy is the large file');
+  const r = await runScrub({ home: h, statfs: roomy, ioBytes: 64 * 1024 });
+  const c = r.checks.checkpoint;
+  assert.equal(c.of, small + 1);
+  assert.equal(c.checked, small, 'every small file was hashed although the database copy came first in the manifest');
+  assert.equal(c.skipped_too_large, 1);
+  assert.equal(c.larger_than_budget, 1);
+  assert.ok(c.bytes! > 0 && c.bytes! <= 64 * 1024);
+  assert.equal(c.state, 'partial');
+  assert.equal(c.stopped_by, 'budget');
+  assert.equal(r.ok, false, 'anything skipped: never ok');
+  assert.equal(r.complete, false);
+  assert.deepEqual(r.problems, [], 'skipping isn’t damage');
+  assert.ok(r.incomplete.includes('checkpoint'));
+});
+
+test('repeated scrubs rotate through what the budget can’t cover at once (in memory only)', async () => {
+  // Whichever 1,000-byte file is damaged (same size, different bytes), two scrubs find it, although
+  // the budget fits all the small files but one: smallest-first alone would skip the same one forever.
+  for (const target of ['a', 'b', 'c']) {
+    const { h, m, small } = bigAndSmall();
+    const budget = m.files.reduce((s, f) => s + f.bytes, 0) - 1000 + 10;
+    writeFileSync(join(h, 'checkpoints', m.id, 'files', 'memory', `${target}.md`), 'y'.repeat(1000));
+    const before = snapshot(h);
+    const first = await runScrub({ home: h, statfs: roomy, ioBytes: budget });
+    const second = await runScrub({ home: h, statfs: roomy, ioBytes: budget });
+    assert.equal(first.checks.checkpoint.checked, small - 1);
+    assert.equal(first.checks.checkpoint.verified_earlier, 0);
+    assert.ok(second.checks.checkpoint.verified_earlier! >= small - 2, 'the second scrub starts with what the first didn’t verify');
+    assert.ok([first, second].some((r) => r.checks.checkpoint.state === 'problem'), `memory/${target}.md is reached by the rotation`);
+    assert.deepEqual(snapshot(h), before, 'the rotation is never written to disk');
+    for (const r of [first, second]) assert.ok(!JSON.stringify(r).includes(`${target}.md`), 'no file name');
+  }
 });
 
 test('the output is redacted by construction: no path, no file or checkpoint name, no content', async () => {
@@ -147,15 +196,19 @@ test('the output is redacted by construction: no path, no file or checkpoint nam
 test('the time bound holds: a database check that never answers is stopped, and is unfinished, not ok', async () => {
   const h = home();
   const fixtures = mkdtempSync(join(tmpdir(), 'nova-integrity-worker-'));
-  for (const [name, body] of [['hang.mjs', 'setInterval(() => {}, 1000);\n'], ['spin.mjs', 'for (;;) {}\n']] as const) {
+  const checking = "import { parentPort } from 'node:worker_threads';\nparentPort.postMessage({ phase: 'opening' });\nparentPort.postMessage({ phase: 'checking' });\nsetInterval(() => {}, 1000);\n";
+  for (const [name, body, at] of [['hang.mjs', 'setInterval(() => {}, 1000);\n', 'starting'], ['spin.mjs', 'for (;;) {}\n', 'starting'], ['checking.mjs', checking, 'checking']] as const) {
     writeFileSync(join(fixtures, name), body);
     const started = Date.now();
     const r = await runScrub({ home: h, statfs: roomy, timeMs: 300, worker: pathToFileURL(join(fixtures, name)) });
     const took = Date.now() - started;
     assert.ok(took < 300 + 2000, `${name}: the scrub took ${took} ms`);
     assert.equal(r.checks.database.state, 'unfinished');
+    assert.equal(r.checks.database.stopped_at, at, 'where the worker stopped, so a real unfinished run can be diagnosed');
     assert.ok(r.incomplete.includes('database'));
-    assert.equal(r.ok, true, 'unfinished isn’t a fault');
+    assert.equal(r.ok, false, 'an unknown result never reads as healthy');
+    assert.equal(r.complete, false);
+    assert.equal(r.stops, false, 'unfinished isn’t a fault either: not red');
     assert.match(r.problems.map((p) => p.message).join(' '), /didn’t finish within/);
     assert.equal(r.problems[0]!.stops, 0);
   }
