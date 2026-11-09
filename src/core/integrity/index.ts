@@ -71,17 +71,24 @@ async function databaseCheck(o: ScrubOptions, deadline: number, now: () => numbe
   const input: DbCheckInput = { path: join(o.home, 'nova.db'), full: !!o.full };
   const left = Math.max(0, deadline - started);
   const w = new Worker(o.worker ?? new URL('./worker.ts', import.meta.url), { workerData: input });
+  // How far the worker got, so an unfinished check says where it stopped: the thread never started
+  // or its module never loaded ('starting'), it never opened the database ('opening'), or SQLite's
+  // check itself ran out of time ('checking'). Fixed words only.
+  let reached: 'starting' | 'opening' | 'checking' = 'starting';
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const r = await new Promise<DbCheckResult | 'timeout' | 'failed'>((resolve) => {
       timer = setTimeout(() => resolve('timeout'), left);
-      w.once('message', (m: DbCheckResult) => resolve(m));
+      w.on('message', (m: DbCheckResult | { phase: 'opening' | 'checking' }) => {
+        if ('phase' in m) { if (m.phase === 'opening' || m.phase === 'checking') reached = m.phase; return; }
+        resolve(m);
+      });
       w.once('error', () => resolve('failed'));
       w.once('exit', () => resolve('failed'));
     });
     const ms = now() - started;
     const mode = o.full ? 'integrity_check' : 'quick_check';
-    if (r === 'timeout') return { state: 'unfinished' as CheckState, mode, findings: 0, kinds: {}, ms };
+    if (r === 'timeout') return { state: 'unfinished' as CheckState, mode, stopped_at: reached, findings: 0, kinds: {}, ms };
     if (r === 'failed') return { state: 'unavailable' as CheckState, mode, why: 'error', findings: 0, kinds: {}, ms };
     return { state: r.state as CheckState, mode, why: r.why, findings: r.findings, kinds: r.kinds as Partial<Record<FindingKind, number>>, ms };
   } finally {
@@ -110,7 +117,18 @@ async function hashFile(path: string, deadline: number, now: () => number): Prom
 export interface CheckpointCheck {
   state: CheckState; checkpoints?: number; strays?: number; checked?: number; of?: number; damaged?: number;
   damaged_in?: Record<string, number>; bytes?: number; stopped_by?: 'budget' | 'time'; ms?: number;
+  // Files that didn't fit what was left of the I/O budget (skipped, the rest still checked), and of
+  // those, how many are larger than the whole budget (no single scrub can ever hash them).
+  skipped_too_large?: number; larger_than_budget?: number;
+  // Files verified intact by an earlier scrub of this same checkpoint in this run of Nova, put last.
+  verified_earlier?: number;
 }
+
+// The rotation: which files of the newest checkpoint an earlier scrub in this process found intact,
+// so the next one starts with the rest and repeated scrubs cover every file that fits the budget.
+// In memory only (never on disk, never in the result), for one checkpoint at a time; it starts over
+// once everything that fits has been covered, or when the newest checkpoint changes.
+let rotation: { key: string; done: Set<number> } | null = null;
 export interface DiskCheck {
   state: CheckState; free_bytes?: number; total_bytes?: number; free_ratio?: number; inodes_free?: number | null;
   inodes_total?: number | null; checkpoint_needs_bytes?: number;
@@ -124,16 +142,25 @@ async function checkpointCheck(o: ScrubOptions, deadline: number, now: () => num
   const newest = found[0];
   if (!newest) return { state: 'none' as CheckState, checkpoints: 0, strays: strays.length, checked: 0, of: 0, damaged: 0, damaged_in: {}, bytes: 0, ms: now() - started };
   const m = newest.manifest;
-  const items = [{ entry: 'nova.db', path: join(newest.path, 'nova.db'), sha256: m.db.sha256, bytes: m.db.bytes, rel: 'nova.db' }, ...m.files.map((f) => ({ entry: '', path: '', sha256: f.sha256, bytes: f.bytes, rel: f.path }))];
-  let bytes = 0, checked = 0, damaged = 0, stoppedBy: 'budget' | 'time' | null = null;
+  const items = [{ i: 0, entry: 'nova.db', path: join(newest.path, 'nova.db'), sha256: m.db.sha256, bytes: m.db.bytes, rel: 'nova.db' }, ...m.files.map((f, i) => ({ i: i + 1, entry: '', path: '', sha256: f.sha256, bytes: f.bytes, rel: f.path }))];
+  const key = `${o.home}\0${m.id}\0${m.seal ?? ''}`;
+  if (rotation?.key !== key) rotation = { key, done: new Set() };
+  const done = rotation.done;
+  // Smallest first, so the budget covers the most files (Nova's settings, memory notes and other
+  // small files before the database copy); files an earlier scrub verified go last.
+  const order = [...items].sort((a, b) => (+done.has(a.i) - +done.has(b.i)) || (a.bytes - b.bytes) || (a.i - b.i));
+  let bytes = 0, checked = 0, damaged = 0, skipped = 0, stoppedBy: 'budget' | 'time' | null = null;
+  const verifiedEarlier = done.size;
   const damagedIn: Record<string, number> = {};
-  for (const it of items) {
-    if (bytes + it.bytes > budget) { stoppedBy = 'budget'; break; }
+  for (const it of order) {
+    if (bytes + it.bytes > budget) { skipped++; stoppedBy ??= 'budget'; continue; }
     if (now() >= deadline) { stoppedBy = 'time'; break; }
     let entry = it.entry, path = it.path, ok = false;
     try {
       if (!path) { const rel = safeRel(it.rel); const top = rel.split(/[\\/]/)[0] ?? ''; entry = isNovaEntry(top) ? top : 'other'; path = join(newest.path, 'files', rel); }
-      if (existsSync(path) && statSync(path).isFile()) {
+      // A file whose size isn't the manifest's is damaged without reading it (and can't spend more
+      // of the budget than the manifest said).
+      if (existsSync(path) && statSync(path).isFile() && statSync(path).size === it.bytes) {
         const got = await hashFile(path, deadline, now);
         if (got === 'timeout') { stoppedBy = 'time'; break; }
         ok = got === it.sha256;
@@ -141,10 +168,17 @@ async function checkpointCheck(o: ScrubOptions, deadline: number, now: () => num
     } catch { ok = false; entry ||= 'other'; }
     bytes += it.bytes;
     checked++;
-    if (!ok) { damaged++; damagedIn[entry] = (damagedIn[entry] ?? 0) + 1; }
+    if (ok) done.add(it.i);
+    else { damaged++; done.delete(it.i); damagedIn[entry] = (damagedIn[entry] ?? 0) + 1; }
   }
+  // Everything that can fit one scrub's budget has been covered: the next pass starts over.
+  if (items.filter((it) => it.bytes <= budget).every((it) => done.has(it.i))) done.clear();
   const state: CheckState = damaged ? 'problem' : stoppedBy ? 'partial' : 'ok';
-  return { state, checkpoints: found.length, strays: strays.length, checked, of: items.length, damaged, damaged_in: damagedIn, bytes, ...(stoppedBy ? { stopped_by: stoppedBy } : {}), ms: now() - started };
+  return {
+    state, checkpoints: found.length, strays: strays.length, checked, of: items.length, skipped_too_large: skipped,
+    larger_than_budget: items.filter((it) => it.bytes > budget).length, verified_earlier: verifiedEarlier,
+    damaged, damaged_in: damagedIn, bytes, ...(stoppedBy ? { stopped_by: stoppedBy } : {}), ms: now() - started,
+  };
 }
 
 // ---- free space and inodes on the home's volume ----
@@ -232,13 +266,21 @@ export async function runScrub(o: ScrubOptions) {
 
   const checks = { database, checkpoint, disk: disk.check, fs_errors: fsErrors, smart: SMART };
   const incomplete = Object.entries(checks).filter(([, c]) => ['unfinished', 'partial', 'unavailable', 'stopped'].includes(c.state)).map(([k]) => k);
+  // `complete`: every check that ran finished and covered everything. SMART and fs_errors don't run
+  // where the platform doesn't expose them (`unavailable`, said in `incomplete`); the database and
+  // disk always run, so their `unavailable` is an unknown result and isn't complete.
+  const complete = !Object.values(checks).some((c) => c.state === 'unfinished' || c.state === 'partial' || c.state === 'stopped')
+    && database.state !== 'unavailable' && disk.check.state !== 'unavailable';
   return {
-    format: 'nova-integrity', format_version: 1,
-    ok: !Object.values(checks).some((c) => c.state === 'problem'),
+    // Version 2: `ok` is true only when the scrub is complete and found nothing (version 1's `ok`
+    // ignored unfinished and partial checks, so an unknown result read as healthy).
+    format: 'nova-integrity', format_version: 2,
+    ok: complete && !Object.values(checks).some((c) => c.state === 'problem'),
+    complete,
     stops: problems.some((p) => p.stops === 1),
     checks, problems, incomplete,
     bounds: { time_ms: o.timeMs ?? TIME_MS, io_bytes: o.ioBytes ?? IO_BYTES, took_ms: now() - started },
-    rule: 'Metadata only: states, counts and sizes. No path, file name, checkpoint name or content. Built for this request; nothing is kept or sent.',
+    rule: 'Metadata only: states, counts and sizes. No path, file name, checkpoint name or content. Built for this request; nothing is kept on disk or sent.',
   };
 }
 

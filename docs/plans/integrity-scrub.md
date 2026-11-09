@@ -73,9 +73,16 @@ as `unavailable` with that reason in plain words, never as healthy. On a non-ext
 - **Time:** 10 seconds for the whole scrub. The database check runs in a worker thread and is
   terminated at the deadline; checkpoint hashing reads in 1 MiB chunks and stops at the deadline.
   A check stopped by the bound is `unfinished` (database) or `partial` (checkpoint), **never `ok`**.
-- **I/O budget:** 256 MiB hashed per scrub for the checkpoint check (files are taken whole, in
-  manifest order, until the next would pass the budget). The database check reads the database
-  at most once and is bounded by time, not bytes, because SQLite can't stop part-way by bytes.
+- **I/O budget:** 256 MiB hashed per scrub for the checkpoint check. Files are taken whole,
+  **smallest first** (so the budget covers the most files: settings, memory notes and other small
+  files before the checkpoint's database copy); a file that doesn't fit what is left of the budget
+  is skipped and the rest are still checked (`skipped_too_large`; `larger_than_budget` counts
+  those no single scrub can hash). A file whose size isn't the manifest's is damaged without being
+  read. **Rotation (2026-11-08 fix):** files an earlier scrub verified intact go last, so repeated
+  scrubs cover every file that fits the budget; this is kept in memory only, for the newest
+  checkpoint, never on disk or in the result, and starts over once everything that fits is covered.
+  The database check reads the database at most once and is bounded by time, not bytes, because
+  SQLite can't stop part-way by bytes.
 - **One at a time, and not often:** a second request while one runs is refused (409), and so is
   one within 60 seconds of the last finishing. The person gets the reason in plain words.
 - **Never during a write-heavy operation.** Refused (409) before anything is read when:
@@ -108,8 +115,12 @@ the orb and the standby) is the owner's call, with the Health entry.
 | disk at the "needs the person" threshold | 0 |
 | filesystem errors reported by ext4 | 0 |
 
-`ok` is true only when no check is `problem`; an `unfinished`, `partial` or `unavailable` check
-leaves `ok` true but is listed in `incomplete`, so Health never shows a stopped check as healthy.
+**Format version 2 (2026-11-08 fix):** `complete` is true only when every check that ran finished
+and covered everything: no `unfinished`, `partial` or `stopped` check, and the database and disk
+checks (which always run) not `unavailable`. SMART and `fs_errors` are `unavailable` where the
+platform doesn't expose them; they didn't run, so they don't make the scrub incomplete, but they
+are listed in `incomplete`. `ok` is true only when `complete` is true and no check is `problem`:
+an unknown result never reads as healthy. (Version 1's `ok` ignored unfinished and partial checks.)
 
 ## The gate
 

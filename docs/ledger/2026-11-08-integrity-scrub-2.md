@@ -1,0 +1,24 @@
+**2026-11-08 · Diagnostics · Integrity scrub: honest ok, checkpoint budget, and where a check stops**
+- What changed: running #397's scrub on the real preview home (nova.db 923 MB, checkpoints 26 GB) exposed two bugs and one transient stall.
+  - `ok` was true while checks were unfinished. format_version is now 2, with a separate `complete` field, and `ok = complete && no check is a problem`.
+    - complete is false when any check is unfinished, partial or stopped, or when the database or disk check is unavailable.
+    - SMART and fs_errors being unavailable don't count against it, because they're impossible on some platforms; they're still listed in `incomplete`.
+  - The checkpoint check hashed 0 of 82 files, because the first file (the checkpoint's ~900 MB database copy) exceeded the 256 MB budget and stopped it.
+    - Files are now hashed smallest first, and a file that doesn't fit the remaining budget is skipped while the rest are checked.
+    - It reports checked, of, skipped_too_large, larger_than_budget and bytes.
+    - A file whose size doesn't match the manifest is damaged without being read.
+    - A rotation cursor, kept in memory only for the newest checkpoint, moves already-verified files last, so repeated scrubs reach every file that fits.
+  - The database check reported unfinished after 10 s on the first call, about 75 s after a redeploy. Later calls on the same server finish ok, and a live preview `quick_check` takes 0.41 s.
+    - It couldn't be reproduced on live test servers: 72–410 ms, up to 633 MB, including under concurrent writes and WAL checkpoints.
+    - An unfinished database check now carries `stopped_at` (starting, opening or checking), fixed words only, so a recurrence names the stalled step.
+- What you can now do: trust `ok` to mean every check completed clean, and get a real partial checkpoint verification on large homes.
+- Still unfinished: two things.
+  - A checkpoint file larger than the 256 MB budget can never be hashed. On the preview, the database copy keeps the checkpoint check partial and `ok` false. Owner call: raise the budget for the database copy, or verify it a cheaper way, e.g. SQLite quick_check on the copy.
+  - The cause of the post-redeploy stall isn't confirmed. stopped_at will name the step next time.
+- Checked: locally, before CI.
+  - typecheck.
+  - tests/core/integrity.test.ts 11/11, including new tests: an over-budget file is skipped while the rest are checked and ok stays false; the rotation reaches a damaged file within two scrubs; all three stopped_at values.
+  - Diagnostics 16/16.
+  - The new tests/acceptance/integrity-live.test.ts runs a real server and asserts the database check is ok in under 3 s.
+  - On the preview, two calls returned database ok.
+  - Measured on a synthetic 835 MB db, warm cache: quick_check 0.5 s, integrity_check 8.5 s.

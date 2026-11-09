@@ -29,9 +29,10 @@ function kindOf(line: string): FindingKind {
   return 'other';
 }
 
-export function checkDatabase(input: DbCheckInput): DbCheckResult {
+export function checkDatabase(input: DbCheckInput, phase: (p: 'opening' | 'checking') => void = () => {}): DbCheckResult {
   if (!existsSync(input.path)) return { state: 'unavailable', why: 'missing', findings: 0, kinds: {} };
   let db: DatabaseSync | null = null;
+  phase('opening');
   try {
     if (existsSync(`${input.path}-wal`)) db = new DatabaseSync(input.path, { readOnly: true });
     else {
@@ -40,6 +41,7 @@ export function checkDatabase(input: DbCheckInput): DbCheckResult {
       db = new DatabaseSync(url, { readOnly: true });
     }
     db.exec('PRAGMA busy_timeout = 2000');
+    phase('checking');
     const rows = db.prepare(`PRAGMA ${input.full ? 'integrity_check' : 'quick_check'}(${LIMIT})`).all() as Record<string, unknown>[];
     const lines = rows.flatMap((r) => String(Object.values(r)[0] ?? '').split('\n')).map((l) => l.trim()).filter((l) => l && !/^\*\*\* in database/.test(l));
     if (lines.length === 1 && lines[0] === 'ok') return { state: 'ok', why: null, findings: 0, kinds: {} };
@@ -59,5 +61,6 @@ export function checkDatabase(input: DbCheckInput): DbCheckResult {
 }
 
 if (parentPort && workerData && typeof (workerData as DbCheckInput).path === 'string') {
-  parentPort.postMessage(checkDatabase(workerData as DbCheckInput));
+  const port = parentPort;
+  port.postMessage(checkDatabase(workerData as DbCheckInput, (p) => port.postMessage({ phase: p })));
 }
