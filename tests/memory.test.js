@@ -121,6 +121,19 @@ test('entries written by hand can be read, edited and forgotten', () => {
   assert.equal(readFileSync(join(h, 'MEMORY.md'), 'utf8'), `# MEMORY.md\n\n## Facts\n\n- Grew up in Columbus, Ohio. <!-- id=${edited.id} at=2026-10-21T16:42:00.000Z by=you updated=2026-10-21T16:42:00.000Z -->\n\n## Preferences\n\n## Decisions\n\n## Commitments\n`);
 });
 
+test('an edit of an older wording is refused instead of replacing a newer correction', () => {
+  const { h, m } = fresh();
+  writeFileSync(join(h, 'MEMORY.md'), '# MEMORY.md\n\n## Facts\n\n- Grew up in Ohio.\n');
+  const [ohio] = m.read().sections[0].entries;
+  const phone = m.edit(ohio.id, 'Grew up in Columbus, Ohio.', now);
+  // A second device still showing the first wording saves its own edit.
+  assert.throws(() => m.edit(ohio.id, 'Grew up in Dayton, Ohio.', now), (e) => e.status === 409);
+  assert.equal(m.read().sections[0].entries[0].text, 'Grew up in Columbus, Ohio.', 'the newer correction stands');
+  // Saving the same words the newest version has is not a conflict, and the newest id edits normally.
+  assert.equal(m.edit(ohio.id, 'Grew up in Columbus, Ohio.', now).id, phone.id);
+  assert.notEqual(m.edit(phone.id, 'Grew up in Dayton, Ohio.', now).id, phone.id);
+});
+
 // ---- one memory: the core is the source of truth, MEMORY.md a view of it ----
 
 const ERA2 = `# MEMORY.md
