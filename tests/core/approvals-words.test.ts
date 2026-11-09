@@ -13,6 +13,8 @@ import { createCore, type Core } from '../../src/core/index.ts';
 import { TOOLS, toolProtocol } from '../../src/tools.js';
 import { GUARDED, guardedWords } from '../../src/runner.js';
 import { PRICES, makeProject, fakeToken, tofuOnPath } from '../support/infra.ts';
+import { serviceOf } from '../../src/core/connectors/index.ts';
+import { HA_MANIFEST } from '../../src/core/connectors/home-assistant.ts';
 
 // The words before tiers were settings, exactly.
 const ABOUT = {
@@ -49,7 +51,9 @@ test('the workers’ own descriptions: exactly as before at the defaults; no cla
 
 test('the chat tools: descriptions and outputs exactly as before at the defaults; no claimed confirmation once lowered', async () => {
   const { core } = boot();
-  const names = ['code_change', 'infra_plan', 'network_change', 'account_change', 'home_call'];
+  const names = ['code_change', 'infra_plan', 'network_change', 'account_change', 'service_call'];
+  // Home Assistant's actions as service_call lists them while it is connected.
+  const services = { list: () => [serviceOf(HA_MANIFEST)] };
   const fake = {
     coding: { start: async () => ({ run: { id: 'r1', agent_name: 'Agent', title: 'T', nova_branch: 'nova/r1', branch: 'main', repo: '/repo', test_command: 'npm test', preview_command: 'npm start' } }) },
     ops: {
@@ -65,6 +69,10 @@ test('the chat tools: descriptions and outputs exactly as before at the defaults
     assert.equal(toolProtocol(names, core.approvals), toolProtocol(names));
     for (const n of names) assert.equal((TOOLS as any)[n].docFor(core.approvals), (TOOLS as any)[n].doc, n);
     assert.deepEqual(await outputs(core.approvals), await outputs(null));
+    // With Home Assistant connected, at its default (1): it says Nova does it and reports it.
+    const atDefault = (TOOLS as any).service_call.docFor(core.approvals, services) as string;
+    assert.match(atDefault, /service "home-assistant" \(Home Assistant\), action "call": .*Nova runs it and reports it\./);
+    assert.doesNotMatch(atDefault, /After the person’s OK in Tasks/);
     const before = await outputs(null);
     assert.match(before[0]!, /Nothing in the repository changes until the person confirms the merge\. Nova asks them before it runs `npm test` and the preview, and again before it merges; they follow it in Tasks\./);
     assert.match(before[1]!, /the person sees the plan in full and confirms any apply in Tasks/);
@@ -80,7 +88,7 @@ test('the chat tools: descriptions and outputs exactly as before at the defaults
     for (const o of [code, infra, network]) assert.doesNotMatch(String(o).replace(/without asking/g, ''), CLAIMS, String(o));
     // Home Assistant at 2 says it asks.
     core.approvals.set('home-assistant.service', 2, {});
-    assert.match(doc('home_call'), /After the person’s OK in Tasks/);
+    assert.match((TOOLS as any).service_call.docFor(core.approvals, services), /After the person’s OK in Tasks/);
   } finally {
     await core.close();
   }
@@ -90,7 +98,13 @@ test('the outside-content guard: the names it always had, and any registered cap
   const { core } = boot();
   try {
     for (const [name, words] of Object.entries(GUARDED)) assert.equal(guardedWords(name, core.approvals), words);
-    assert.equal(guardedWords('home_call', null), 'change your home');
+    // Home Assistant's capability lists service_call, so the registry guards it with its words; the
+    // older name home_call is guarded as the call it stands for; with no registry, it still asks.
+    assert.equal(guardedWords('service_call', core.approvals), 'change your home');
+    assert.equal(guardedWords('service_call', core.approvals, 'home-assistant.service'), 'change your home');
+    assert.equal(guardedWords('home_call', core.approvals), 'change your home');
+    assert.equal(guardedWords('service_call', null), 'take this step');
+    assert.equal(guardedWords('home_call', null), 'take this step');
     assert.equal(guardedWords('read_file', core.approvals), null);
     core.extensions.install({
       id: 'acme-lights', version: '1.0.0', kind: 'plugin', name: 'Acme lights', capabilities: [], permissions: [], secrets: [], config_schema: {}, setup_flow: null, health_check: {},

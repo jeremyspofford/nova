@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { startFakeHomeAssistant } from '../../scripts/fake-home-assistant.js';
 import { call, scripted, sleep, startNova } from './support.js';
 
-const UNLOCK = { domain: 'lock', service: 'unlock', entity_id: 'lock.back_door' };
+const UNLOCK = { service: 'home-assistant', action: 'call', args: { domain: 'lock', service: 'unlock', entity_id: 'lock.back_door' } };
 
 async function withHome(plan, run) {
   const ha = await startFakeHomeAssistant();
@@ -33,7 +33,7 @@ async function settled(h, pick) {
 
 test('Home Assistant set to tier 1 through the approvals registry: after a web page, an unlock still asks, and declined changes nothing', async () => {
   let base = '';
-  await withHome((i) => [call('web_fetch', { url: `${base}/plain` }), call('home_call', UNLOCK)][i] ?? 'Done.', async (h, ha) => {
+  await withHome((i) => [call('web_fetch', { url: `${base}/plain` }), call('service_call', UNLOCK)][i] ?? 'Done.', async (h, ha) => {
     base = h.web.base;
     const approvals = h.nova.core.approvals;
     assert.equal(approvals.set('home-assistant.service', 2, {}).effective, 2);
@@ -44,7 +44,7 @@ test('Home Assistant set to tier 1 through the approvals registry: after a web p
 
     const before = h.nova.core.ledger.list().length;
     const { asked } = await h.run('Read the page, then unlock the back door.', () => 'deny');
-    assert.deepEqual(asked.map((t) => [t.name, t.guard?.what]), [['home_call', 'change your home']]);
+    assert.deepEqual(asked.map((t) => [t.name, t.guard?.what]), [['service_call', 'change your home']]);
     assert.equal(h.nova.core.ledger.list().length, before, 'declined: no task was made');
     assert.equal(ha.state.calls.length, 0);
     assert.equal(ha.state.entities.get('lock.back_door').state, 'locked');
@@ -52,7 +52,7 @@ test('Home Assistant set to tier 1 through the approvals registry: after a web p
 });
 
 test('Home Assistant raised to tier 2 through the registry: a direct unlock waits for an OK, as its own setting did', async () => {
-  await withHome((i) => [call('home_call', UNLOCK)][i] ?? 'Asked.', async (h, ha) => {
+  await withHome((i) => [call('service_call', UNLOCK)][i] ?? 'Asked.', async (h, ha) => {
     h.nova.core.approvals.set('home-assistant.service', 2, {});
     await h.run('Unlock the back door.');
     const t = await settled(h, (x) => x.owner === 'home-assistant');

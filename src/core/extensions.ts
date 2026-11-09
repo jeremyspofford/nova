@@ -34,6 +34,24 @@ export interface Manifest {
   // (approvals/index.ts). Nova derives each one's floor and starting default from its class; the
   // manifest may only ask for stricter. Registered on install, dropped on removal.
   approvals?: ManifestApproval[];
+  // Optional: what the service can do when the person asks in chat, through the one chat tool
+  // (service_call, src/tools.js) rather than a tool of its own. Each action belongs to one of the
+  // capabilities above, which sets its tier and its outside-content guard. Code that runs an action
+  // is the connector's `act` (connectors/index.ts); an extension declares the same field.
+  actions?: ManifestAction[];
+}
+
+// One thing a service can do when asked, in words the chat model reads: `id` (call), `name` and
+// `words` (what it does and how Nova checks it), `args` (each argument's name and what it is, in
+// words; an argument whose words start "optional" may be left out), an `example` of the args, and
+// `approval`, the local id of the capability in `approvals` it belongs to.
+export interface ManifestAction {
+  id: string;
+  name: string;
+  words: string;
+  args: Record<string, string>;
+  example?: Record<string, unknown>;
+  approval: string;
 }
 
 // What a kind of extension adds to the host: extra install checks (plain-words problems), and a
@@ -112,6 +130,18 @@ export function validateManifest(input: unknown): Manifest {
       && (a.tiers === undefined || (Array.isArray(a.tiers) && a.tiers.every(tier)))
       && (a.tools === undefined || strings(a.tools)) && (a.guard === undefined || typeof a.guard === 'string') && (a.targets === undefined || typeof a.targets === 'string'));
     need(ok, `approvals must be a list of {id, name, effect, default?, floor?, tiers?, tools?, guard?, targets?}; effect is one of ${EFFECT_NAMES.join(', ')}, and a tier is 0 to 3`);
+  }
+  if (m.actions !== undefined) {
+    const own = new Set(Array.isArray(m.approvals) ? m.approvals.filter(isObj).map((a) => a.id) : []);
+    const ok = Array.isArray(m.actions) && m.actions.every((a) => isObj(a)
+      && typeof a.id === 'string' && /^[a-z0-9][a-z0-9_-]*$/.test(a.id)
+      && typeof a.name === 'string' && a.name.trim().length > 0
+      && typeof a.words === 'string' && a.words.trim().length > 0
+      && isObj(a.args) && Object.entries(a.args).every(([k, v]) => /^[a-z_][a-z0-9_]{0,63}$/.test(k) && typeof v === 'string')
+      && (a.example === undefined || isObj(a.example))
+      && typeof a.approval === 'string' && own.has(a.approval));
+    need(ok, 'actions must be a list of {id, name, words, args, example?, approval}; args names each argument with its words, and approval is the id of one of this manifest’s approvals');
+    if (ok) need(new Set((m.actions as { id: string }[]).map((a) => a.id)).size === (m.actions as unknown[]).length, 'each action has its own id');
   }
   if (e.length) throw new CoreError('validation', 'This extension manifest isn’t valid.', e);
   return m as unknown as Manifest;

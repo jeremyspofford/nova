@@ -85,6 +85,11 @@ export interface ManifestApproval {
   id: string; name: string; effect: Effect; default?: Tier; floor?: Tier; tiers?: Tier[]; tools?: string[]; guard?: string; targets?: string;
 }
 
+// The one chat tool that runs any connected service's declared actions (src/tools.js service_call,
+// connectors/index.ts Connectors.act). A capability an action belongs to always lists it, so the
+// outside-content guard covers every action through this registry, whoever declared it.
+export const SERVICE_TOOL = 'service_call';
+
 const ID = /^[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+$/;
 const ALL: readonly Tier[] = [0, 1, 2, 3];
 const isTier = (v: unknown): v is Tier => v === 0 || v === 1 || v === 2 || v === 3;
@@ -217,18 +222,20 @@ export class Approvals implements Tiers {
 
   // A manifest's declared capabilities, as registrations. A connector built into Nova registers them
   // as core; an installed extension, as itself.
-  registerManifest(m: { id: string; name: string; approvals?: ManifestApproval[] }, origin: Origin, targets?: (local: string) => readonly string[]): Capability[] {
-    return (m.approvals ?? []).map((a) => this.register({
+  // A capability one of the manifest's actions belongs to lists SERVICE_TOOL, declared or not.
+  registerManifest(m: { id: string; name: string; approvals?: ManifestApproval[]; actions?: readonly { approval: string }[] }, origin: Origin, targets?: (local: string) => readonly string[]): Capability[] {
+    const acted = new Set((m.actions ?? []).map((x) => x.approval));
+    return (m.approvals ?? []).map((a) => ({ a, tools: acted.has(a.id) ? [...new Set([...(a.tools ?? []), SERVICE_TOOL])] : a.tools })).map(({ a, tools }) => this.register({
       id: `${m.id}.${a.id}`, area: m.name, name: a.name, effect: a.effect,
       ...(a.default !== undefined ? { default: a.default } : {}), ...(a.floor !== undefined ? { floor: a.floor } : {}), ...(a.tiers ? { tiers: a.tiers } : {}),
-      ...(a.tools ? { tools: a.tools } : {}), ...(a.guard ? { guard: a.guard } : {}),
+      ...(tools ? { tools } : {}), ...(a.guard ? { guard: a.guard } : {}),
       ...(a.targets ? { targets: { words: a.targets, marked: () => targets?.(a.id) ?? [] } } : {}),
     }, origin));
   }
 
   // An installed extension's declared capabilities, as itself. One Nova ships (a built-in
   // connector's manifest, installed when it is connected) already registered them as core: those stay.
-  registerExtension(m: { id: string; name: string; approvals?: ManifestApproval[] }): Capability[] {
+  registerExtension(m: { id: string; name: string; approvals?: ManifestApproval[]; actions?: readonly { approval: string }[] }): Capability[] {
     const own = (m.approvals ?? []).filter((a) => this.#all.get(`${m.id}.${a.id}`)?.origin.kind !== 'core');
     return this.registerManifest({ ...m, approvals: own }, { kind: 'extension', id: m.id });
   }
@@ -271,8 +278,12 @@ export class Approvals implements Tiers {
   }
 
   // The words the outside-content guard asks with for a chat tool that acts on a registered
-  // capability, or null (a read, or no capability names the tool).
-  guardWords(tool: string): string | null {
+  // capability, or null (a read, or no capability names the tool). `capability`: the one this call
+  // acts on, when the caller knows it (service_call names a service and an action, and the action
+  // says its capability), so the words are that capability's; otherwise any that lists the tool.
+  guardWords(tool: string, capability?: string | null): string | null {
+    const own = capability ? this.#all.get(capability) : undefined;
+    if (own && own.tools.includes(tool)) return own.effect !== 'read' ? own.guard ?? `take this step (${own.name.toLowerCase()})` : own.guard;
     for (const c of this.#all.values()) {
       if (c.effect !== 'read' && c.tools.includes(tool)) return c.guard ?? `take this step (${c.name.toLowerCase()})`;
     }

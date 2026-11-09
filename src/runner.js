@@ -19,7 +19,7 @@ import { Schedules } from './schedules.js';
 import { Gmail, googleEndpoints } from './connectors/gmail.js';
 import { Permissions, autoAllowed, permissionFor, permissionsSection } from './permissions.js';
 import { commitHome, readStanding } from './home.js';
-import { TOOLS, ToolTagFilter, WRITABLE, availableTools, extractMemory, homeTarget, parseToolCall, withinPrivacy } from './tools.js';
+import { ALIASES, TOOLS, ToolTagFilter, WRITABLE, availableTools, extractMemory, homeTarget, parseToolCall, withinPrivacy } from './tools.js';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 import { stricter } from './chat-run.js';
 import { CORRECTION, Interstitial, SKILL_ID as IR_SKILL, UNBACKED as IR_UNBACKED, readBlocks, verdictWords } from './interstitial.js';
@@ -40,16 +40,23 @@ export const GUARDED = {
   infra_plan: 'plan infrastructure',
   network_change: 'change your network',
   account_change: 'change an account',
-  // Owner ruling 2026-11-09: a home change the person asks for is tier 1, but after outside content
-  // it still asks (the integrator's constraint, docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md).
-  home_call: 'change your home',
 };
 // What a tainted run asks before: a step named above, or a chat tool that acts on a capability in the
 // approvals registry (src/core/approvals, Registration.tools), whatever registered it. Null: neither.
-export function guardedWords(name, approvals) {
+// `capability`: the one this call acts on, when known (service_call: its service's action), so the
+// words are that capability's ("change your home" for Home Assistant's call). Since the owner's
+// ruling of 2026-11-09 a home change the person asks for is tier 1, but after outside content it
+// still asks: Home Assistant's capability lists service_call, so the registry covers it.
+// An older tool name (tools.js ALIASES) is guarded as the call it stands for.
+/** @param {string} name @param {any} approvals @param {string | null} [capability] @returns {string | null} */
+export function guardedWords(name, approvals, capability = null) {
+  const al = Object.hasOwn(ALIASES, name) ? ALIASES[name] : null;
+  if (al) { name = al.to; capability ??= al.capability ?? null; }
   if (Object.hasOwn(GUARDED, name)) return GUARDED[name];
-  // Fails closed: if the registry can't be read, the step asks rather than going on its own.
-  try { return approvals?.guardWords(name) ?? null; } catch { return 'take this step'; }
+  // Fails closed: a tool that acts only through the registry asks when there is no registry, and if
+  // the registry can't be read, the step asks rather than going on its own.
+  if (!approvals && TOOLS[name]?.guardedByRegistry) return 'take this step';
+  try { return approvals?.guardWords(name, capability) ?? null; } catch { return 'take this step'; }
 }
 // The person's own files: never screened when read (their writes are guarded instead).
 const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
@@ -136,7 +143,7 @@ export class Runner extends EventEmitter {
     this.helpers = null; // set by the server: where delegate hands work
     this.coding = null; // set by the server: coding runs (the core's, M10c)
     this.ops = null; // set by the server: infrastructure, networking and accounts (the core's, M10d)
-    this.homeControl = null; // set by the server: Home Assistant service calls (the core's, owner ruling 2026-11-09)
+    this.services = null; // set by the server: connected services' actions (the core's services; service_call)
     this.approvals = null; // set by the server: the core's approvals registry (tiers as settings; the tools' words and the guard follow it)
     // Cost caps (Amendment 2026-10-31-B Part 5), set by the server: the core's Caps. Each run of a
     // ledger task (the chat-run worker says which, in runTasks) is metered and capped; a person's
@@ -376,7 +383,7 @@ export class Runner extends EventEmitter {
       const installed = this.skills.installed().filter((x) => !this.skillHeld(x.id));
       // Helpers and scheduled runs can't hand work to helpers of their own,
       // and a helper doesn't touch schedules.
-      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: this.skills.installed().length, delegate: !run.alone && !!this.helpers, self: !!this.self, coding: !run.alone && !run.helper && !!this.coding, ops: !run.alone && !run.helper && !!this.ops, homeControl: !run.alone && !run.helper && !!this.homeControl?.connected() }), mode)
+      const tools = withinPrivacy(availableTools({ gmail: this.gmail.status().connected, skills: this.skills.installed().length, delegate: !run.alone && !!this.helpers, self: !!this.self, coding: !run.alone && !run.helper && !!this.coding, ops: !run.alone && !run.helper && !!this.ops, services: !run.alone && !run.helper && this.hasServices() }), mode)
         .filter((n) => !(run.helper && n.startsWith('schedule_')));
       const skills = skillsSection(installed, [...run.skills.values()], (c) => this.skills.connectorDoc(c));
       const schedules = run.helper ? '' : schedulesSection(this.schedules.list(), this.config.timezone);
@@ -388,7 +395,7 @@ export class Runner extends EventEmitter {
       let streamed = '';
       // MEMORY.md may have been edited by hand since Nova last wrote it: take that in first.
       if (this.memory.records) this.memory.sync();
-      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, briefing, approvals: this.approvals, ...(this.identity ? { identity: this.identity.persona() } : {}) });
+      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, briefing, approvals: this.approvals, services: this.services, ...(this.identity ? { identity: this.identity.persona() } : {}) });
       const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
       // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
       // hash, and where it went. Written before the call, so it exists even if the call fails.
@@ -462,7 +469,7 @@ export class Runner extends EventEmitter {
       const ctx = {
         home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
         gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
-        schedules: this.schedules, sessionId, self: this.self, coding: this.coding, ops: this.ops, homeControl: this.homeControl, approvals: this.approvals,
+        schedules: this.schedules, sessionId, self: this.self, coding: this.coding, ops: this.ops, services: this.services, approvals: this.approvals,
         // A helper started from a run that read outside content starts with that taint.
         delegate: (args) => this.helpers.spawn({ ...args, parent: sessionId, turn, taint: run.taint }),
         seen: (p) => { page = p; },
@@ -811,6 +818,18 @@ export class Runner extends EventEmitter {
     return !f.includes('/') && STANDING.has(f);
   }
 
+  // Whether a connected service has actions now (service_call is offered only then).
+  hasServices() {
+    try { return !!this.services && this.services.list().length > 0; } catch { return false; }
+  }
+
+  // The capability a service_call acts on (its service's action), for the guard's words; null for
+  // any other call, or one that names no known action (the registry's words for the tool then).
+  capabilityOf(call) {
+    if (call?.name !== 'service_call' || !this.services?.capabilityOf) return null;
+    try { return this.services.capabilityOf(call.args?.service, call.args?.action); } catch { return null; }
+  }
+
   // Why a step must ask because of the gate, or null.
   guardFor(call, tool, run, preview, session = null) {
     if (!call || !tool) return null;
@@ -823,7 +842,7 @@ export class Runner extends EventEmitter {
     // is guarded the same way: in a tainted run it never goes on its own.
     // So is a chat tool that acts on any capability in the approvals registry, whoever registered it
     // (an extension, a service Nova built): guardedWords.
-    let what = guardedWords(call.name, this.approvals) ?? (standing ? 'change your standing files' : tool.needsApproval ? 'take this step' : null);
+    let what = guardedWords(call.name, this.approvals, this.capabilityOf(call)) ??(standing ? 'change your standing files' : tool.needsApproval ? 'take this step' : null);
     // An address the model put together, in a tainted run, asks, whatever it carries: matching
     // can't keep up with chunking, short encodings or reversal. A link it read is free.
     let follow = null;
