@@ -23,6 +23,7 @@ import { bindReceipts, isRcFrame, rcEntry, rcFrame } from './sg-receipts.js';
 import { bindInbox, ibEntry, ibFrame, isIbFrame } from './sg-inbox.js';
 import { bindComputer, isNcFrame, ncEntry, ncFrame } from './sg-computer.js';
 import { bindInfraForms, ifEntry, ifFrame, isIfFrame } from './sg-infra-forms.js';
+import { bindTaskRuns, isTrFrame, trEntry, trFrame } from './sg-task-runs.js';
 import { bindProviders, isPvFrame, pvEntry, pvFrame } from './sg-providers.js';
 import { bindSupervisor, isSvFrame, svEntry, svFrame } from './sg-supervisor.js';
 import { bindMemory, isMmFrame, mmEntry, mmFrame } from './sg-memory.js';
@@ -45,6 +46,8 @@ const inboxFrame = only === 'inbox' && isIbFrame(params.get('frame')) ? params.g
 const computerFrame = only === 'computer-door' && isNcFrame(params.get('frame')) ? params.get('frame') : null;
 // And for infrastructure projects and network targets (?entry=infra-forms&frame=<state>).
 const infraFrame = only === 'infra-forms' && isIfFrame(params.get('frame')) ? params.get('frame') : null;
+// And for coding, infrastructure and network runs in Tasks (?entry=task-runs&frame=<state>).
+const runsFrame = only === 'task-runs' && isTrFrame(params.get('frame')) ? params.get('frame') : null;
 // And for providers and models (?entry=providers&frame=<state>).
 const providersFrame = only === 'providers' && isPvFrame(params.get('frame')) ? params.get('frame') : null;
 // And for releases in Health, the supervisor's deploy and rollback (?entry=supervisor&frame=<state>).
@@ -813,6 +816,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['inbox', 'Messages and quiet hours (for the owner’s reaction)', 'Design first, nothing wired: what Nova tells you on its own, unread and read, each with where it came from; one opened; what quiet hours hold and what happens when they end; and editing them. Drawn from the real model (src/core/triggers.ts): a message traces to a trigger, from an automation or one of Nova’s own parts; read and Let it through are the only actions; held messages go out one by one after quiet hours end, with no digest. A held message no automation sent is withdrawn today, not sent: flagged for the owner.', () => ibEntry((l, h) => state(l, h))],
       ['computer-door', 'Nova’s computer: the door (for the owner’s reaction)', 'Design first, nothing wired: where you meet Nova’s computer and what is inside. Proposed as a category in Settings › What Nova works with, not a new place in the rail (a question for the owner). Drawn from the real model (src/core/computer/, GET /api/v1/computer): Docker on this machine, a workspace per project with one folder, no network unless declared, each command a task with a checkpoint before any change. There is no terminal, screen or file browser, and no on or off: Nova checks Docker and its image, and a workspace is ready, broken or being made. Chat can’t use it yet. Failures are the backend’s own words.', () => ncEntry((l, h) => state(l, h))],
       ['infra-forms', 'Infrastructure projects and network targets (for the owner’s reaction)', 'Design first, nothing wired, every project, target and host made up, no secret value drawn: both lists and their empty state, adding a project and a target with in-place validation in the core’s words, the credential step (the value goes into Nova’s vault and isn’t shown again), a failed first use, and editing. Drawn from the real model (src/core/infra, src/core/network; /api/v1/infra and /network): a project changes only its budget and price sheet, a target only its token. The backend has no remove, rename or readdress route and no connection test on save (the first plan, or a change’s snapshot, is the first use); adding, editing and saving a secret need no passkey; only applies are tier 3, confirmed in Tasks. Those gaps are flagged, not drawn as working.', () => ifEntry((l, h) => state(l, h))],
+      ['task-runs', 'Coding, infrastructure and network runs in Tasks (for the owner’s reaction)', 'Design first, nothing wired, every repository, project, target and host made up. Proposed: one list, Tasks’ own groups, each run one row with its steps inside, not a list per kind: what needs you comes first whatever its kind, and a run’s steps are already tasks in the ledger. Drawn from the real model (src/core/coding, src/core/infra, src/core/network; /api/v1/coding, /infra, /network): each run is a chain of ledger tasks; a coding run writes in Nova’s own worktree, asks before it runs your tests (tier 2) and every time before it merges (tier 3), and never pushes; a plan changes nothing and is priced against its project’s budget, and one that adds cost and ends over it is never offered for the tier-3 apply, which comes after a checkpoint; a network change takes a snapshot, asks every time, and is put back by itself unless Nova hears from a paired phone or browser within the window. Gaps flagged, not drawn as working: no single runs route, no live output while a plan or apply runs, no run-again, no putting a change back while the switch watches, and no cost for coding runs beyond the agent’s own usage.', () => trEntry((l, h) => state(l, h))],
       ['providers', 'Providers and models (for the owner’s reaction)', 'Design first, nothing wired, every address, model and spend made up, no key drawn (keys are vault names; the callback token is a demo): the providers with their health, Check now and each answer it really gives, n8n’s callback token shown once and made anew, what may leave your devices, the roles, waking a computer, the cloud model and its budget, and prices with where each comes from. Proposed inside Settings › Models and providers, the category that already holds both parts. Drawn from the real model (src/core/providers, src/core/models; /api/v1/providers and /models): only a provider with an address can be checked; a command-line one is “Installed.” when its program is found. There is no model warm-up, and Nova can’t show the prices it keeps; those gaps are drawn as gaps, not controls.', () => pvEntry((l, h) => state(l, h))],
       ['supervisor', 'Releases in Health: deploy and go back (for the owner’s reaction)', 'Design first, nothing wired, every version and time made up: the release grown inside Health’s Keeping Nova running, one column at every width. Drawn from the real model (src/supervisor, GET /api/v1/resilience, /supervisor and /version): a release is a git tag; a deploy goes through fixed gates (its slot, its tests, a sandbox start on a copy of your home, five smoke probes, the switch, a canary window, promoted) and goes back by itself if the canary fails; going back by hand is to the one release kept, refused when it would lose what was written since a database upgrade. Both are tier 3 on Nova’s own screen only (a passkey); a paired device follows them read-only. No route lists the tags, nothing says beforehand whether going back would be refused, and while Nova restarts Health can only reconnect: flagged, not drawn as working.', () => svEntry((l, h) => state(l, h))],
       ['memory-surface', 'Memory: search, confirm, correct and export (for the owner’s reaction)', 'Design first, nothing wired, every memory made up: the list by kind, search with results and with none, one memory and where it came from, what Nova kept on its own to confirm, what waits for your OK with the memory gate off (the default) and on, correcting (the old wording is kept, marked corrected), exporting to plain files, and the failures in the backend’s words. Drawn from the real model (src/core/memory.ts, /api/v1/memory; the Memory view’s /api/memory): search matches whole words, not meaning; Nova reads a memory whether or not it is confirmed; export writes memory.json and memory.md on the computer Nova runs on, with no download. The gate has no switch in Settings. Those gaps are flagged, not drawn as working.', () => mmEntry((l, h) => state(l, h))],
@@ -873,6 +877,12 @@ function render() {
     bindInfraForms(sg);
     return;
   }
+  if (runsFrame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => trFrame(runsFrame));
+    bindTaskRuns(sg);
+    return;
+  }
   if (providersFrame) {
     document.body.classList.add('sg-full');
     sg.innerHTML = draw(() => pvFrame(providersFrame));
@@ -922,6 +932,7 @@ function render() {
   bindInbox(sg);
   bindComputer(sg);
   bindInfraForms(sg);
+  bindTaskRuns(sg);
   bindProviders(sg);
   bindSupervisor(sg);
   bindMemory(sg);
