@@ -228,6 +228,9 @@ export function renderModels() {
   const standout = data.standout === 'accept' && !data.recent.some((t) => t.needs_ok);
   const cloud = data.cloud;
   const b = cloud.budget ?? {};
+  // Redrawn on every change (a save, a download's progress, the watcher); the installed list and
+  // its download field stay open if the person opened them.
+  const more = document.querySelector('#models details.model-more')?.open ? ' open' : '';
   return `${head}
 <p class="memory-lede">${esc(lede)}</p>
 ${routes()}
@@ -250,7 +253,7 @@ ${decisionSection()}
   </div>
   <p class="settings-note">Over budget, work that needs the cloud waits and says why; local models stay the default.</p>
   <div class="sheet-actions"><button type="submit" class="btn small">Save budget</button></div></form>
-<details class="raw model-more"><summary>Installed on ${esc(hub?.name ?? 'the hub')} (${data.installed.length})</summary>
+<details class="raw model-more"${more}><summary>Installed on ${esc(hub?.name ?? 'the hub')} (${data.installed.length})</summary>
   <ul class="settings-list">${installedList(data.installed)}</ul>
   <form class="model-form" data-form="pull"><div class="field-row"><label class="field-label">Download another model<input class="field" name="model" autocomplete="off" spellcheck="false" placeholder="name:tag"></label></div>
   <div class="sheet-actions"><button type="submit" class="btn small">Download</button></div></form>
