@@ -372,6 +372,28 @@ function shade(g, ctx, size, pts, cols, bright, small) {
   ctx.drawImage(glCanvas, 0, glCanvas.height - size, size, size, 0, 0, size, size);
 }
 
+// The same material for another drawing (the supernova N, ui/js/n-mark.js, step 1 of the owner's
+// single-mark direction): RIBBON_POINTS points of ribbon, as statusForm gives them, shaded into ctx
+// over what is already there, through the one shared context (Canvas2D without it), in a state's
+// token palette. Returns the renderer used. The status icon itself does not call this.
+export const RIBBON_POINTS = N;
+export function shadeRibbon(ctx, size, pts, { status = 'idle', small = false } = {}) {
+  const [stops, bright] = palettes()[known(status)];
+  const g = webgl();
+  try {
+    // The shared canvas starts at the default 300×150, and shade() grows it by width only: a mark
+    // between 151 and 300 device px would lose its top. Make it square and big enough first.
+    if (g && glCanvas.height < size) glCanvas.width = glCanvas.height = Math.max(glCanvas.width, size);
+    if (g) { shade(g, ctx, size, pts, stops, bright, small); return 'webgl'; }
+  } catch {
+    gl = null;
+  }
+  strokeFallback(ctx, size, pts, stops, bright);
+  return 'canvas2d';
+}
+// A state's six colour stops and brightness, from the current design system's tokens.
+export const ribbonPalette = (status = 'idle') => palettes()[known(status)];
+
 // No WebGL: the same ribbon, stroked flat with the same colours.
 function strokeFallback(ctx, size, pts, cols, bright) {
   const at = (u) => { const t = Math.min(1, Math.max(0, u)) * 5, j = Math.min(4, Math.floor(t)); return mixc(cols[j], cols[j + 1], t - j).map((v) => Math.round(Math.min(1, v * bright) * 255)); };

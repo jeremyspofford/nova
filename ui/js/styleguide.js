@@ -18,6 +18,7 @@ import * as fitEngine from './fit-engine.js';
 import { UC_FRAMES, entryOf, ucEntry, ucFrame } from './sg-compositions.js';
 import { bindStatusIcons, statusIconEntry, statusIconSheet } from './sg-status-icons.js';
 import { bindJarvis, jarvisEntry } from './sg-jarvis.js';
+import { bindNMark, nMarkEntry } from './sg-n-mark.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -781,6 +782,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['ui-settings', 'Settings (proposed)', 'Raycast’s clarity: search first, a category list and a detail pane, no decoration. Top level, and Privacy with a search active.', () => ucEntry(['settings'], (l, h) => state(l, h))],
       ['ui-about', 'About, changelog and pipeline (proposed)', 'The running build said honestly, what changed in plain words, and where Nova stands, each item with its evidence. The dashboard’s data is sample data.', () => ucEntry(['about', 'changelog', 'pipeline'], (l, h) => state(l, h))],
       ['ui-orb', 'Nebula orb and theme (proposed)', 'The swirl from the owner’s icon, drawn at any size from the palette tokens; seven states by motion and light, still and distinct under reduced motion. Use the switch above for Nebula light and dark.', () => ucEntry(['orb'], (l, h) => state(l, h))],
+      ['n-mark', 'The supernova N (proposed)', 'Proposed, not shipped: the ONE mark for Nova, an N rendered like a supernova, black at the heart, the nebula’s colours forming its two uprights and diagonal. Three constructions, A, B and C, in the status icon’s material, still and in the idle palette, from 16 px to the 180 px app icon.', nMarkEntry],
       ['jarvis', 'Jarvis rings (proposed)', 'Compositions for the owner’s reaction, not a shipped theme: a HUD instrument of concentric segmented rings, arc sweeps and fine ticks in one cyan family on near-black, for the same ten states as the status icon. Told apart by structure and motion, also in greyscale and under reduced motion. Red only for stopped, amber only for needs-you.', jarvisEntry],
     ]],
     ['Views', [
@@ -827,6 +829,7 @@ function render() {
   bindHealthSpecimens();
   bindStatusIcons(sg);
   bindJarvis(sg);
+  bindNMark(sg);
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }

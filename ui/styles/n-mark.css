@@ -1,0 +1,34 @@
+/* The supernova N (ui/js/n-mark.js) and its styleguide entry (ui/js/sg-n-mark.js): still
+   compositions for the owner's reaction (single-mark direction 2026-11-08, step 1). The app never
+   loads this file. The tile is near-black and the light surface light in either mode: light-dark()
+   picks whichever of a token pair is dark (or light), as jarvis-rings.css does. */
+.n-mark { display: inline-flex; flex: none; vertical-align: middle; }
+.n-mark canvas { display: block; }
+
+.nm-preview {
+  --nm-black: light-dark(var(--text-primary), var(--bg-base));
+  --nm-paper: light-dark(var(--bg-base), var(--text-primary));
+  --nm-ink: light-dark(var(--bg-raised), var(--text-primary));
+  --nm-bg: color-mix(in oklch, var(--nm-black) 96%, var(--orb-core));
+  --nm-text-2: color-mix(in oklch, var(--nm-ink) 64%, var(--nm-bg));
+}
+.nm-note { margin: 0 0 var(--space-5); max-width: 72ch; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.nm-variants { display: grid; grid-template-columns: repeat(auto-fit, minmax(calc(var(--space-8) * 4.5), 1fr)); gap: var(--space-5); }
+.nm-variant { min-width: 0; }
+.nm-variant .sg-label { margin: var(--space-4) 0 var(--space-2); }
+.nm-name { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-1); color: var(--text-primary); font: var(--type-weight-strong) var(--type-h3)/var(--type-line-tight) var(--font-body); }
+.nm-letter { display: inline-grid; place-items: center; min-width: var(--space-6); min-height: var(--space-6); border-radius: var(--radius-input); background: var(--nm-bg); color: var(--nm-ink); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-mono); }
+.nm-about { margin: 0 0 var(--space-3); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+
+.nm-cell { display: inline-flex; }
+.nm-dark { border-radius: var(--radius-card); background: var(--nm-bg); }
+.nm-hero { display: grid; place-items: center; padding: var(--space-5); }
+.nm-sizes { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-2); padding: var(--space-4); }
+.nm-size { display: grid; justify-items: center; gap: var(--space-2); margin: 0; }
+.nm-caption { color: var(--nm-text-2); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-mono); }
+.nm-icon { display: flex; }
+.nm-light { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-input); background: var(--nm-paper); color: var(--nm-black); font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); }
+.nm-light > span + .nm-cell { margin-left: var(--space-4); }
+
+.nm-sheet { display: inline-grid; grid-template-columns: auto repeat(3, minmax(var(--space-7), auto)); align-items: center; justify-items: center; gap: var(--space-3) var(--space-5); padding: var(--space-4) var(--space-5); }
+.nm-sheet > .nm-row-name { justify-self: start; }
