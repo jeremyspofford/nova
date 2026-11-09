@@ -669,3 +669,38 @@
 .vt-said { margin: 0 0 var(--space-4); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
 .vt-quote { margin: var(--space-2) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
 .vt .confirm { min-height: var(--hit); }
+
+/* ---- The Sheet status icon style (2026-11-09; ui/js/sg-sheet-icons.js) ----
+   The owner's state sheet tiles, cropped (scripts/sheet-icons.js), beside today's Mark. One column at
+   every width; size rows wrap rather than scroll. The tiles carry their own dark rounded frame, so
+   nothing here frames them again. Separators sit on sections and list items, never on a control. */
+.ss-col { flex: 1; overflow: auto; padding: var(--space-5) var(--space-4) var(--space-7); border-top: 1px solid var(--border-subtle); }
+.ss-page { max-width: var(--layout-content-max); margin: 0 auto; }
+.ss-kind { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.ss-lede { margin: 0 0 var(--space-4); }
+.ss-state { margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border-subtle); }
+.ss-h { margin: 0 0 var(--space-2); font: var(--type-weight-strong) var(--type-body)/var(--type-line-tight) var(--font-body); color: var(--text-primary); }
+.ss-label { margin: var(--space-3) 0 var(--space-2); color: var(--text-secondary); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); }
+.ss-sizes { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.ss-mark, .ss-live { display: inline-grid; place-items: center; flex: none; }
+.ss-img { display: block; max-width: 100%; height: auto; }
+.ss-none { padding: var(--space-3) var(--space-4); border: 1px dashed var(--border-strong); border-radius: var(--radius-card); }
+.ss-gap { display: grid; place-items: center; width: calc(var(--space-8) * 2); aspect-ratio: 1; text-align: center; }
+.ss-fig { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); margin: 0; }
+.ss-cap { color: var(--text-secondary); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-body); }
+.ss-cap b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.ss-frames { align-items: flex-start; }
+.ss-frames .ss-fig { width: calc(var(--space-8) * 2); }
+.ss-zoom { display: block; image-rendering: pixelated; }
+.ss-list { margin: 0; padding: 0; list-style: none; }
+.ss-legible { padding: var(--space-4) 0; }
+.ss-legible + .ss-legible { border-top: 1px solid var(--border-subtle); }
+.ss-verdict { margin: var(--space-2) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.ss-word { font-weight: var(--type-weight-strong); }
+.ss-top { margin-inline-end: var(--space-3); }
+.ss-hero { position: relative; }
+.ss-phone { max-width: calc(var(--space-8) * 7); margin-inline: auto; }
+.ss-cards { margin-top: var(--space-3); }
+.ss-card { flex-direction: row; align-items: center; gap: var(--space-3); min-height: var(--hit); }
+.ss-thumb { display: inline-grid; flex: none; }
+.ss-quad { display: grid; grid-template-columns: repeat(2, auto); gap: var(--space-1); }
