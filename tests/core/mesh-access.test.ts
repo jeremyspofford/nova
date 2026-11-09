@@ -70,6 +70,15 @@ test('the console is loopback, addressed to loopback, with no proxy in between; 
     assert.equal((await b.c('GET', '/styles/views.css', undefined, proxied)).status, 401);
     assert.equal((await b.c('GET', '/pair', undefined, { ...proxied, accept: 'text/html' })).status, 200, 'the pairing page is public');
     assert.equal((await b.c('GET', '/js/pair.js', undefined, proxied)).status, 200);
+    // The status icon /pair draws, public on the owner's condition (tests/public-status-icon.test.js);
+    // the app's own scripts stay behind pairing.
+    const icon = await b.c('GET', '/js/status-icon.js', undefined, proxied);
+    assert.equal(icon.status, 200, '/pair’s status icon is served before pairing');
+    assert.match(icon.headers.get('content-type') ?? '', /javascript/);
+    assert.equal((await b.c('GET', '/js/app.js', undefined, proxied)).status, 401, 'the app’s scripts are not');
+    const appNav = await b.c('GET', '/js/app.js', undefined, { ...proxied, accept: 'text/html' });
+    assert.deepEqual([appNav.status, appNav.headers.get('location')], [303, '/pair'], 'opened as a page, it goes to /pair');
+    assert.equal((await b.c('GET', '/styles/status-icon.css', undefined, proxied)).status, 401, 'only the script was allowlisted');
     assert.equal((await b.c('GET', '/design-system.css', undefined, proxied)).status, 200);
     assert.equal((await b.c('GET', '/api/v1/mesh/hello', undefined, proxied)).status, 200);
     assert.equal((await b.c('POST', '/api/v1/memory', { kind: 'fact', content: 'x' }, proxied)).status, 401);
