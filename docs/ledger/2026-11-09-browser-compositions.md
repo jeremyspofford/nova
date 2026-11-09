@@ -1,0 +1,5 @@
+**2026-11-09 · UI rebuild · Nova's browser and the flows library: compositions for the owner's reaction**
+- What changed: the design-first step of the wiring item "browser task start / flows library". /styleguide?entry=browser-tasks, marked for the owner's reaction, has 14 frames built from the real model (src/core/browser): starting a task with the sites it may reach and the sign-in it uses, the live view that already exists, a task asking for the person, finished and failed tasks, the flows library, site sign-ins, and phone and Duo cover layouts. Nothing is wired into the app.
+- What you can now do: react to how browser tasks are started and watched before they are built.
+- Still unfinished: the wiring waits for the owner. Nothing turns words into browser steps, flows can't be edited or retired, and deleting one sign-in on its own is always refused.
+- Checked: tests/ui/browser-styleguide.test.ts 2/2 in Chromium and WebKit, styleguide-coverage, evals, ui-review and lint-scales 33/33, lint:tokens, typecheck. Screenshots are in docs/screenshots/browser-compositions-2026-11-09/.
