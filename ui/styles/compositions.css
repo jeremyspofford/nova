@@ -704,3 +704,35 @@
 .ss-card { flex-direction: row; align-items: center; gap: var(--space-3); min-height: var(--hit); }
 .ss-thumb { display: inline-grid; flex: none; }
 .ss-quad { display: grid; grid-template-columns: repeat(2, auto); gap: var(--space-1); }
+
+/* ---- Approvals in Settings (2026-11-09; ui/js/sg-approval-tiers.js) ----
+   The Automations panes (.au-*) again: Settings' categories beside Approvals. Each part of Nova is a
+   block of its steps on hairlines; a tier is plain words, never a colour. Separators sit on list
+   items and blocks, never on a control. */
+.ap .au-list > * { flex-shrink: 0; }
+.ap .au-detail .uc-back { margin-bottom: var(--space-2); }
+.ap .au-detail .uc-h { overflow-wrap: anywhere; }
+.ap-list, .ap-caps, .ap-guarded, .ap-fixed { margin: 0; padding: 0; list-style: none; }
+.ap-list > li + li, .ap-caps > li + li, .ap-guarded > li + li, .ap-fixed > li + li { border-top: 1px solid var(--border-subtle); }
+.ap-list .au-open { align-items: flex-start; padding-block: var(--space-3); }
+.ap-kind { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.ap-caps { margin-bottom: var(--space-4); }
+.ap-cap { padding: var(--space-4) 0; }
+.ap-cap-name { margin: 0 0 var(--space-2); color: var(--text-primary); font: var(--type-weight-strong) var(--type-body)/var(--type-line-tight) var(--font-body); }
+.ap-steps { margin: 0; }
+.ap-step { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-1) var(--space-4); padding: var(--space-2) 0; }
+.ap-step + .ap-step { border-top: 1px solid var(--border-subtle); }
+.ap-step dt { flex: 1 1 calc(var(--space-8) * 4); margin: 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.ap-step dd { display: flex; flex-direction: column; align-items: flex-end; margin: 0; text-align: end; }
+.ap-tier { color: var(--text-primary); font: var(--type-weight-strong) var(--type-small)/var(--type-line-body) var(--font-body); }
+.ap-how { color: var(--text-secondary); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-body); }
+.ap-open { margin-top: var(--space-2); margin-inline: calc(-1 * var(--space-4)); }
+.ap-guarded > li { padding: var(--space-2) 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+.ap-guarded { margin-bottom: var(--space-4); }
+.ap-fixed > li { padding: var(--space-3) 0; }
+.ap-perm { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; }
+.ap-perms { margin-bottom: var(--space-4); }
+.ap-said { margin: 0 0 var(--space-4); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.ap-quote { margin: var(--space-2) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.ap-perm .au-text { flex: 1; }
+.ap .confirm { min-height: var(--hit); }
