@@ -40,3 +40,22 @@ The owner also asked: "these can all be changed later in settings right?"
 NOVA-SPEC §6 lists "changing devices/home state" under tier 2 (ask first). The owner overrides
 that for Home Assistant: a call the person asks for directly is tier 1. The spec text should be
 amended to say so (see the integrator's report for the exact place).
+
+## Follow-up ruling, 2026-11-09: automations and schedules
+
+The integrator asked: the ruling speaks of calls the person asks for, but the connector runs every
+service call at `service_tier`, including one an automation or schedule starts (a rule that unlocks
+the door at 6 pm). Should those run without asking too, or ask first?
+
+Owner answer, verbatim:
+
+> 1 yes run freely.
+
+5. **Home Assistant calls an automation or schedule starts are tier 1 too.** They run without an
+   approval, act and report, like a call the person asks for: the person made the rule. This is
+   what the connector already does (it runs every call at `service_tier`), so no code changes.
+   The constraints above still hold where they apply: a run that has read outside content still
+   asks before a Home Assistant call, and the `service_tier` and `tier3_domains` settings raise
+   every call, whoever starts it.
+
+The owner also agreed to a Settings screen for approval tiers, design first.
