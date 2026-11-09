@@ -7,7 +7,7 @@
 // provider that prints its token leaves it nowhere.
 import { mkdirSync } from 'node:fs';
 import { CoreError } from '../errors.ts';
-import { runLines, tail, which } from '../providers/cli.ts';
+import { runLines, tail, which, whichAsync } from '../providers/cli.ts';
 import type { Redactor } from '../browser/logins.ts';
 
 export type Action = 'create' | 'update' | 'delete' | 'replace' | 'read' | 'no-op';
@@ -108,6 +108,19 @@ export function openTofu(o: { path: () => string }) {
   const command = 'tofu';
   // Where its command is, or null: Nova never installs one.
   const where = (): string | null => which(command, o.path());
+  // Whether it is installed, for the health check: the last lookup's answer (null before the
+  // first), looked up again off the request path when it is a minute old. A blocking lookup on
+  // every health check held the event loop for up to a second and a half on a long WSL PATH, so a
+  // health probe timed out and a release's canary rolled back a healthy release.
+  let seen: { found: boolean; at: number } | null = null;
+  let looking = false;
+  const installed = (): boolean | null => {
+    if (!looking && (!seen || Date.now() - seen.at > 60_000)) {
+      looking = true;
+      void whichAsync(command, o.path()).then((p) => { seen = { found: !!p, at: Date.now() }; }, () => {}).finally(() => { looking = false; });
+    }
+    return seen?.found ?? null;
+  };
   const run = async (c: ToolContext, args: string[]): Promise<ToolRun> => {
     const bin = where();
     if (!bin) throw new CoreError('conflict', `OpenTofu isn’t on this computer (no ${command} on PATH). Nova doesn’t install it; once it is installed, plan again.`);
@@ -124,6 +137,7 @@ export function openTofu(o: { path: () => string }) {
   return {
     id: 'opentofu', name: 'OpenTofu',
     where,
+    installed,
     init: async (c: ToolContext): Promise<ToolRun> => must(await run(c, ['init', '-input=false', '-no-color']), '`tofu init`'),
     // Writes the saved plan to `out`; `changes` is whether it changes anything.
     async plan(c: ToolContext, out: string, { destroy }: { destroy: boolean }): Promise<ToolRun & { changes: boolean }> {

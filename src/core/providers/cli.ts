@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { trackChild } from '../children.ts';
 import { inheritedChildEnv } from '../child-env.ts';
 import { accessSync, constants, statSync } from 'node:fs';
+import { access, stat } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
 
 // The words of a command as a person writes it in a setting: spaces separate, quotes group.
@@ -35,6 +36,21 @@ export function which(program: string, path = process.env.PATH ?? ''): string | 
   for (const dir of path.split(delimiter).filter(Boolean)) {
     const p = join(dir, program);
     if (ok(p)) return p;
+  }
+  return null;
+}
+
+// The same, without holding the event loop: a PATH lookup is a stat per folder, and a folder on a
+// slow mount (WSL's /mnt/c, a network share) costs tens of milliseconds each. For lookups made while
+// Nova serves requests (a health check), not just before a run.
+export async function whichAsync(program: string, path = process.env.PATH ?? ''): Promise<string | null> {
+  const ok = async (p: string) => {
+    try { await access(p, constants.X_OK); return (await stat(p)).isFile(); } catch { return false; }
+  };
+  if (program.includes('/')) return isAbsolute(program) && await ok(program) ? program : null;
+  for (const dir of path.split(delimiter).filter(Boolean)) {
+    const p = join(dir, program);
+    if (await ok(p)) return p;
   }
   return null;
 }

@@ -30,6 +30,7 @@ import { bindProviders, isPvFrame, pvEntry, pvFrame } from './sg-providers.js';
 import { bindSupervisor, isSvFrame, svEntry, svFrame } from './sg-supervisor.js';
 import { bindMemory, isMmFrame, mmEntry, mmFrame } from './sg-memory.js';
 import { bindVault, isVtFrame, vtEntry, vtFrame } from './sg-vault.js';
+import { bindSheetIcons, isSsFrame, ssEntry, ssFrame } from './sg-sheet-icons.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -62,6 +63,8 @@ const supervisorFrame = only === 'supervisor' && isSvFrame(params.get('frame')) 
 const memoryFrame = only === 'memory-surface' && isMmFrame(params.get('frame')) ? params.get('frame') : null;
 // And for the vault: names, delete and reset (?entry=vault&frame=<state>).
 const vaultFrame = only === 'vault' && isVtFrame(params.get('frame')) ? params.get('frame') : null;
+// And for the Sheet status icon style (?entry=sheet-icon-style&frame=<state>).
+const sheetFrame = only === 'sheet-icon-style' && isSsFrame(params.get('frame')) ? params.get('frame') : null;
 
 // ---- sample content: what Nova really shows, with neutral names ------------------------------
 
@@ -829,6 +832,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['supervisor', 'Releases in Health: deploy and go back (for the owner’s reaction)', 'Design first, nothing wired, every version and time made up: the release grown inside Health’s Keeping Nova running, one column at every width. Drawn from the real model (src/supervisor, GET /api/v1/resilience, /supervisor and /version): a release is a git tag; a deploy goes through fixed gates (its slot, its tests, a sandbox start on a copy of your home, five smoke probes, the switch, a canary window, promoted) and goes back by itself if the canary fails; going back by hand is to the one release kept, refused when it would lose what was written since a database upgrade. Both are tier 3 on Nova’s own screen only (a passkey); a paired device follows them read-only. No route lists the tags, nothing says beforehand whether going back would be refused, and while Nova restarts Health can only reconnect: flagged, not drawn as working.', () => svEntry((l, h) => state(l, h))],
       ['memory-surface', 'Memory: search, confirm, correct and export (for the owner’s reaction)', 'Design first, nothing wired, every memory made up: the list by kind, search with results and with none, one memory and where it came from, what Nova kept on its own to confirm, what waits for your OK with the memory gate off (the default) and on, correcting (the old wording is kept, marked corrected), exporting to plain files, and the failures in the backend’s words. Drawn from the real model (src/core/memory.ts, /api/v1/memory; the Memory view’s /api/memory): search matches whole words, not meaning; Nova reads a memory whether or not it is confirmed; export writes memory.json and memory.md on the computer Nova runs on, with no download. The gate has no switch in Settings. Those gaps are flagged, not drawn as working.', () => mmEntry((l, h) => state(l, h))],
       ['vault', 'The vault: secret names, deleting one, starting over (for the owner’s reaction)', 'Design first, nothing wired, every secret made up and no value ever drawn: the names grouped by the part of Nova that uses each, a provider’s secret with replacing and deleting it (tier 3, what stops said first), a connection’s secret removed where it is used, one of Nova’s own keys, starting a new vault (tier 3) with a passkey, with none added, and from a paired phone, and a vault that can’t open (the backend’s words). Drawn from the real model (src/core/vault.ts; GET, PUT and DELETE /api/v1/vault/{name}, POST /vault/reset): the vault deletes only providers’ secrets; deleting one and starting over are tier 3, every time, for approving devices only, with a passkey on Nova’s own screen and the box alone on a paired phone allowed to approve; a reset sets the old file aside and leaves its key where it was; no route says which part of Nova uses a secret. Those gaps are flagged, not drawn as working.', () => vtEntry((l, h) => state(l, h))],
+      ['sheet-icon-style', 'The Sheet status icon style (for the owner’s reaction)', 'Design first, nothing wired: your agent state sheet’s eight tiles kept as a second status icon style to choose from, beside today’s Mark. Each tile is your artwork, cropped pixel for pixel with its rounded frame by scripts/sheet-icons.js (246 px, the most the sheet gives), never redrawn; a state is a crop, and a change crossfades the crops by the real model’s weights (ui/js/status-icon.js: 800 ms on its ease, success settling to idle by itself). Every state at 16 to 180 px beside the Mark, an honest look at 16 and 24 px, the rail, the empty chat’s hero and a phone’s top bar, and a proposed choice in Appearance. Amber is only WARNING for needs-you, red only ERROR for stopped. Listening and speaking have no tile: drawn as gaps with the candidates, not picked.', () => ssEntry((l, h) => state(l, h))],
       ['jarvis', 'Jarvis rings (proposed)', 'Compositions for the owner’s reaction, not a shipped theme: a HUD instrument of concentric segmented rings, arc sweeps and fine ticks in one cyan family on near-black, for the same ten states as the status icon. Told apart by structure and motion, also in greyscale and under reduced motion. Red only for stopped, amber only for needs-you.', jarvisEntry],
     ]],
     ['Views', [
@@ -927,6 +931,12 @@ function render() {
     bindVault(sg);
     return;
   }
+  if (sheetFrame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => ssFrame(sheetFrame));
+    bindSheetIcons(sg);
+    return;
+  }
   const one = ([id, name, about, body]) => `<article class="sg-entry" id="sg-${id}" aria-labelledby="sg-${id}-name"><header class="sg-entry-head"><h3 class="sg-entry-name" id="sg-${id}-name">${name}</h3><a class="sg-alone" href="?entry=${id}">Open alone</a></header><p class="sg-about">${about}</p>${draw(body)}</article>`;
   if (shown) {
     sg.innerHTML = shown.length ? `<p class="sg-back"><a class="link" href="/styleguide#sg-${only}">The whole styleguide</a></p>${shown.map(one).join('')}` : `<p class="sg-about">No entry is called “${only.replace(/[<>&"]/g, '')}”. <a class="link" href="/styleguide">The whole styleguide</a></p>`;
@@ -959,6 +969,7 @@ function render() {
   bindSupervisor(sg);
   bindMemory(sg);
   bindVault(sg);
+  bindSheetIcons(sg);
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }

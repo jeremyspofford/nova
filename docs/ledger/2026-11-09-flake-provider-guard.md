@@ -1,0 +1,5 @@
+**2026-11-09 · Tests · The provider-guard flake: the fake claude and codex lost their last line**
+- What changed: scripts/stand-ins/fake-claude.js and fake-codex.js called process.exit() right after writing to stdout. On a pipe Node writes asynchronously, so exit threw away output the reader hadn't taken yet. The provider-guard test's 201-file run writes about 160 KB, more than the 64 KB pipe buffer, so its final result line was sometimes lost and Nova rightly reported "ended without a result". Both stand-ins now set process.exitCode and let stdout drain.
+- What you can now do: trust a provider-guard failure in CI; this one no longer appears at random.
+- Still unfinished: fake-tofu.js has the same pattern, but its output is small, well under the pipe buffer; left as is.
+- Checked: before, the single test failed 4 of 10 runs, every time with "ended (exit 0) without a result"; with the reader held back 1 s, the stand-in delivered 176 of 405 lines before and 405 after. After the fix it passed 30 of 30, and 10 of 10 with 16 CPU spinners; provider-guard and m8-relay-real ran clean 3 times.
