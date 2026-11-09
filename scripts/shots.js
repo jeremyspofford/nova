@@ -986,7 +986,10 @@ await golden({ theme: 'obsidian', mode: 'dark' }, 'obsidian');
   await p.goto(`${base}/styleguide`);
   await p.waitForSelector('.sg-section');
   await p.waitForTimeout(400);
-  await p.screenshot({ path: join(out, 'styleguide.png'), fullPage: true });
+  // Chrome can't capture an image taller than 16384 px, and the styleguide has outgrown that: keep
+  // the top of it. The check below still covers the whole page.
+  const tall = await p.evaluate(() => document.documentElement.scrollHeight);
+  await p.screenshot({ path: join(out, 'styleguide.png'), fullPage: true, clip: { x: 0, y: 0, width: p.viewportSize().width, height: Math.min(tall, 16000) } });
   check('style reference renders without errors', p.errors.length === 0, p.errors.join(' | '));
 }
 
