@@ -1,5 +1,5 @@
 // The agent status icon's preview (/styleguide?entry=status-icon), in Chromium and WebKit: Nova's mark,
-// the owner's artwork, drawn by every state's treatment at 16, 24 and 96 px with its name as its
+// the owner's artwork, drawn by every state's treatment at 16, 24 and 48 px with its name as its
 // label; canvases that aren't blank; looping states that move; a reduced-motion switch that leaves
 // still frames and swaps without a transition; success settling to idle by itself; the mid-transition
 // demo; and the 180 px hero drawn whole. With NOVA_UI_SHOTS set: the entry at desktop 1440×900 and
@@ -16,7 +16,7 @@ import { loadConfig } from '../../src/config.js';
 import { ensureMark } from '../../src/core/resilience/home-mark.ts';
 
 const STATES = ['idle', 'listening', 'thinking', 'working', 'speaking', 'needs-you', 'success', 'paused', 'stopped', 'offline'];
-const SIZES = [16, 24, 96];
+const SIZES = [16, 24, 48];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function fixture(run: (base: string) => Promise<void>) {
@@ -91,7 +91,7 @@ function assertDrawn(cells: Awaited<ReturnType<typeof drawn>>, label: string, re
 const webglChromium = () => chromium.launch({ executablePath: chromiumPath(), args: ['--disable-background-networking', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'] });
 
 for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], ['webkit', webkitBrowser, null]] as const) {
-  test(`Status icon ${engine}: every state at 16/24/96 labelled and drawn; motion, reduced motion, success and retargeting`, { timeout: 600_000 }, async () => {
+  test(`Status icon ${engine}: every state at 16/24/48 labelled and drawn; motion, reduced motion, success and retargeting`, { timeout: 600_000 }, async () => {
     let b: Browser | undefined;
     try {
       const launched = await launch();
@@ -197,8 +197,8 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         if (dir && engine === 'chromium') {
           await p.evaluate(() => (document.querySelector('[data-si-hero] .status-icon') as HTMLElement & { setStatus: (s: string) => void }).setStatus('idle'));
           // Catch a success replay from its start, then wait out its 800 ms change: fully swept in.
-          const label96 = (page: Page, l: string) => page.waitForFunction((x) => document.querySelector('[data-si-cell="success-96"] .status-icon')!.getAttribute('aria-label') === x, l, { timeout: 5000 });
-          const flourishing = async (page: Page) => { await label96(page, 'idle'); await label96(page, 'success'); await sleep(850); };
+          const label48 = (page: Page, l: string) => page.waitForFunction((x) => document.querySelector('[data-si-cell="success-48"] .status-icon')!.getAttribute('aria-label') === x, l, { timeout: 5000 });
+          const flourishing = async (page: Page) => { await label48(page, 'idle'); await label48(page, 'success'); await sleep(850); };
           await flourishing(p);
           await p.screenshot({ path: join(dir, 'entry-desktop-1440x900-nebula-dark.png') });
           await p.screenshot({ path: join(dir, 'entry-desktop-1440x900-nebula-dark-full.png'), fullPage: true });
@@ -340,7 +340,7 @@ test('Status icon chromium at 2×: 96 and 112 px keep their top; a small icon af
 // No WebGL at all (a browser without it, or one whose context is refused): the Canvas2D fallback
 // draws every state, at every size, sized from creation and not blank; and changes still land.
 for (const [engine, launch] of [['chromium', webglChromium], ['webkit', webkitBrowser]] as const) {
-  test(`Status icon ${engine}, WebGL refused: the Canvas2D fallback draws every state at 16/24/96`, { timeout: 300_000 }, async () => {
+  test(`Status icon ${engine}, WebGL refused: the Canvas2D fallback draws every state at 16/24/48`, { timeout: 300_000 }, async () => {
     let b: Browser | undefined;
     try {
       const launched = await launch();

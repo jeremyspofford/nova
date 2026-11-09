@@ -1,18 +1,18 @@
 // The status icon's preview in the living styleguide (/styleguide?entry=status-icon): Nova's mark,
 // the owner's artwork, at 16, 24, 48, 96 and 180 px; the two crops side by side (the tile, chosen,
-// and the vortex alone); every state's treatment at 16, 24 and 96 px; and a 180 px hero with a
+// and the vortex alone); every state's treatment at 16, 24 and 48 px; and a 180 px hero with a
 // button per state, a change mid-transition and a reduced-motion switch. Demo only: nothing here
 // reaches Nova.
 import { STATUS_ICON_STATES, setReducedMotion, statusIcon } from './status-icon.js';
 
-const SIZES = [16, 24, 96];
+const SIZES = [16, 24, 48];
 const MARK_SIZES = [16, 24, 48, 96, 180];
 const CROPS = [['/icons/mark-1024.webp', 'The tile (chosen): the artwork’s own dark rounded tile'], ['/icons/mark-vortex-512.webp', 'The vortex alone, its near-black keyed out']];
 let forced = null;
 // The demo first lets the hero settle at idle, so the change always starts from the same place.
 const MIDWAY_START = 900;
 
-// Every state at 16, 24 and 96 px; also drawn on the Nebula acceptance entry (nebula-match).
+// Every state at 16, 24 and 48 px; also drawn on the Nebula acceptance entry (nebula-match).
 export function statusIconSheet() {
   const cells = STATUS_ICON_STATES.map((s) => `<span class="sg-name">${s}</span>${SIZES.map((px) => `<span class="si-tile" data-si-cell="${s}-${px}"></span>`).join('')}`).join('');
   return `<div class="si-sheet" data-si-sheet><span></span>${SIZES.map((px) => `<span class="sg-name">${px} px</span>`).join('')}${cells}</div>`;
