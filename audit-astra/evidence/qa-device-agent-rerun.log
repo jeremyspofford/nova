@@ -1,0 +1,31 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+✖ M4b: join by the one-line command, Online, offline queue across a hub outage (exactly once), revocation (13764.037699ms)
+✔ M4b over HTTPS: NOVA_CA_FILE carries trust to curl, the boot agent and the runtime (8112.983797ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 22541.092011
+
+✖ failing tests:
+
+test at tests/acceptance/m4b-device-agent.test.ts:23:1
+✖ M4b: join by the one-line command, Online, offline queue across a hub outage (exactly once), revocation (13764.037699ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(!alive(first))
+  
+      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/acceptance/m4b-device-agent.test.ts:103:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

@@ -1,0 +1,68 @@
+{
+  "pipelineSelected": [
+    {
+      "id": "M4",
+      "state": "merged"
+    },
+    {
+      "id": "2026-11-09-memory-compositions",
+      "state": "merged"
+    },
+    {
+      "id": "2026-11-08-jarvis-compositions",
+      "state": "merged"
+    },
+    {
+      "id": "2026-11-09-adr-provider-plurality",
+      "state": "merged"
+    }
+  ],
+  "memoryRace": {
+    "paintOrder": [
+      {
+        "sections": [
+          {
+            "title": "Facts",
+            "entries": []
+          }
+        ],
+        "days": [],
+        "candidates": [],
+        "titles": {}
+      },
+      {
+        "sections": [
+          {
+            "title": "Facts",
+            "entries": [
+              {
+                "id": "synthetic-old-memory",
+                "text": "Synthetic memory removed by the newer read"
+              }
+            ]
+          }
+        ],
+        "days": [],
+        "candidates": [],
+        "titles": {}
+      }
+    ],
+    "final": {
+      "sections": [
+        {
+          "title": "Facts",
+          "entries": [
+            {
+              "id": "synthetic-old-memory",
+              "text": "Synthetic memory removed by the newer read"
+            }
+          ]
+        }
+      ],
+      "days": [],
+      "candidates": [],
+      "titles": {}
+    },
+    "staleResponseWon": true
+  }
+}

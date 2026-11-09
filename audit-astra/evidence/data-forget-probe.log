@@ -1,0 +1,42 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{
+  "scenario": "corrected-memory-forget",
+  "before": [
+    {
+      "id": "n12ab3ffd",
+      "source": "memory/2026-11-09.md",
+      "text": "The synthetic redwood cabin has code 7284."
+    }
+  ],
+  "removed": [
+    "The fictional apartment uses a brass key."
+  ],
+  "after": [
+    {
+      "id": "n12ab3ffd",
+      "source": "memory/2026-11-09.md",
+      "text": "The synthetic redwood cabin has code 7284."
+    }
+  ],
+  "coreRecords": []
+}
+{
+  "scenario": "day-note-forget-backup",
+  "noteId": "n3e999afd",
+  "removed": [
+    "AUDIT_CANARY_DAYNOTE synthetic orchard access phrase."
+  ],
+  "liveHasCanary": false,
+  "backupHasCanary": true,
+  "restoredHasCanary": true
+}
+{
+  "scenario": "export-after-forget",
+  "jsonHasCanary": true,
+  "markdownHasCanary": true,
+  "exportFolderUnderHome": true
+}
+{
+  "syntheticFixture": "/tmp/nova-astra-data-probe-MzD3aT"
+}
+no-Kubernetes tripwire: never fired

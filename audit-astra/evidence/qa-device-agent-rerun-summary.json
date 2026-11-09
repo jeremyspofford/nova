@@ -1,0 +1,5 @@
+{
+  "command": "sh scripts/test.sh tests/acceptance/m4b-device-agent.test.ts",
+  "exit_code": 1,
+  "duration_seconds": 22.66
+}

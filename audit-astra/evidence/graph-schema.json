@@ -1,0 +1,298 @@
+{
+  "baseline": "d948aa0a442a9f930b86f4516eeea21981b76714",
+  "database": ":memory:",
+  "migration": {
+    "from": 0,
+    "to": 27,
+    "applied": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ],
+    "backup": null
+  },
+  "graph_nodes": false,
+  "graph_edges": false,
+  "schema": [
+    {
+      "name": "backup_drill",
+      "type": "table"
+    },
+    {
+      "name": "backup_run",
+      "type": "table"
+    },
+    {
+      "name": "browser_site",
+      "type": "table"
+    },
+    {
+      "name": "capture_batch",
+      "type": "table"
+    },
+    {
+      "name": "capture_device_sync",
+      "type": "table"
+    },
+    {
+      "name": "capture_device_tombstone",
+      "type": "table"
+    },
+    {
+      "name": "capture_event",
+      "type": "table"
+    },
+    {
+      "name": "capture_promotion",
+      "type": "table"
+    },
+    {
+      "name": "capture_proposal",
+      "type": "table"
+    },
+    {
+      "name": "capture_raw_fetch",
+      "type": "table"
+    },
+    {
+      "name": "capture_screen_cache",
+      "type": "table"
+    },
+    {
+      "name": "capture_source",
+      "type": "table"
+    },
+    {
+      "name": "capture_tombstone",
+      "type": "table"
+    },
+    {
+      "name": "change_record",
+      "type": "table"
+    },
+    {
+      "name": "cloud_usage",
+      "type": "table"
+    },
+    {
+      "name": "coding_run",
+      "type": "table"
+    },
+    {
+      "name": "computer_checkpoint",
+      "type": "table"
+    },
+    {
+      "name": "computer_run",
+      "type": "table"
+    },
+    {
+      "name": "computer_workspace",
+      "type": "table"
+    },
+    {
+      "name": "console_passkey",
+      "type": "table"
+    },
+    {
+      "name": "decision_record",
+      "type": "table"
+    },
+    {
+      "name": "decision_template",
+      "type": "table"
+    },
+    {
+      "name": "decision_template_event",
+      "type": "table"
+    },
+    {
+      "name": "device",
+      "type": "table"
+    },
+    {
+      "name": "device_hardware",
+      "type": "table"
+    },
+    {
+      "name": "device_heartbeat",
+      "type": "table"
+    },
+    {
+      "name": "device_inbox",
+      "type": "table"
+    },
+    {
+      "name": "device_overhead",
+      "type": "table"
+    },
+    {
+      "name": "device_session",
+      "type": "table"
+    },
+    {
+      "name": "device_wake",
+      "type": "table"
+    },
+    {
+      "name": "device_workload",
+      "type": "table"
+    },
+    {
+      "name": "device_workload_event",
+      "type": "table"
+    },
+    {
+      "name": "device_workload_report",
+      "type": "table"
+    },
+    {
+      "name": "extension",
+      "type": "table"
+    },
+    {
+      "name": "file_provenance",
+      "type": "table"
+    },
+    {
+      "name": "infra_project",
+      "type": "table"
+    },
+    {
+      "name": "infra_resource",
+      "type": "table"
+    },
+    {
+      "name": "infra_run",
+      "type": "table"
+    },
+    {
+      "name": "ingest_hold",
+      "type": "table"
+    },
+    {
+      "name": "ingest_screen",
+      "type": "table"
+    },
+    {
+      "name": "join_request",
+      "type": "table"
+    },
+    {
+      "name": "memory",
+      "type": "table"
+    },
+    {
+      "name": "memory_candidate",
+      "type": "table"
+    },
+    {
+      "name": "memory_event",
+      "type": "table"
+    },
+    {
+      "name": "mesh_state",
+      "type": "table"
+    },
+    {
+      "name": "message",
+      "type": "table"
+    },
+    {
+      "name": "model_version",
+      "type": "table"
+    },
+    {
+      "name": "network_change",
+      "type": "table"
+    },
+    {
+      "name": "network_target",
+      "type": "table"
+    },
+    {
+      "name": "pairing",
+      "type": "table"
+    },
+    {
+      "name": "problem",
+      "type": "table"
+    },
+    {
+      "name": "problem_playbook",
+      "type": "table"
+    },
+    {
+      "name": "profile",
+      "type": "table"
+    },
+    {
+      "name": "receipt",
+      "type": "table"
+    },
+    {
+      "name": "schema_migrations",
+      "type": "table"
+    },
+    {
+      "name": "session_signature",
+      "type": "table"
+    },
+    {
+      "name": "sqlite_sequence",
+      "type": "table"
+    },
+    {
+      "name": "sync_log",
+      "type": "table"
+    },
+    {
+      "name": "sync_state",
+      "type": "table"
+    },
+    {
+      "name": "task",
+      "type": "table"
+    },
+    {
+      "name": "task_event",
+      "type": "table"
+    },
+    {
+      "name": "trigger",
+      "type": "table"
+    },
+    {
+      "name": "trigger_rule",
+      "type": "table"
+    },
+    {
+      "name": "trigger_rule_event",
+      "type": "table"
+    }
+  ]
+}

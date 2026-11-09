@@ -1,0 +1,11 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+file:///workspace/nova-audit-astra/audit-astra/diagnostics/data-recall-probe.mjs:18
+ const screensBefore=c.ingest.records().length;
+                              ^
+
+TypeError: c.ingest.records is not a function
+    at file:///workspace/nova-audit-astra/audit-astra/diagnostics/data-recall-probe.mjs:18:31
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+
+Node.js v26.3.1
+no-Kubernetes tripwire: never fired

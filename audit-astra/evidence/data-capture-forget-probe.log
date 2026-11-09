@@ -1,0 +1,27 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{
+  "scenario": "capture-forget-with-unavailable-backup",
+  "deleted": {
+    "forgotten": [
+      "49a64c52-db9a-429e-970a-69cacbdcd1d9"
+    ],
+    "memories": [],
+    "elsewhere": [],
+    "everywhere": true,
+    "said": "Deleted everywhere."
+  },
+  "owed": [
+    {
+      "kind": "folder",
+      "forgets": 1
+    }
+  ],
+  "backupStillHasEvent": true,
+  "backupStillHasCanary": true
+}
+{
+  "scenario": "backup-returned-and-owed-forget-applied",
+  "applied": 1,
+  "eventsLeft": 0
+}
+no-Kubernetes tripwire: never fired

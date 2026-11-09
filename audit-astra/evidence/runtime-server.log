@@ -1,0 +1,4 @@
+Seeded 8 files into /tmp/nova-astra-main-20261109
+Nova is ready at http://localhost:4418  (365 ms)
+Home: /tmp/nova-astra-main-20261109
+Warning: whoever reaches port 4418 from this computer controls Nova completely. Don’t point a port forward, tunnel or proxy at it; other devices pair at the mesh address (NOVA_MESH_URL) instead.

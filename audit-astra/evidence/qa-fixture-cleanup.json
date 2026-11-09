@@ -1,0 +1,9 @@
+{
+  "container": "7d2c0ba4c5c134eeb88b741a98ee28a78ba4545645f19634de1eb476f79147af",
+  "validated_audit_fixture_mounts": [
+    "/tmp/nova-test-Piqfcj/nova-m10a-BlZhsE/nova-home/workers/computer/wb3a60775cd/project"
+  ],
+  "cleanup_exit_code": 0,
+  "output": "7d2c0ba4c5c134eeb88b741a98ee28a78ba4545645f19634de1eb476f79147af\n",
+  "scope": "Only this run\u2019s failed M10a synthetic container removed; pre-existing containers/images untouched."
+}

@@ -1,0 +1,32 @@
+id,category,severity,priority,title,detail_source,baseline,deployed,status
+NOVA-001,defect,high,P0,Revalidate privacy before an inference fallback sends context,contributions/privacy.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-020,defect,high,P1,Dated-note paths do not honor the core memory deletion lifecycle,contributions/data-integrity.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-023,defect,high,P1,A forgotten note remains in the next step of an active chat,contributions/data-integrity.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-021,defect,medium,P1,Capture reports global deletion while a backup still owes it,contributions/data-integrity.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-005,unmet commitment,high,P1,Preserve capture provenance and screen it at recall before model context,contributions/privacy.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-002,investigation,high,P1,Resolve “local-only” versus the cloud-screening exception,contributions/privacy.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-003,unmet commitment,high,P1,Complete broker consumer migration before claiming broker-only credential access,contributions/privacy.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-004,investigation,high potential,P1,Establish all-process local-only enforcement and evidence,contributions/privacy.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-081,defect,medium,P1,Older Memory reads can redraw content after a newer read removed it,contributions/product-map.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-086,defect,medium,P1,Keeping an imported memory changes its source label to a conversation,contributions/product-map.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-085,defect,medium,P1,First-use import instructions name the wrong host folder,contributions/product-map.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-084,defect,medium,P1,"Home implies a daily Brief can be configured, but the card has no workflow",contributions/product-map.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-040,defect,medium,P1,Replace the obsolete entry-point documentation with the current product contract,contributions/qa-delivery.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-082,unmet commitment,medium,P1,Finish the Memory workflow before expanding the knowledge graph,contributions/product-map.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-083,unmet commitment,medium,P2,Complete ordinary rule authoring instead of exposing an empty rule collection,contributions/product-map.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-080,defect,medium,P1,Pipeline misclassifies design work and hides the evidence needed to judge it,contributions/product-map.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-041,unmet commitment,medium,P2,Complete the promised release version/tag workflow,contributions/qa-delivery.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-006,improvement,medium,P2,Explain what cloud chat receives before the first send,contributions/privacy.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-042,improvement,medium,P2,Make new serious accessibility regressions fail a targeted CI gate,contributions/qa-delivery.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-120,defect,medium,P2,idle and thinking are visually identical in the Canvas2D fallback,contributions/visual-review.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-121,improvement,medium,P2,Home's first short-height viewport contains no useful action or work state,contributions/visual-review.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-100,improvement,medium,P2,Distinguish running health from capability readiness,contributions/runtime-experience.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-044,improvement,medium,P2,Qualify Docker capabilities before reporting Nova Computer available,contributions/qa-delivery.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-043,defect,low,P2,Send M9 screenshots to the configured evidence directory,contributions/qa-delivery.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-045,investigation,high potential,P1,Qualify the failed process-lifecycle checks on a compatible host,contributions/runtime-experience.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-046,investigation,low,P3,Recheck narrow-tablet prose width with the optional pane open,contributions/runtime-experience.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-022,improvement,low,P3,Explain the boundary of user-requested memory exports,contributions/data-integrity.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-060,investigation,medium planning risk,P2 gated,Establish the real graph baseline and its gated design,contributions/knowledge-plan.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-061,improvement,opportunity,P2 gated,Make a memory's source trail a small usable graph/list,contributions/knowledge-plan.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-062,improvement,opportunity,P3 gated,Build the bounded 2D knowledge workspace,contributions/knowledge-plan.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only
+NOVA-063,improvement,opportunity,P3 gated,Add an operational and temporal lens before evaluating3D,contributions/knowledge-plan.md,d948aa0a442a9f930b86f4516eeea21981b76714,unknown,open; audit only

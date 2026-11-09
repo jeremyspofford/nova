@@ -1,0 +1,116 @@
+{"route":"/","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/chat","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/new","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+page.goto: Timeout 30000ms exceeded.
+Call log:
+[2m  - navigating to "http://127.0.0.1:4418/tasks", waiting until "domcontentloaded"[22m
+
+    at /workspace/nova-audit-astra/audit-astra/diagnostics/ui-sweep.mjs:14:37 {
+  name: 'TimeoutError'
+}
+
+Node.js v26.3.1
+{"route":"/tasks","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/memory","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/automations","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+page.goto: Timeout 15000ms exceeded.
+Call log:
+[2m  - navigating to "http://127.0.0.1:4418/skills", waiting until "commit"[22m
+
+    at /workspace/nova-audit-astra/audit-astra/diagnostics/ui-sweep.mjs:15:37 {
+  name: 'TimeoutError'
+}
+
+Node.js v26.3.1
+{"route":"/skills","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/activity","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/health","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/capture","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/topology","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/about","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/changelog","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/pipeline","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/styleguide?entry=jarvis","posture":"desktop","overflow":0,"errors":[]}
+{"route":"/pair","posture":"desktop","overflow":0,"errors":[]}
+{"route":"/settings?cat=you","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=appearance","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=privacy","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=connections","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=models","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=devices","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=capture","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=services","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=about","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=security","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=backups","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=config","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/settings?cat=danger","posture":"desktop","overflow":0,"violations":[],"errors":[]}
+{"route":"/","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/chat","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/new","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/tasks","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/memory","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/automations","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/skills","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/activity","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/health","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/capture","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/topology","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/about","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/changelog","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/pipeline","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/styleguide?entry=jarvis","posture":"phone","overflow":0,"errors":[]}
+{"route":"/pair","posture":"phone","overflow":0,"errors":[]}
+{"route":"/settings?cat=you","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=appearance","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=privacy","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=connections","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=models","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=devices","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=capture","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=services","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=about","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=security","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=backups","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=config","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/settings?cat=danger","posture":"phone","overflow":3,"violations":[],"errors":[]}
+{"route":"/","posture":"cover","overflow":3,"errors":[]}
+{"route":"/chat","posture":"cover","overflow":3,"errors":[]}
+{"route":"/new","posture":"cover","overflow":3,"errors":[]}
+{"route":"/tasks","posture":"cover","overflow":3,"errors":[]}
+{"route":"/memory","posture":"cover","overflow":3,"errors":[]}
+{"route":"/automations","posture":"cover","overflow":3,"errors":[]}
+{"route":"/skills","posture":"cover","overflow":3,"errors":[]}
+{"route":"/activity","posture":"cover","overflow":3,"errors":[]}
+{"route":"/health","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings","posture":"cover","overflow":3,"errors":[]}
+{"route":"/capture","posture":"cover","overflow":3,"errors":[]}
+{"route":"/topology","posture":"cover","overflow":3,"errors":[]}
+{"route":"/about","posture":"cover","overflow":3,"errors":[]}
+{"route":"/changelog","posture":"cover","overflow":3,"errors":[]}
+{"route":"/pipeline","posture":"cover","overflow":3,"errors":[]}
+{"route":"/styleguide?entry=jarvis","posture":"cover","overflow":0,"errors":[]}
+{"route":"/pair","posture":"cover","overflow":0,"errors":[]}
+{"route":"/settings?cat=you","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=appearance","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=privacy","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=connections","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=models","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=devices","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=capture","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=services","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=about","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=security","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=backups","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=config","posture":"cover","overflow":3,"errors":[]}
+{"route":"/settings?cat=danger","posture":"cover","overflow":3,"errors":[]}

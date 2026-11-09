@@ -1,0 +1,6 @@
+{
+  "owned_server_pid": 4708,
+  "owned_browser_pid": 5120,
+  "result": "Both original audit processes are defunct and no listener remains on4418 or9223; no cleanup signal was needed. Runtime homes/profiles are excluded from package.",
+  "process_check": "    PID   UID STAT COMMAND\n   4708  1000 Z    [node-MainThread] <defunct>\n   5120  1000 Z    [chromium] <defunct>\n"
+}

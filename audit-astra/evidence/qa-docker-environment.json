@@ -1,0 +1,49 @@
+[
+  {
+    "command": [
+      "docker",
+      "info",
+      "--format",
+      "{{json .SecurityOptions}}"
+    ],
+    "exit_code": 0,
+    "stdout": "[\"name=seccomp,profile=builtin\",\"name=rootless\",\"name=cgroupns\"]\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "docker",
+      "top",
+      "7d2c0ba4c5c1",
+      "-o",
+      "pid,ppid,uid,args"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Error response from daemon: runc did not terminate successfully: exit status 1: unable to get all container pids: lstat /sys/fs/cgroup/7d2c0ba4c5c134eeb88b741a98ee28a78ba4545645f19634de1eb476f79147af: no such file or directory\n"
+  },
+  {
+    "command": [
+      "docker",
+      "exec",
+      "7d2c0ba4c5c1",
+      "id"
+    ],
+    "exit_code": 0,
+    "stdout": "uid=1000(node) gid=1000(node) groups=1000(node)\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "docker",
+      "exec",
+      "7d2c0ba4c5c1",
+      "sh",
+      "-c",
+      "stat -c \"%u:%g %a %n\" /workspace; test -w /workspace; echo writable=$?"
+    ],
+    "exit_code": 0,
+    "stdout": "1000:1000 700 /workspace\nwritable=0\n",
+    "stderr": ""
+  }
+]

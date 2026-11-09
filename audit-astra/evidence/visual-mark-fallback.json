@@ -1,0 +1,51 @@
+{
+  "url": "http://127.0.0.1:4418/styleguide?entry=status-icons",
+  "rows": [
+    {
+      "state": "idle",
+      "renderer": "canvas2d",
+      "label": "idle"
+    },
+    {
+      "state": "thinking",
+      "renderer": "canvas2d",
+      "label": "thinking"
+    },
+    {
+      "state": "listening",
+      "renderer": "canvas2d",
+      "label": "listening"
+    },
+    {
+      "state": "working",
+      "renderer": "canvas2d",
+      "label": "working"
+    },
+    {
+      "state": "speaking",
+      "renderer": "canvas2d",
+      "label": "speaking"
+    },
+    {
+      "state": "needs-you",
+      "renderer": "canvas2d",
+      "label": "needs-you"
+    },
+    {
+      "state": "stopped",
+      "renderer": "canvas2d",
+      "label": "stopped"
+    },
+    {
+      "state": "offline",
+      "renderer": "canvas2d",
+      "label": "offline"
+    }
+  ],
+  "equal": [
+    [
+      "idle",
+      "thinking"
+    ]
+  ]
+}

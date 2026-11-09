@@ -1,0 +1,204 @@
+{
+  "url": "http://127.0.0.1:4418/",
+  "text": "Skip to content\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nSetting up Nova\n\nA few quick questions. You can change most answers later in Settings.\n\nHi, I’m Nova. A few quick questions to set things up; you can change most answers later in Settings, and \"skip\" keeps my default. The first three are about this computer: its roles you change later in Settings › Devices, and Settings › Services shows how it runs services.\n\nThis is a Linux computer (x64): 5 threads, 18 GB of memory, no GPU Nova can use, 57 GB free on disk. I’d make it the hub of a new Nova network: your phone and other computers join it later. Or, if you already have a Nova hub, this computer can join that instead. (New, or join?)\nNew network, this computer as hub\nJoin a hub I already have\nAnswer Nova",
+  "controls": [
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "rail-search",
+      "label": "Search or go to",
+      "text": "",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "nav-menu",
+      "label": "Open navigation",
+      "text": "",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "menu",
+      "label": "Conversations",
+      "text": "",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "aside-toggle",
+      "label": "Show the right column",
+      "text": "",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "jump",
+      "label": null,
+      "text": "Jump to latest",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "TEXTAREA",
+      "type": "textarea",
+      "name": "",
+      "id": "input",
+      "label": null,
+      "text": "",
+      "placeholder": "Ask Nova anything…",
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "mic",
+      "label": "Talk to Nova",
+      "text": "",
+      "placeholder": null,
+      "value": "",
+      "disabled": true
+    },
+    {
+      "tag": "BUTTON",
+      "type": "submit",
+      "name": "",
+      "id": "send",
+      "label": "Send",
+      "text": "",
+      "placeholder": null,
+      "value": "",
+      "disabled": true
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "",
+      "label": null,
+      "text": "What do you remember about me?",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "",
+      "label": null,
+      "text": "Remind me tomorrow at 9:00",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "",
+      "label": null,
+      "text": "What can you do?",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "new-chat",
+      "label": "New conversation",
+      "text": "",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "drawer-close",
+      "label": "Close conversations",
+      "text": "",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "",
+      "label": null,
+      "text": "New network, this computer as hub",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "button",
+      "name": "",
+      "id": "",
+      "label": null,
+      "text": "Join a hub I already have",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "TEXTAREA",
+      "type": "textarea",
+      "name": "",
+      "id": "setup-input",
+      "label": null,
+      "text": "",
+      "placeholder": "Your answer…",
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "BUTTON",
+      "type": "submit",
+      "name": "",
+      "id": "",
+      "label": "Send",
+      "text": "",
+      "placeholder": null,
+      "value": "",
+      "disabled": false
+    },
+    {
+      "tag": "INPUT",
+      "type": "text",
+      "name": "",
+      "id": "palette-input",
+      "label": "Search places, conversations, settings and actions",
+      "text": "",
+      "placeholder": "Search or go to…",
+      "value": "",
+      "disabled": false
+    }
+  ]
+}

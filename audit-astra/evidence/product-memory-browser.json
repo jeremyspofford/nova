@@ -1,0 +1,9 @@
+{
+  "baseline": "d948aa0a442a9f930b86f4516eeea21981b76714",
+  "instance": "http://127.0.0.1:4418",
+  "method": "Real app in Chromium; GET /api/memory responses replaced with synthetic fixtures. Newer empty response fulfilled before delayed initial old response. No mutation or backend-forget operation performed.",
+  "requests": 2,
+  "newerRendered": "What Nova knows\n\nNothing kept yet.\n\nAs you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.\n\nTell Nova something to remember",
+  "olderRendered": "What Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nSynthetic old memory: should be absent after the newer response\n\nwritten into MEMORY.md by hand\n\nEdit\nForget",
+  "errors": []
+}

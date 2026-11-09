@@ -1,0 +1,56 @@
+{
+  "baseline": "d948aa0a442a9f930b86f4516eeea21981b76714",
+  "boundary": "Disposable cores; only loopback stand-ins; no real model calls or external disclosure",
+  "control": {
+    "initial": "local-only",
+    "tightened_while_local_inflight": false,
+    "live_mode_at_finish": "local-only",
+    "cloud_route_requests": 0,
+    "cloud_received_canary": false,
+    "error": "Waiting on local capacity: Ollama at 127.0.0.1:38151 answered 500: synthetic local failure after privacy switch. This is local-only, so it stays on your devices and runs when the model is back.",
+    "receipts": [
+      {
+        "provider": "ollama",
+        "privacy_mode": "local-only",
+        "egress": "local"
+      }
+    ]
+  },
+  "race": {
+    "initial": "local-preferred",
+    "tightened_while_local_inflight": true,
+    "live_mode_at_finish": "local-only",
+    "cloud_route_requests": 1,
+    "cloud_received_canary": true,
+    "result": {
+      "text": "Synthetic cloud-route response",
+      "aborted": false,
+      "served_by": "cloud",
+      "device": "Audit cloud stand-in",
+      "model": "cloud-model",
+      "provider": "remote:audit-cloud-stand-in",
+      "egress": "remote:audit-cloud-stand-in",
+      "receipt_id": "1c1fa726-c785-4bd0-ad00-53ee87aadb75",
+      "usage": {
+        "model": "cloud-model",
+        "tokens_in": 16,
+        "tokens_out": 7
+      },
+      "notes": [
+        "The local thinking and writing model wasn’t answering (Ollama at 127.0.0.1:39965 answered 500: synthetic local failure after privacy switch), so Audit cloud stand-in answered instead: this went off your devices."
+      ]
+    },
+    "receipts": [
+      {
+        "provider": "cloud:audit-cloud-stand-in",
+        "privacy_mode": "local-preferred",
+        "egress": "remote:audit-cloud-stand-in"
+      },
+      {
+        "provider": "ollama",
+        "privacy_mode": "local-preferred",
+        "egress": "local"
+      }
+    ]
+  }
+}

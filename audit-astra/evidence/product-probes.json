@@ -1,0 +1,133 @@
+{
+  "baseline": "d948aa0a442a9f930b86f4516eeea21981b76714",
+  "method": "Pipeline called against baseline records. Memory race executes the exact loadMemory source in a VM with two deferred synthetic GET promises; no browser, network, or real memory data.",
+  "pipeline": {
+    "counts": {
+      "merged": 103,
+      "progress": 1,
+      "designed": 8,
+      "none": 3
+    },
+    "selected": [
+      {
+        "id": "M4",
+        "name": "M4 · Device mesh",
+        "state": "merged",
+        "why": "Its gate evidence is filed.",
+        "evidence": {
+          "kind": "gate",
+          "path": "docs/evidence/m4-gate.md",
+          "title": "M4 gate — evidence"
+        }
+      },
+      {
+        "id": "2026-11-09-memory-compositions",
+        "name": "Memory: compositions for the owner's reaction",
+        "state": "merged",
+        "why": "The ledger records it merged.",
+        "evidence": {
+          "kind": "ledger",
+          "path": "docs/ledger/2026-11-09-memory-compositions.md",
+          "title": "Memory: compositions for the owner's reaction",
+          "date": "2026-11-09",
+          "changed": "the design-first step of the wiring item \"core memory: search / export / confirm / correct\". /styleguide?entry=memory-surface, marked for the owner's reaction, has 17 frames built from the real model (src/core/memory.ts): the list, search, one memory with its source, confirm, correct, the memory gate off and on, export, failures, and phone and Duo cover layouts. Nothing is wired into the app.",
+          "now": "react to how memory is searched, confirmed, corrected and exported before it is built.",
+          "unfinished": "the wiring waits for the owner. The Memory view's own route lacks state, search, confirm and export; its edit path can let a stale edit replace a newer correction; export has no download."
+        }
+      },
+      {
+        "id": "2026-11-08-jarvis-compositions",
+        "name": "Jarvis ring compositions (step 1, for owner reaction)",
+        "state": "merged",
+        "why": "The ledger records it merged.",
+        "evidence": {
+          "kind": "ledger",
+          "path": "docs/ledger/2026-11-08-jarvis-compositions.md",
+          "title": "Jarvis ring compositions (step 1, for owner reaction)",
+          "date": "2026-11-08",
+          "changed": "step 1 of the owner's \"Jarvis\" design system. It is compositions only, for the owner's reaction before any tokens land.",
+          "now": "see every Jarvis state at four sizes and drive the HUD core in the styleguide.",
+          "unfinished": "three things."
+        }
+      },
+      {
+        "id": "2026-11-09-adr-provider-plurality",
+        "name": "Provider plurality ADR (A1), proposed for the owner's second-model review",
+        "state": "merged",
+        "why": "The ledger records it merged.",
+        "evidence": {
+          "kind": "ledger",
+          "path": "docs/ledger/2026-11-09-adr-provider-plurality.md",
+          "title": "Provider plurality ADR (A1), proposed for the owner's second-model review",
+          "date": "2026-11-09",
+          "changed": "docs/plans/provider-plurality-adr-2026-11-09.md proposes how OpenRouter (an OpenAI-compatible provider), local Ollama, Claude and Codex sit behind the existing provider registry, with the Agent SDK evaluated as one provider among them and never the only way. It is docs only. Every claim about today's code cites a file and line.",
+          "now": "review the decision, its 11 small test-first PRs and its 12 open questions before anything is built.",
+          "unfinished": "nothing is implemented. Two facts are unverified because no real calls were made: whether OpenRouter's streamed usage includes a dollar cost, and which variable each CLI reads for an API key."
+        }
+      }
+    ]
+  },
+  "memoryRace": {
+    "paintOrder": [
+      {
+        "sections": [
+          {
+            "title": "Facts",
+            "entries": []
+          }
+        ],
+        "days": [],
+        "candidates": [],
+        "titles": {}
+      },
+      {
+        "sections": [
+          {
+            "title": "Facts",
+            "entries": [
+              {
+                "id": "synthetic-old-memory",
+                "text": "Synthetic memory removed by the newer read"
+              }
+            ]
+          }
+        ],
+        "days": [],
+        "candidates": [],
+        "titles": {}
+      }
+    ],
+    "final": {
+      "sections": [
+        {
+          "title": "Facts",
+          "entries": [
+            {
+              "id": "synthetic-old-memory",
+              "text": "Synthetic memory removed by the newer read"
+            }
+          ]
+        }
+      ],
+      "days": [],
+      "candidates": [],
+      "titles": {}
+    },
+    "staleResponseWon": true
+  },
+  "onboardingImport": {
+    "action": {
+      "id": "bring-notes",
+      "label": "Bring in your notes",
+      "go": "memory",
+      "needs": [
+        "first-run",
+        "import"
+      ],
+      "why": "Put notes, a profile you wrote or an export from another assistant in ~/workspace/import/, then tell Nova. They wait in Memory for your OK."
+    },
+    "configuredHome": "/tmp/audit-synthetic-nova-home",
+    "actualImportFolder": "/tmp/audit-synthetic-nova-home/workspace/import",
+    "note": "Source APIs only: no folder or instance created. Displayed path has no dependency on configured home."
+  }
+}

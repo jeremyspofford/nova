@@ -1,0 +1,5 @@
+import {chromium} from 'playwright-core';import {writeFileSync} from 'node:fs';
+const b=await chromium.launch({executablePath:'/usr/bin/chromium',args:['--no-sandbox','--disable-background-networking']});const rows=[];const out='/workspace/nova-audit-astra/audit-astra/evidence/';
+for(const [route,scheme,name]of[['/','light','light-home'],['/chat','light','light-chat'],['/memory','light','light-memory'],['/settings#appearance','light','light-appearance'],['/schedules','dark','schedules-alias'],['/styleguide','dark','styleguide-root']]){
+ const c=await b.newContext({viewport:{width:390,height:844},colorScheme:scheme,reducedMotion:'reduce'});const p=await c.newPage();await p.goto('http://127.0.0.1:4418'+route,{waitUntil:'commit'});await p.waitForTimeout(800);rows.push({route,scheme,width:390,height:844,text:await p.locator('body').innerText(),view:await p.evaluate(()=>document.body.dataset.view)});await p.screenshot({path:out+'screens/'+name+'.png'});await c.close();
+}await b.close();writeFileSync(out+'ui-supplement.json',JSON.stringify(rows,null,2));

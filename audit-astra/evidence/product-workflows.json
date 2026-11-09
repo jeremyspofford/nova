@@ -1,0 +1,546 @@
+{
+  "baseline": "d948aa0a442a9f930b86f4516eeea21981b76714",
+  "instance": "http://127.0.0.1:38963",
+  "home": "/tmp/nova-astra-product-workflows-NzankK/nova-home",
+  "userHome": "/tmp/nova-astra-product-workflows-NzankK/user",
+  "fixture": "seedUserHome synthetic notes; blank acceptance harness with egress guard; local 404 service-discovery stand-in; fake-agent.js for optional digest; no actual model/integration. Setup prepared via API; subsequent named workflow changes are actual browser clicks.",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "theme": "Nebula dark",
+  "serviceWorkers": "blocked",
+  "setup": [
+    {
+      "step": "device",
+      "answer": "new",
+      "status": 200,
+      "reply": "This computer is your hub, then. Other devices join it from Settings \u203a Devices.\n\nWhat is this computer for, besides being the hub? I recommend general server. The others: compute (runs models and other heavy work); storage (keeps models and data); capture source (may run capture; Capture itself stays off until you turn it on). (\u201cYes\u201d for what I recommend, or say which.)"
+    },
+    {
+      "step": "roles",
+      "answer": "yes",
+      "status": 200,
+      "reply": "This hub is for: general server. You can change that in Settings \u203a Devices.\n\nHow Nova runs its services here. Recommended: ordinary programs, under Nova\u2019s supervisor. It\u2019s lighter and needs nothing extra. This is how Nova runs its services here. K3s, for container services, isn\u2019t available in this version yet. You can see this in Settings \u203a Services. Switching to K3s will be there once it is available, and it will ask for your explicit confirmation. (\u201cYes\u201d to go on.)"
+    },
+    {
+      "step": "backend",
+      "answer": "yes",
+      "status": 200,
+      "reply": "Ordinary programs it is.\n\nNow about you. What should I call you?"
+    },
+    {
+      "step": "user_name",
+      "answer": "Audit Person",
+      "status": 200,
+      "reply": "Nice to meet you, Audit Person.\n\nYour computer says you\u2019re on UTC time. Is that right? (Yes, or tell me the right one.)"
+    },
+    {
+      "step": "timezone",
+      "answer": "yes",
+      "status": 200,
+      "reply": "UTC it is.\n\nI go by Nova. Want to call me something else? (A name, or \"keep\".)"
+    },
+    {
+      "step": "nova_name",
+      "answer": "keep",
+      "status": 200,
+      "reply": "Nova it stays.\n\nHow direct should I be? Telling you when I think something\u2019s wrong isn\u2019t adjustable. But I can say it gently, plainly, or bluntly."
+    },
+    {
+      "step": "directness",
+      "answer": "plainly",
+      "status": 200,
+      "reply": "Plainly, then.\n\nLast setting: privacy. Local-only means my model calls stay on your own devices. I\u2019d keep it local unless you want cloud help when local isn\u2019t enough. Keep it local-only, or allow cloud when needed?"
+    },
+    {
+      "step": "privacy",
+      "answer": "keep everything on this machine",
+      "status": 200,
+      "reply": "Got it: my model calls stay on your devices.\n\nShall I look for things Nova could work with? On this computer: a local model runtime, Screenpipe or Home Assistant, and notes, calendar files or browser bookmarks I could bring in. On your network too: a home hub, and other computers that could join. Looking lists what answers; connecting any of it is a separate step, yours to take. You chose local-only: looking on the network sends one short query to the devices on it, with nothing about you in it, so say \u201cnetwork too\u201d only if that\u2019s fine. (This computer, network too, or no?)"
+    },
+    {
+      "step": "discover",
+      "answer": "this computer",
+      "status": 200,
+      "reply": "On this computer I found no services Nova knows.\n\nI could bring in, from this computer: notes in ~/Notes (2 files); a calendar file, ~/Documents/example.ics; bookmarks from Chrome. Nothing has been read yet. What you pick is checked first as outside content, then waits in Memory for your OK: none of it is remembered until you keep it. Which? (Say which, \u201call\u201d, or \u201cnone\u201d.)"
+    },
+    {
+      "step": "import",
+      "answer": "notes",
+      "status": 200,
+      "reply": "Checked first, then brought in. notes in ~/Notes: 2 waiting for your OK. It waits in Memory for your OK: none of it is remembered until you keep it.\n\nHere\u2019s what I have: I\u2019ll call you Audit Person; UTC; I\u2019m Nova; plain about hard truths; local-only.\n\nWant a first task to prove the plumbing works? I\u2019ll write a short welcome note into your workspace. (Yes or no.)"
+    },
+    {
+      "step": "first_task",
+      "answer": "no",
+      "status": 200,
+      "reply": "No first task, then. That\u2019s setup done. Capture is off until you turn a source on in Settings \u203a Capture. A computer can share a lot, under its own permissions; Android needs accessibility and notification access; an iPhone or iPad allows no passive capture of other apps at all. Ask me anything; you can change most of this in Settings."
+    }
+  ],
+  "discoveryHits": [
+    "/api/version",
+    "/health",
+    "/manifest.json"
+  ],
+  "rows": [
+    {
+      "name": "seeded-candidates",
+      "result": "tested-pass",
+      "data": {
+        "sections": [
+          {
+            "title": "Facts",
+            "entries": []
+          },
+          {
+            "title": "Preferences",
+            "entries": []
+          },
+          {
+            "title": "Decisions",
+            "entries": []
+          },
+          {
+            "title": "Commitments",
+            "entries": []
+          }
+        ],
+        "days": [],
+        "titles": {},
+        "candidates": [
+          {
+            "id": "mc-b4854348-06d",
+            "at": "2026-11-09T21:14:22.581Z",
+            "op": "remember",
+            "kind": "fact",
+            "content": "Note \u201cGarden plans\u201d: Plant Larkspur by the north fence in spring. The soil there is clay.",
+            "target": null,
+            "replaces": null,
+            "source": "imported from ~/Notes/garden/plants.md",
+            "taint": [
+              {
+                "screen": "scr-07a165f0-fb0",
+                "kind": "file",
+                "origin": "~/Notes/garden/plants.md",
+                "verdict": "quarantine",
+                "max": null
+              }
+            ],
+            "reason": null
+          },
+          {
+            "id": "mc-ecc1d6ea-635",
+            "at": "2026-11-09T21:14:22.589Z",
+            "op": "remember",
+            "kind": "fact",
+            "content": "Note \u201cReading list\u201d: Finish the placeholder novel, then the one about lighthouses.",
+            "target": null,
+            "replaces": null,
+            "source": "imported from ~/Notes/reading.md",
+            "taint": [
+              {
+                "screen": "scr-23ddcaea-020",
+                "kind": "file",
+                "origin": "~/Notes/reading.md",
+                "verdict": "quarantine",
+                "max": null
+              }
+            ],
+            "reason": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "candidates-before",
+      "result": "tested-pass",
+      "url": "http://127.0.0.1:38963/memory",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNothing kept yet.\n\nAs you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.\n\nWAITING FOR YOUR OK\n\nNova read something from outside before it wanted to keep these, so they wait for you. Nova doesn't see them until you keep them.\n\nNote \u201cGarden plans\u201d: Plant Larkspur by the north fence in spring. The soil there is clay.\n\nImported from ~/Notes/garden/plants.md; Nova couldn\u2019t fully check it.\n\nKeep\nDrop\n\nNote \u201cReading list\u201d: Finish the placeholder novel, then the one about lighthouses.\n\nImported from ~/Notes/reading.md; Nova couldn\u2019t fully check it.\n\nKeep\nDrop\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it\u2019s verified.\n\nAll tasks\nDevices\n\nHub \u00b7 this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth"
+    },
+    {
+      "name": "kept-and-dismissed",
+      "result": "tested-pass",
+      "url": "http://127.0.0.1:38963/memory",
+      "data": {
+        "sections": [
+          {
+            "title": "Facts",
+            "entries": [
+              {
+                "id": "d0e0976b-fba3-4d8b-8da7-01165ff3e928",
+                "text": "Note \u201cGarden plans\u201d: Plant Larkspur by the north fence in spring. The soil there is clay.",
+                "time": null,
+                "from": "imported from ~/Notes/garden/plants.md",
+                "at": "2026-11-09T21:14:24.385Z",
+                "updated": null,
+                "by": "nova"
+              }
+            ]
+          },
+          {
+            "title": "Preferences",
+            "entries": []
+          },
+          {
+            "title": "Decisions",
+            "entries": []
+          },
+          {
+            "title": "Commitments",
+            "entries": []
+          }
+        ],
+        "days": [],
+        "titles": {},
+        "candidates": []
+      },
+      "core": [
+        {
+          "id": "d0e0976b-fba3-4d8b-8da7-01165ff3e928",
+          "kind": "fact",
+          "content": "Note \u201cGarden plans\u201d: Plant Larkspur by the north fence in spring. The soil there is clay.",
+          "source": "imported from ~/Notes/garden/plants.md",
+          "observed_at": "2026-11-09T21:14:24.385Z",
+          "recorded_by": "nova",
+          "confidence": null,
+          "scope": "personal",
+          "supersedes": null,
+          "superseded_by": null,
+          "expires": null,
+          "user_state": "confirmed",
+          "created_at": "2026-11-09T21:14:24.386Z",
+          "low_confidence": false,
+          "active": true
+        }
+      ],
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nNote \u201cGarden plans\u201d: Plant Larkspur by the north fence in spring. The soil there is clay.\n\nfrom a conversation, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it\u2019s verified.\n\nAll tasks\nDevices\n\nHub \u00b7 this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth\nDropped. It isn\u2019t in Memory."
+    },
+    {
+      "name": "correction-reload",
+      "result": "tested-pass",
+      "url": "http://127.0.0.1:38963/memory",
+      "provenanceBefore": "from a conversation, today",
+      "core": [
+        {
+          "id": "fc377655-f48f-45ce-9cb6-59f7420e9e6b",
+          "kind": "fact",
+          "content": "Synthetic garden correction: plant larkspur by the east fence.",
+          "source": "correction",
+          "observed_at": "2026-11-09T21:14:24.771Z",
+          "recorded_by": "person",
+          "confidence": null,
+          "scope": "personal",
+          "supersedes": "d0e0976b-fba3-4d8b-8da7-01165ff3e928",
+          "superseded_by": null,
+          "expires": null,
+          "user_state": "confirmed",
+          "created_at": "2026-11-09T21:14:24.771Z",
+          "low_confidence": false,
+          "active": true
+        },
+        {
+          "id": "d0e0976b-fba3-4d8b-8da7-01165ff3e928",
+          "kind": "fact",
+          "content": "Note \u201cGarden plans\u201d: Plant Larkspur by the north fence in spring. The soil there is clay.",
+          "source": "imported from ~/Notes/garden/plants.md",
+          "observed_at": "2026-11-09T21:14:24.385Z",
+          "recorded_by": "nova",
+          "confidence": null,
+          "scope": "personal",
+          "supersedes": null,
+          "superseded_by": "fc377655-f48f-45ce-9cb6-59f7420e9e6b",
+          "expires": null,
+          "user_state": "corrected",
+          "created_at": "2026-11-09T21:14:24.386Z",
+          "low_confidence": false,
+          "active": false
+        }
+      ],
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nSynthetic garden correction: plant larkspur by the east fence.\n\nfrom a conversation, today \u00b7 edited by you today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it\u2019s verified.\n\nAll tasks\nDevices\n\nHub \u00b7 this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth"
+    },
+    {
+      "name": "forgotten",
+      "result": "tested-pass",
+      "undoOffered": true,
+      "core": []
+    },
+    {
+      "name": "forget-undo",
+      "result": "tested-pass",
+      "url": "http://127.0.0.1:38963/memory",
+      "core": [
+        {
+          "id": "67eb2d38-f333-49f0-a945-5f7e28386090",
+          "kind": "fact",
+          "content": "Synthetic garden correction: plant larkspur by the east fence.",
+          "source": "imported from ~/Notes/garden/plants.md",
+          "observed_at": "2026-11-09T21:14:24.385Z",
+          "recorded_by": "person",
+          "confidence": null,
+          "scope": "personal",
+          "supersedes": null,
+          "superseded_by": null,
+          "expires": null,
+          "user_state": "confirmed",
+          "created_at": "2026-11-09T21:14:25.570Z",
+          "low_confidence": false,
+          "active": true
+        }
+      ],
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nSynthetic garden correction: plant larkspur by the east fence.\n\nfrom a conversation, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it\u2019s verified.\n\nAll tasks\nDevices\n\nHub \u00b7 this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth\nBack in memory."
+    },
+    {
+      "name": "setting-reload",
+      "result": "tested-pass",
+      "url": "http://127.0.0.1:38963/settings#you",
+      "profile": {
+        "identity": {
+          "name": "Nova"
+        },
+        "user": {
+          "address_as": "Audit Person",
+          "name": "Audit Rowan",
+          "timezone": "UTC"
+        },
+        "tuning": {
+          "directness": "balanced"
+        },
+        "privacy": {
+          "default": "local-only"
+        },
+        "policy": {},
+        "appearance": {},
+        "mesh": {},
+        "providers": {},
+        "capture": {},
+        "models": {},
+        "backups": {}
+      },
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nYou and Nova\n\nNames and how Nova talks to you\n\nYOU AND NOVA\n\nYour name\n\nWhat Nova calls you.\n\nYour name\nSave\n\nNova\u2019s name\n\nOnly the name changes; the charter stays.\n\nNova\u2019s name\nSave\n\nDirectness\n\nTelling you when Nova thinks something\u2019s wrong isn\u2019t adjustable; this is how it says it.\n\nDirectness\nGently\nPlainly\nBluntly"
+    },
+    {
+      "name": "digest-enabled",
+      "result": "tested-pass",
+      "url": "http://127.0.0.1:38963/automations",
+      "schedules": {
+        "set": [
+          {
+            "id": "morning-digest",
+            "name": "Morning digest",
+            "about": "A front page for the start of your day: what needs you from your email, what you said you'd do, and what's coming up.",
+            "cron": "0 7 * * *",
+            "deliver": "main",
+            "once": false,
+            "paused": false,
+            "prompt": "Write the person's morning digest: one front page for the start of their day.\n\n1. Read their mail if Gmail is connected. Load the Email summary skill if it's installed and follow its way of sorting what needs them from what doesn't, for mail since yesterday morning. Read the few emails that need a reply or action. If Gmail isn't connected, leave email out and say so in one line at the end.\n2. Look in MEMORY.md and the recent day notes (both are in your context) for commitments and plans that fall today or in the next couple of days, and for anything left open yesterday.\n3. Write the front page:\n   - Start with one plain sentence that sums up the day: the one thing that matters most, or that nothing needs them. Nova sets it as the headline, so don't label it or make it bold.\n   - Then short sections, only where there's something: **Needs you** (replies and decisions, with who and by when), **Today** (what's planned or due), **Coming up** (the next few days).\n   - Mention anything suspicious, such as phishing, in one line.\n   - Close with at most two offers of what you could do next, such as drafting a reply, so they can say yes.\n\nKeep it to what fits on one screen. Leave out newsletters, promotions and anything that needs nothing from them. Don't draft, archive or change anything: this runs while they're away.",
+            "changed": "2026-11-09T21:14:27.101Z",
+            "when": "Every day at 7:00 AM",
+            "next": "2026-11-10T07:00:00.000Z",
+            "last": null,
+            "running": null,
+            "queued": false
+          }
+        ],
+        "available": [],
+        "timezone": "UTC"
+      },
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nAutomations\nAutomations\n\nRules Nova runs on its own. Each can be paused or removed.\n\nRULES\n\nNo rules yet. Rules start work or send a message when something happens or on a schedule.\n\nSchedules\n\nWork Nova does on its own, at times you choose. Reports arrive in the main conversation, and each schedule is a plain file in your Nova folder.\n\nSET\nMorning digest\nRun now\nPause\nRemove\n\nEvery day at 7:00 AM \u00b7 Next: tomorrow at 7:00 AM\n\nWhat Nova does\n\nNova runs schedules while it's running. If it was off at a run's time, the run happens when Nova starts, if that's within six hours.\n\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it\u2019s verified.\n\nAll tasks\nDevices\n\nHub \u00b7 this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth\nMorning digest is on: every day at 7:00 AM."
+    },
+    {
+      "name": "digest-paused-reload",
+      "result": "tested-pass",
+      "url": "http://127.0.0.1:38963/automations",
+      "schedules": {
+        "set": [
+          {
+            "id": "morning-digest",
+            "name": "Morning digest",
+            "about": "A front page for the start of your day: what needs you from your email, what you said you'd do, and what's coming up.",
+            "cron": "0 7 * * *",
+            "deliver": "main",
+            "once": false,
+            "paused": true,
+            "prompt": "Write the person's morning digest: one front page for the start of their day.\n\n1. Read their mail if Gmail is connected. Load the Email summary skill if it's installed and follow its way of sorting what needs them from what doesn't, for mail since yesterday morning. Read the few emails that need a reply or action. If Gmail isn't connected, leave email out and say so in one line at the end.\n2. Look in MEMORY.md and the recent day notes (both are in your context) for commitments and plans that fall today or in the next couple of days, and for anything left open yesterday.\n3. Write the front page:\n   - Start with one plain sentence that sums up the day: the one thing that matters most, or that nothing needs them. Nova sets it as the headline, so don't label it or make it bold.\n   - Then short sections, only where there's something: **Needs you** (replies and decisions, with who and by when), **Today** (what's planned or due), **Coming up** (the next few days).\n   - Mention anything suspicious, such as phishing, in one line.\n   - Close with at most two offers of what you could do next, such as drafting a reply, so they can say yes.\n\nKeep it to what fits on one screen. Leave out newsletters, promotions and anything that needs nothing from them. Don't draft, archive or change anything: this runs while they're away.",
+            "changed": "2026-11-09T21:14:27.333Z",
+            "when": "Every day at 7:00 AM",
+            "next": null,
+            "last": null,
+            "running": null,
+            "queued": false
+          }
+        ],
+        "available": [],
+        "timezone": "UTC"
+      },
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nAutomations\nAutomations\n\nRules Nova runs on its own. Each can be paused or removed.\n\nRULES\n\nNo rules yet. Rules start work or send a message when something happens or on a schedule.\n\nSchedules\n\nWork Nova does on its own, at times you choose. Reports arrive in the main conversation, and each schedule is a plain file in your Nova folder.\n\nSET\nMorning digest\nPaused\nRun now\nResume\nRemove\n\nEvery day at 7:00 AM\n\nWhat Nova does\n\nNova runs schedules while it's running. If it was off at a run's time, the run happens when Nova starts, if that's within six hours.\n\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it\u2019s verified.\n\nAll tasks\nDevices\n\nHub \u00b7 this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth"
+    },
+    {
+      "name": "theme-device-applied",
+      "result": "tested-pass",
+      "instance": "http://127.0.0.1:35883",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "undoVisible": true,
+      "scope": "Theme: Orb Teal \u00b7 this device only",
+      "url": "http://127.0.0.1:35883/settings#appearance",
+      "theme": "orb-teal",
+      "text": "Skip to content\nSettings\nSettings\nAppearance\n\nTheme, light and dark, contrast\n\nAPPEARANCE\n\nTheme: Orb Teal \u00b7 this device only\n\nChange it for\nThis device\nAll my devices\n\nA design you pick shows here at once, and Undo puts the last one back.\n\nOrb Teal is on this device now.\n\nUndo\n\nRECOMMENDED \u00b7 NOVA\u2019S DESIGN\n\nNebula\nNova's default look. Neutral surfaces, light or near-black, following your device; the nebula swirl only in the orb, the icon and state accents.\n\nNova\u2019s own design, held to its design bar. Dark like this device\u2019s system setting, and all its text and controls pass the contrast check.\n\nMore designs\n\u00b7 6, 5 not yet at Nova\u2019s design bar\n\nThese work, and each says whether it reads well, but none has yet been held to the design bar Nova\u2019s own design meets. They may change as they are brought up to it.\n\nAurora\nCompanion Light\nNova\nObsidian\nOrb Teal\nThis device\nPaper\n\nEvery text and control here passes the contrast check: 4.5:1 for text, 3:1 for outlines.\n\nLight and dark \u00b7 all devices\nAuto\nLight\nDark\n\nOn an iPhone with Nova on the Home Screen, a dark design also fills the strip with the time and battery. After you switch to or from a dark design, that strip may only change once you close Nova and open it again.\n\nStyleguide",
+      "errors": []
+    },
+    {
+      "name": "theme-undo",
+      "result": "tested-pass",
+      "instance": "http://127.0.0.1:35883",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scope": "Theme: Nebula \u00b7 synced",
+      "url": "http://127.0.0.1:35883/settings#appearance",
+      "theme": "nebula",
+      "text": "Skip to content\nSettings\nSettings\nAppearance\n\nTheme, light and dark, contrast\n\nAPPEARANCE\n\nTheme: Nebula \u00b7 synced\n\nChange it for\nThis device\nAll my devices\n\nA design you pick shows here at once, and Undo puts the last one back.\n\nRECOMMENDED \u00b7 NOVA\u2019S DESIGN\n\nNebula\nNova's default look. Neutral surfaces, light or near-black, following your device; the nebula swirl only in the orb, the icon and state accents.\n\nNova\u2019s own design, held to its design bar. Dark like this device\u2019s system setting, and all its text and controls pass the contrast check.\n\nMore designs\n\u00b7 6, 5 not yet at Nova\u2019s design bar\n\nThese work, and each says whether it reads well, but none has yet been held to the design bar Nova\u2019s own design meets. They may change as they are brought up to it.\n\nAurora\nCompanion Light\nNova\nObsidian\nOrb Teal\nPaper\n\nEvery text and control here passes the contrast check: 4.5:1 for text, 3:1 for outlines.\n\nLight and dark \u00b7 all devices\nAuto\nLight\nDark\n\nOn an iPhone with Nova on the Home Screen, a dark design also fills the strip with the time and battery. After you switch to or from a dark design, that strip may only change once you close Nova and open it again.\n\nStyleguide",
+      "errors": []
+    },
+    {
+      "name": "theme-device-reload",
+      "result": "tested-pass",
+      "instance": "http://127.0.0.1:35883",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "syncedDefault": "nebula",
+      "scope": "Theme: Orb Teal \u00b7 this device only",
+      "url": "http://127.0.0.1:35883/settings#appearance",
+      "theme": "orb-teal",
+      "text": "Skip to content\nSettings\nSettings\nAppearance\n\nTheme, light and dark, contrast\n\nAPPEARANCE\n\nTheme: Orb Teal \u00b7 this device only\n\nChange it for\nThis device\nAll my devices\n\nA design you pick shows here at once, and Undo puts the last one back.\n\nRECOMMENDED \u00b7 NOVA\u2019S DESIGN\n\nNebula\nNova's default look. Neutral surfaces, light or near-black, following your device; the nebula swirl only in the orb, the icon and state accents.\n\nNova\u2019s own design, held to its design bar. Dark like this device\u2019s system setting, and all its text and controls pass the contrast check.\n\nMore designs\n\u00b7 6, 5 not yet at Nova\u2019s design bar\n\nThese work, and each says whether it reads well, but none has yet been held to the design bar Nova\u2019s own design meets. They may change as they are brought up to it.\n\nAurora\nCompanion Light\nNova\nObsidian\nOrb Teal\nThis device\nPaper\n\nEvery text and control here passes the contrast check: 4.5:1 for text, 3:1 for outlines.\n\nLight and dark \u00b7 all devices\nAuto\nLight\nDark\n\nOn an iPhone with Nova on the Home Screen, a dark design also fills the strip with the time and battery. After you switch to or from a dark design, that strip may only change once you close Nova and open it again.\n\nStyleguide",
+      "errors": []
+    },
+    {
+      "name": "source-label-dom",
+      "result": "tested-fail",
+      "instance": "http://127.0.0.1:36249",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "sourceText": "from a conversation, today",
+      "sourceHtml": "from a conversation, today",
+      "sourceLinks": 0,
+      "storedRecords": [
+        {
+          "id": "67eb2d38-f333-49f0-a945-5f7e28386090",
+          "kind": "fact",
+          "content": "Synthetic garden correction: plant larkspur by the east fence.",
+          "source": "imported from ~/Notes/garden/plants.md",
+          "observed_at": "2026-11-09T21:14:24.385Z",
+          "recorded_by": "person",
+          "confidence": null,
+          "scope": "personal",
+          "supersedes": null,
+          "superseded_by": null,
+          "expires": null,
+          "user_state": "confirmed",
+          "created_at": "2026-11-09T21:14:25.570Z",
+          "low_confidence": false,
+          "active": true
+        }
+      ],
+      "url": "http://127.0.0.1:36249/memory",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nSynthetic garden correction: plant larkspur by the east fence.\n\nfrom a conversation, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it\u2019s verified.\n\nAll tasks\nDevices\n\nThis browser \u00b7 this device\n\ndesktop layout\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nChecking Nova\u2019s health\u2026\n\nHealth",
+      "errors": [],
+      "finding": "NOVA-086"
+    },
+    {
+      "name": "source-models-follow-up",
+      "result": "blocked",
+      "instance": "http://127.0.0.1:36249",
+      "error": "TimeoutError: locator.click: Timeout 12000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-action=\"device-models\"]').first()\u001b[22m\n\u001b[2m    - locator resolved to <button class=\"btn\" type=\"button\" data-device=\"hub\" data-action=\"device-models\">Models on Hub</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 \u00d7 waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is not visible\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 \u00d7 waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is not visible\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    23 \u00d7 waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is not visible\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nDevices\n\nPhones and computers paired with Nova\n\nDEVICES\n\nOther devices can\u2019t reach this Nova yet, so only this one is here. To pair a phone or a computer, start Nova with a mesh address (NOVA_MESH_URL); the README says how.\n\nMachines and services\n\nHub \u00b7 this device\n\nThe hub\n\nRoles: Hub candidate, General server\n\nOnline\nModels\nRoles\n\nInstall Nova\n\nYour browser offers Install in its menu when it can.\n\nAppearance id\n\na8cf431f-5737-4cec-ba5a-d3bcc16eb316. It lets this browser keep its own appearance.",
+      "classification": "Harness selector selected a hidden Models overview button; not a product failure.",
+      "resolution": "Scoped selector to #settings-devices; subsequent hub-models-child and hub-models-back passed."
+    },
+    {
+      "name": "source-label-dom",
+      "result": "tested-fail",
+      "instance": "http://127.0.0.1:42913",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "sourceText": "from a conversation, today",
+      "sourceHtml": "from a conversation, today",
+      "sourceLinks": 0,
+      "storedRecords": [
+        {
+          "id": "67eb2d38-f333-49f0-a945-5f7e28386090",
+          "kind": "fact",
+          "content": "Synthetic garden correction: plant larkspur by the east fence.",
+          "source": "imported from ~/Notes/garden/plants.md",
+          "observed_at": "2026-11-09T21:14:24.385Z",
+          "recorded_by": "person",
+          "confidence": null,
+          "scope": "personal",
+          "supersedes": null,
+          "superseded_by": null,
+          "expires": null,
+          "user_state": "confirmed",
+          "created_at": "2026-11-09T21:14:25.570Z",
+          "low_confidence": false,
+          "active": true
+        }
+      ],
+      "url": "http://127.0.0.1:42913/memory",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nSynthetic garden correction: plant larkspur by the east fence.\n\nfrom a conversation, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it\u2019s verified.\n\nAll tasks\nDevices\n\nHub \u00b7 this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth",
+      "errors": [],
+      "finding": "NOVA-086"
+    },
+    {
+      "name": "hub-models-child",
+      "result": "tested-pass",
+      "instance": "http://127.0.0.1:42913",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "canonicalUrl": "http://127.0.0.1:42913/settings#models-on-hub",
+      "url": "http://127.0.0.1:42913/settings#models-on-hub",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nDevices\n\nPhones and computers paired with Nova\n\nDevices\n\nSettings \u203a Devices \u203a Hub\n\nModels\n\nNo GPU \u00b7 17.6 GB memory \u00b7 this is the hub\n\nPLANNED ON THIS DEVICE\n\nNothing is planned here yet. Plan a pick below, or add a model.\n\nAdd a model\nqwen3:4b\nllama3.2:3b\nqwen3:32b\nqwen3:14b\nqwen3:8b\nnomic-embed-text\nqwen2.5vl:7b\nAdd to the plan\nRECOMMENDED FOR THIS DEVICE\n\nLocal only. Every pick runs on your own devices; no cloud option is offered.\n\nGeneral chat\n\nqwen3:8b at Q4_K_M, 4k context\n\nSmaller and faster: qwen3:4b at Q8_0, 4k context, fits.\n\nFits\nPlan it\n\nCoding\n\nqwen3:4b at Q8_0, 16k context\n\nSmaller and faster: llama3.2:3b at Q8_0, 16k context, fits.\n\nFits\nPlan it\n\nScreening and decisions\n\nqwen3:8b at Q4_K_M, 4k context\n\nSmaller and faster: qwen3:4b at Q8_0, 4k context, fits.\n\nFits\nPlan it\n\nEmbeddings (memory search)\n\nnomic-embed-text at Q8_0, 2k context\n\nFits\nPlan it\n\nVision\n\nqwen2.5vl:7b at Q4_K_M, 4k context \u00b7 Estimate\n\nFits\nPlan it\n\nTranscription\n\nTranscription stays off until Nova has a whisper adapter; nothing is sent elsewhere to transcribe.",
+      "errors": []
+    },
+    {
+      "name": "hub-models-back",
+      "result": "tested-pass",
+      "instance": "http://127.0.0.1:42913",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "url": "http://127.0.0.1:42913/settings#devices",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nDevices\n\nPhones and computers paired with Nova\n\nDEVICES\n\nOther devices can\u2019t reach this Nova yet, so only this one is here. To pair a phone or a computer, start Nova with a mesh address (NOVA_MESH_URL); the README says how.\n\nMachines and services\n\nHub \u00b7 this device\n\nThe hub\n\nRoles: Hub candidate, General server\n\nOnline\nModels\nRoles\n\nInstall Nova\n\nYour browser offers Install in its menu when it can.\n\nAppearance id\n\nc9714cb5-f079-4183-9efa-112a6f74d43d. It lets this browser keep its own appearance.",
+      "errors": []
+    }
+  ],
+  "errors": [],
+  "egress": "",
+  "additionalInstances": [
+    {
+      "base": "http://127.0.0.1:35883",
+      "home": "/tmp/nova-astra-product-workflows-NzankK/nova-home",
+      "purpose": "Appearance fixture resumed; original instance stopped"
+    },
+    {
+      "base": "http://127.0.0.1:36249",
+      "home": "/tmp/nova-astra-product-workflows-NzankK/nova-home",
+      "purpose": "Read-only source/Models child follow-up; previous fixture processes stopped"
+    },
+    {
+      "base": "http://127.0.0.1:42913",
+      "home": "/tmp/nova-astra-product-workflows-NzankK/nova-home",
+      "purpose": "Read-only source/Models child follow-up; previous fixture processes stopped"
+    }
+  ]
+}

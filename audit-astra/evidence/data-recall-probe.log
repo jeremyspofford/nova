@@ -1,0 +1,60 @@
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+{
+  "scenario": "promoted-capture-in-actor-context",
+  "screeningState": {
+    "state": "index",
+    "label": "Checked",
+    "why": null,
+    "usable": true,
+    "decision": "dec-3c619ee9-7b6",
+    "at": "2026-11-09T21:06:11.586Z",
+    "detail": {
+      "template": "capture-sensitive",
+      "version": 1,
+      "capture_source": "screenpipe:2a77ba66-a3cb-4b9a-96cc-4d30e4482e73",
+      "rules": {
+        "redacted": [],
+        "fields": []
+      },
+      "records": [
+        "dec-3c619ee9-7b6"
+      ],
+      "decision": {
+        "id": "dec-3c619ee9-7b6",
+        "outcome": "index",
+        "seat": "tev1",
+        "model": "tev1:4b@aaaa4b",
+        "trust": "verdict",
+        "quality": "high",
+        "scores": {
+          "password": 0.02,
+          "secret_key": 0.02,
+          "financial_details": 0.02,
+          "health_details": 0.02
+        },
+        "bands": {
+          "password": "no",
+          "secret_key": "no",
+          "financial_details": "no",
+          "health_details": "no"
+        },
+        "findings": [],
+        "at": "2026-11-09T21:06:11.586Z"
+      }
+    }
+  },
+  "promotedSource": "capture:dda6814b-0595-4e96-8bb6-727c23cc9f4e",
+  "actorCalls": 1,
+  "systemIncludesCaptureCanary": true,
+  "additionalIngestScreens": 0,
+  "actualActor": "in-process scripted fake; no remote send"
+}
+{
+  "scenario": "forget-between-actor-calls",
+  "before": 1,
+  "after": 0,
+  "actorCalls": 2,
+  "secondPromptStillContainsDeletedNote": true,
+  "actualActor": "in-process scripted fake; no remote send"
+}
+no-Kubernetes tripwire: never fired

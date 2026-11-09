@@ -1,0 +1,55 @@
+# Runtime experience and measurement
+
+Frozen merged baseline `d948aa0a442a9f930b86f4516eeea21981b76714`. Owner deployment unknown. Main screenshot instance: `127.0.0.1:4418`, home `/tmp/nova-astra-main-20261109`. Separate workflow servers are identified in their JSON evidence. No product implementation, live model call or real integration was used.
+
+## What was actually exercised
+
+- First-run setup through rendered controls: new hub, recommended general-server role, supervisor choice, neutral name, invalid timezone followed by valid correction, reload mid-setup, privacy/default choices, decline discovery, welcome task, Continue to Nova. The welcome task wrote and independently read its file. This proves a deterministic first result, not model readiness. `setup-workflow.json`, `setup-finish.png`.
+- Seventeen routes at 1440×900, 390×844 and 360×360 plus thirteen actual Settings hash categories at those sizes: 90 route/posture visits. Main package Nebula, dark/reduced motion. Jarvis visited as a styleguide composition only. `ui-sweep.json` excludes the initial `?cat=` attempts for category coverage; `ui-settings-sweep.json` is the valid category traversal. Each surface rendered with no page error. This sweep is appearance/initial state, not proof of every control.
+- WCAG 2 A/AA, 2.1 AA and 2.2 AA-tagged axe checks on 56 desktop/phone route/category states found no violations. Cover states had geometry/screenshots, not axe. The restricted tags exclude best-practice rules; empty/default states differ from CI's richer fixtures. No screen reader or physical touch device was used.
+- No document-wide horizontal overflow at these three sizes. Geometry entries for closed phone drawers have negative coordinates and are not visible clipping defects. The short Home hierarchy remains a usability improvement (NOVA-121).
+- Synthetic actor workflow: empty Send disabled; suggested prompt fills but does not send; 2,900-character draft survives phone/cover resize and reload; chat remembers a neutral fact with source text; a controlled actor failure displays Details/Try again, and the next successful message works. This exercises orchestration, not model quality. `ui-workflows.json` and workflow screenshots.
+- Task creation through the documented API followed by real UI evidence inspection: deterministic workspace write reaches done only after hash/byte read-back. An invalid outside-workspace target becomes waiting with a precise reason; nothing outside the fixture is written. The initial malformed audit task correctly returned400 because its read-back target was absent; the corrected harness then passed. `ui-workflows-initial-harness.json` is retained as harness history, not a product failure.
+- Browser Back returns to Memory; Ctrl+K opens the command palette and Escape closes it. Additional Home-start, Settings, offline/fold and 200% text results are in QA's contribution and logs.
+
+Repeated full navigation in an exploratory persistent CDP context timed out after several pages. Independent fresh browser contexts completed the sweep and required SPA navigation tests exercised the actual app. No product defect is assigned from that unresolved harness/navigation behavior. The later dedicated workflow harness blocks service workers; offline behavior is covered separately by the existing real-service-worker test.
+
+## Measured performance, with limits
+
+`evidence/ui-performance.json`: headless Chromium on Linux, localhost,390×844, Nebula dark, reduced motion, new context per sample; three samples per view while other tests shared the host. Time to the app's view-state marker was411–570ms for Home,381–483ms for Chat,392–605ms for Tasks and577–626ms for Models Settings. Observed LCP over the short measurement window was436–796ms; observed CLS was0 in all12 samples. Home transferred about1.17MB over79 resource requests. These are synthetic local measurements, not field p75, INP, constrained-mobile performance or whole-session CLS proof. The one-second waits used in screenshot capture are not performance measurements.
+
+## NOVA-100 — Distinguish running health from capability readiness
+
+- **Category/gap:** improvement; D. **Severity:** medium comprehension risk. **Priority:** P2 next release. **Confidence:** high for current wording, medium for user impact; no usability participants were recruited. **Evidence:** observed default runtime + code-supported health shape. **Status:** proposed.
+- **Affected user/consequence:** a new self-hoster sees Home's “All systems normal” and “19 workers are fine” although no decision model is reachable, no backup folder is set, no supervisor runs and some workers have not checked their dependency. They must reconcile a green summary with the next action failing or waiting.
+- **Baseline:** frozen merged source and its disposable instance, not the owner deployment. **Reproduction:** complete setup with no integrations/model runtime; open Home then Health. `runtime-health.json`, `ui-sweep.json` desktop `/health`, `screens/desktop-health.png`. Health does disclose individual limitations; this is not a concealed fault or justification to paint optional setup red.
+- **Observed/expected:** process health, registration and configured readiness share “Fine/ready” summary language. Proposed behavior: explain “Nova is running” separately from “Ready to chat / screen captures / restore data”, naming the missing dependency and one relevant next step.
+- **Root cause/components:** summaries aggregate worker health flags while some worker health deliberately means not configured or not yet checked. Core health/readiness projection, Home/Health components and first-use guidance.
+- **Smallest change:** expose a small ready/not-configured/not-checked/unavailable capability state beside the existing process-health state; derive it from actual checks. Preserve no-problem silence for deliberately disabled features. No fake scan or progress animation.
+- **Dependencies/decisions:** align capability definitions with NOVA-080/040 and separate chat from screening. No need to add another dashboard.
+- **Acceptance:** in five unfamiliar-self-hoster trials, at least four identify whether this installation can reply locally and whether it has a recoverable backup within30seconds; each unavailable capability has a working recovery link. A missing optional model never becomes a red stopped-Nova state; a real stopping failure remains red and attention remains amber.
+- **Regression:** positive/absent/unreachable/unverified capability fixtures, rendered Home/Health consistency, state refresh after dependency recovery, keyboard and short-height checks.
+- **Effort:**1–3 builder days if existing health details can supply structured states;3–5 if separate probes are needed. Do not make network probes more aggressive to decorate the screen.
+
+## NOVA-045 — Qualify the failed process-lifecycle checks on a compatible host
+
+- **Category:** investigation. **Severity:** high potential if a real orphan-process leak is established; no such deployed leak is claimed here. **Priority:** P1 qualification before resilience claims. **Confidence:** high that local tests failed, low that each failure has a product cause. **Status:** open bounded investigation.
+- **Affected user/consequence:** self-hosters depend on workers and supervisors ending old process groups before starting replacements; the local failures leave that qualification unresolved in this host class.
+- **Baseline/evidence:** merged d948aa0a; `evidence/qa-check-summary.json`, `qa-check.log`, `qa-interrupted-fixture.json`; six non-Docker liveness assertions among forty failed tests. Exact-baseline CI passed. The managed host has unreaped zombies; `tests/acceptance/m4b-device-agent.test.ts:21` uses kill(pid,0), with a focused failure at line103. This explains a plausible measurement problem, not every supervisor failure.
+- **Reproduction/observed/expected:** rerun the named failed files from the retained log on an isolated normal reaping host using pinned Node26.3.1, then on this managed host. Record live versus zombie process state, parent/group IDs and sockets. Expected gate evidence must distinguish terminated-but-unreaped processes from executing survivors. Never inspect or kill owner processes.
+- **Root cause:** unresolved per test. Do not change lifecycle code or weaken assertions merely because the environment differs.
+- **Smallest closure/components:** a compatibility evidence report for acceptance M4b/provider guard/supervisor tests and their liveness helpers; fix production behavior only if a live survivor reproduces, otherwise improve fixture detection/cleanup with explicit supported-host criteria.
+- **Dependencies/decisions:** a compatible isolated host; no real models, credentials or deployment changes. Keep Docker capability failures separate (NOVA-044).
+- **Acceptance/regression:** each of the six failures has a per-case disposition and repeatable evidence; normal-exit/zombie/live-orphan negative controls distinguish process states; a genuinely running child still fails the test. Final full gate result and environment are recorded without reclassifying this audit's failed run as passed.
+- **Effort:**0.5–2 days investigation; any production fix estimated only after reproduction.
+
+## NOVA-046 — Recheck narrow-tablet prose width with the optional pane open
+
+- **Category:** investigation. **Severity:** low layout-contract deviation; **Priority:** P3. **Confidence:** high measurement, medium cross-browser generality. **Status:** open bounded qualification.
+- **Affected user/consequence:** readers at840px can get a narrower chat column than the agreed45–75ch range when they explicitly expand the optional pane. No clipped content or inability to act was observed.
+- **Baseline/evidence/reproduction:** merged d948aa0a; Chromium155,840px, pane expanded; `evidence/qa-prose-width.json`, `qa-prose-width-default.json`, `qa-prose-840.png`, `diagnostics/qa-prose-width.mjs`. Observed41.70ch expanded versus69.97ch default;1024px expanded55.70ch. Current pinned CI passed.
+- **Expected/root cause:** preserve the documented readable width; exact browser/font/breakpoint interaction needs qualification rather than an assumed rendering regression.
+- **Smallest closure/components:** compare the same fixture in pinned Chromium/WebKit and Chromium155, then adjust pane-availability/minimum-width rules only if the same product condition fails. UI layout bands, text measure, M9 fold assertion; no redesign.
+- **Dependencies:** existing layout/styleguide approval if behavior changes; do not compromise draft/scroll/focus preservation.
+- **Acceptance/regression:** expanded/default at840/1024/1280px have an explicit agreed result; when the pane cannot fit, a reachable toggle or layout alternative preserves the reading column and all controls. Actual screenshots and keyboard/touch toggling accompany width measurements; no test-threshold weakening without an explicit design decision.
+- **Effort:**0.5–1 day qualification,1–2 additional days if a breakpoint repair is needed.

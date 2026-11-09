@@ -1,0 +1,16 @@
+{
+  "command": "npm run check",
+  "exit_code": 1,
+  "duration_seconds": 1021.042,
+  "log": "/workspace/nova-audit-astra/audit-astra/evidence/qa-check.log",
+  "reported_counts": {
+    "tests": 2269,
+    "pass": 2214,
+    "fail": 40,
+    "cancelled": 0,
+    "skipped": 15,
+    "todo": 0
+  },
+  "qualification": "Failed local check. One completed-but-open-handle Docker test process was externally terminated after 9m58s; final reporter counts are preserved but this is not an uninterrupted full-gate completion.",
+  "fixture_interruption": "qa-interrupted-fixture.json"
+}

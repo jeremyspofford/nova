@@ -1,0 +1,19 @@
+Source: GitHub Actions run 42692472653 / job 129415778845, baseline d948aa0a442a9f930b86f4516eeea21981b76714. Retrieved read-only; this is remote CI evidence, not a local rerun.
+2026-11-09T20:41:41.7367091Z ## Accessibility (advisory)
+2026-11-09T20:41:41.7367606Z 
+2026-11-09T20:41:41.7368477Z axe-core 4.14.0, default rules, 9 views × 10 postures. **23 nodes** in violation. Advisory only: this never fails the build.
+2026-11-09T20:41:41.7369002Z 
+2026-11-09T20:41:41.7369304Z | rule | / | /chat | /tasks | /memory | /automations | /activity | /health | /settings | /capture | total |
+2026-11-09T20:41:41.7369991Z |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+2026-11-09T20:41:41.7370384Z | heading-order | 0 | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 | 5 |
+2026-11-09T20:41:41.7370851Z | label-content-name-mismatch | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 18 |
+2026-11-09T20:41:41.7371314Z | **total** | 2 | 2 | 2 | 2 | 2 | 7 | 2 | 2 | 2 | **23** |
+2026-11-09T20:41:41.7371545Z 
+2026-11-09T20:41:41.7371671Z <details><summary>Where</summary>
+2026-11-09T20:41:41.7372055Z 
+2026-11-09T20:41:41.7373148Z - **label-content-name-mismatch**: `/ a[data-dest="health"]`, `/chat a[data-dest="health"]`, `/tasks a[data-dest="health"]`, `/memory a[data-dest="health"]`, `/automations a[data-dest="health"]`, `/activity a[data-dest="health"]`, `/health a[data-dest="health"]`, `/settings a[data-dest="health"]`, `/capture a[data-dest="health"]`
+2026-11-09T20:41:41.7374545Z - **heading-order**: `/activity #handling-card-title`
+2026-11-09T20:41:41.7374804Z 
+2026-11-09T20:41:41.7374908Z </details>
+2026-11-09T20:41:41.7375361Z 
+2026-11-09T20:41:41.7375988Z {"total":23,"byRule":{"label-content-name-mismatch":18,"heading-order":5},"byView":{"/":2,"/chat":2,"/tasks":2,"/memory":2,"/automations":2,"/activity":7,"/health":2,"/settings":2,"/capture":2}}

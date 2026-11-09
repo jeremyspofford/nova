@@ -1,0 +1,77 @@
+Baseline d948aa0a; local Linux Chromium emulation, no physical device; synthetic homes and software-authenticator fixtures; no live models.
+no-Kubernetes tripwire: armed (kubectl, helm, flux and k3s on PATH record and fail every call; KUBECONFIG unset)
+state:
+chat, unfolded (884×1104): place -5 → -5 px, draft kept
+chat, half-open (884×1104, hinge): place -5 → -5 px, draft kept
+chat, a desktop window (1280×820): place -5 → -5 px, draft kept
+chat, folded again (390×844): place -5 → -5 px, draft kept
+settings, unfolded: edit and focus kept
+settings, half-open: edit and focus kept
+settings, a desktop window: edit and focus kept
+settings, folded again: edit and focus kept
+✔ M9 gate, foldable 1: the reader’s place, a draft and a Settings edit survive fold, unfold and resize (8199.630726ms)
+✖ M9 gate, foldable 2: no stretched single column — prose at 45–75ch, the extra width a second pane in the three-column band (5976.548415ms)
+hinge:
+book (side by side), home: clear
+book (side by side), chat: clear
+book (side by side), tasks: clear
+book (side by side), settings: clear
+book (side by side), memory: clear
+book (side by side), conversations open: clear
+book (side by side), a task open: clear
+book (side by side), a toast: clear
+laptop (one above the other), home: clear
+laptop (one above the other), chat: clear
+laptop (one above the other), tasks: clear
+laptop (one above the other), settings: clear
+laptop (one above the other), memory: clear
+laptop (one above the other), conversations open: clear
+laptop (one above the other), a task open: clear
+laptop (one above the other), a toast: clear
+✔ M9 gate, foldable 3: nothing under the hinge, in the book and laptop postures (20229.719475ms)
+200% text:
+phone, home: text 32px, nothing cut off or overlapping
+phone, chat: text 32px, nothing cut off or overlapping
+phone, tasks: text 32px, nothing cut off or overlapping
+phone, settings: text 32px, nothing cut off or overlapping
+phone, memory: text 32px, nothing cut off or overlapping
+desktop, home: text 32px, nothing cut off or overlapping
+desktop, chat: text 32px, nothing cut off or overlapping
+desktop, tasks: text 32px, nothing cut off or overlapping
+desktop, settings: text 32px, nothing cut off or overlapping
+desktop, memory: text 32px, nothing cut off or overlapping
+✔ M9 gate, foldable 4: 200% text survives, at a phone’s width and a desktop’s (10951.614254ms)
+NAVIGATION phone: registered=14 reached=14 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true,"backupControls":true,"healthCosts":true,"healthDiagnostics":true} states=32
+DOCUMENT phone: main-document requests=1
+✔ navigation reachability and required homes: phone (63389.269961ms)
+NAVIGATION rail: registered=14 reached=14 missing=[] required={"homeTopology":true,"devicesTopology":true,"captureCategory":true,"backupControls":true,"healthCosts":true,"healthDiagnostics":true} states=31
+DOCUMENT rail: main-document requests=1
+✔ navigation reachability and required homes: rail (38196.931316ms)
+✔ M3: with the server down, the PWA stays honestly offline, and recovers when it returns (20270.727137ms)
+✔ M3: an answer begun before an outage never brings the orb back (4169.322244ms)
+✔ Settings: search at the head with "/", a filtered list with counts and marks, two screens on a phone, every setting reachable (15085.262551ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 8
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 188146.439363
+
+✖ failing tests:
+
+test at tests/ui/m9-fold.test.ts:83:1
+✖ M9 gate, foldable 2: no stretched single column — prose at 45–75ch, the extra width a second pane in the three-column band (5976.548415ms)
+  AssertionError [ERR_ASSERTION]: 840px, chat: prose is 42ch wide (45–75)
+      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/ui/m9-fold.test.ts:132:44)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+no-Kubernetes tripwire: never fired

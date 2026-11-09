@@ -1,0 +1,20 @@
+{
+  "duration_seconds": 8.2,
+  "checks": [
+    {
+      "command": "node scripts/changelog.js --check",
+      "exit_code": 0,
+      "output": "CHANGELOG.md matches docs/changelog/.\n"
+    },
+    {
+      "command": "node scripts/agent-pointers.js --check",
+      "exit_code": 0,
+      "output": "CLAUDE.md and AGENTS.md match scripts/agent-pointers.js.\n"
+    },
+    {
+      "command": "CI JavaScript syntax loop",
+      "files": 204,
+      "failures": []
+    }
+  ]
+}

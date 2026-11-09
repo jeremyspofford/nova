@@ -1,0 +1,412 @@
+{
+  "instance": "http://127.0.0.1:46215",
+  "home": "/tmp/nova-astra-ui-workflow-DhaSOo/nova-home",
+  "source": "d948aa0a",
+  "fixture": "scripts/fake-agent.js; no model; setup seeded over API; service worker blocked in workflow harness",
+  "rows": [
+    {
+      "name": "suggestion-fills-only",
+      "sendInitiallyDisabled": true,
+      "draft": "What do you remember about me?",
+      "posts": [
+        "http://127.0.0.1:46215/api/sessions",
+        "http://127.0.0.1:46215/api/sessions/main/messages",
+        "http://127.0.0.1:46215/api/sessions/main/messages"
+      ],
+      "url": "http://127.0.0.1:46215/new",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nNew chat\nGood evening, Alex\nMessage Nova\nLocal only\nWhat do you remember about me?\nRemind me tomorrow at 9:00\nWhat can you do?\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "draft-phone",
+      "preserved": true,
+      "url": "http://127.0.0.1:46215/new",
+      "text": "Skip to content\nNew chat\nGood evening, Alex\nMessage Nova\nLocal only\nWhat do you remember about me?\nRemind me tomorrow at 9:00\nWhat can you do?\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "draft-cover",
+      "preserved": true,
+      "url": "http://127.0.0.1:46215/new",
+      "text": "Skip to content\nNew chat\nGood evening, Alex\nMessage Nova\nLocal only\nWhat do you remember about me?\nRemind me tomorrow at 9:00\nWhat can you do?\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "draft-reload",
+      "preserved": true,
+      "url": "http://127.0.0.1:46215/new",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nNew chat\nGood evening, Alex\nMessage Nova\nLocal only\nWhat do you remember about me?\nRemind me tomorrow at 9:00\nWhat can you do?\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "chat-memory-created",
+      "url": "http://127.0.0.1:46215/c/2026-11-09-qpt1lx",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nremember the audit garden has blue irises\nMonday, the ninth of November\n9:11 PM\nMonday, November 9, 2026, 9:11:29 PM\nremember the audit garden has blue irises\n9:11 PM\nMonday, November 9, 2026, 9:11:29 PM\n\nGot it. I'll remember that.\n\nkept in memory: The audit garden has blue irises.\n\nnoted for the day: Mentioned: The audit garden has blue irises.\n\nCopy\nRegenerate\nMessage Nova\nLocal only\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "memory-created",
+      "url": "http://127.0.0.1:46215/memory",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nThe audit garden has blue irises.\n\nfrom “remember the audit garden has blue irises”, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nDAY NOTES\n\nDetail from each day. Nova looks here when a message calls for it.\n\nMonday, the ninth of November\n\nMentioned: The audit garden has blue irises.\n\n21:11 · from “remember the audit garden has blue irises”\n\nEdit\nForget\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it’s verified.\n\nAll tasks\nDevices\n\nHub · this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth",
+      "errors": []
+    },
+    {
+      "name": "memory-api-after-chat",
+      "data": {
+        "sections": [
+          {
+            "title": "Facts",
+            "entries": [
+              {
+                "id": "46bf4c87-3f39-4ddc-9eba-73b0b9aa77a2",
+                "text": "The audit garden has blue irises.",
+                "time": null,
+                "from": "2026-11-09-qpt1lx/499f0c81",
+                "at": "2026-11-09T21:11:29.774Z",
+                "updated": null,
+                "by": "nova"
+              }
+            ]
+          },
+          {
+            "title": "Preferences",
+            "entries": []
+          },
+          {
+            "title": "Decisions",
+            "entries": []
+          },
+          {
+            "title": "Commitments",
+            "entries": []
+          }
+        ],
+        "days": [
+          {
+            "day": "2026-11-09",
+            "entries": [
+              {
+                "id": "n7b2ccebd",
+                "text": "Mentioned: The audit garden has blue irises.",
+                "time": "21:11",
+                "from": "2026-11-09-qpt1lx/499f0c81",
+                "at": "2026-11-09T21:11:29.796Z",
+                "updated": null,
+                "by": "nova"
+              }
+            ]
+          }
+        ],
+        "titles": {
+          "2026-11-09-qpt1lx": "remember the audit garden has blue irises"
+        },
+        "candidates": []
+      }
+    },
+    {
+      "name": "create-task-api",
+      "status": 201,
+      "body": {
+        "id": "0421c205-1337-408d-8dc1-25232a05b799",
+        "title": "Write audit checklist",
+        "origin": {
+          "kind": "user"
+        },
+        "state": "queued",
+        "reason": null,
+        "owner": "workspace",
+        "brief": {
+          "envelope": "1",
+          "task_id": "0421c205-1337-408d-8dc1-25232a05b799",
+          "goal": "Write a neutral checklist and verify the file",
+          "context_refs": [],
+          "constraints": {},
+          "privacy_mode": "local-only",
+          "approval_tier": 0,
+          "evidence_required": [
+            {
+              "kind": "read_back",
+              "target": "workspace:audit-checklist.md",
+              "note": "Read the saved file"
+            }
+          ],
+          "idempotency_key": "525a6174-15ab-4f35-a719-5cda0225091f",
+          "inputs": {
+            "action": "write",
+            "path": "audit-checklist.md",
+            "content": "# Audit checklist\n\n- Check the garden.\n"
+          }
+        },
+        "report": null,
+        "verification": null,
+        "privacy_mode": "local-only",
+        "approval_tier": 0,
+        "approved_at": null,
+        "cost": {},
+        "parent_id": null,
+        "user_visibility": "handling",
+        "idempotency_key": "525a6174-15ab-4f35-a719-5cda0225091f",
+        "attempts": 0,
+        "created_at": "2026-11-09T21:11:31.635Z",
+        "updated_at": "2026-11-09T21:11:31.635Z",
+        "completed_at": null
+      }
+    },
+    {
+      "name": "task-final",
+      "final": {
+        "id": "0421c205-1337-408d-8dc1-25232a05b799",
+        "title": "Write audit checklist",
+        "origin": {
+          "kind": "user"
+        },
+        "state": "done",
+        "reason": "Wrote audit-checklist.md (39 bytes).",
+        "owner": "workspace",
+        "brief": {
+          "envelope": "1",
+          "task_id": "0421c205-1337-408d-8dc1-25232a05b799",
+          "goal": "Write a neutral checklist and verify the file",
+          "context_refs": [],
+          "constraints": {},
+          "privacy_mode": "local-only",
+          "approval_tier": 0,
+          "evidence_required": [
+            {
+              "kind": "read_back",
+              "target": "workspace:audit-checklist.md",
+              "note": "Read the saved file"
+            }
+          ],
+          "idempotency_key": "525a6174-15ab-4f35-a719-5cda0225091f",
+          "inputs": {
+            "action": "write",
+            "path": "audit-checklist.md",
+            "content": "# Audit checklist\n\n- Check the garden.\n"
+          }
+        },
+        "report": {
+          "envelope": "1",
+          "task_id": "0421c205-1337-408d-8dc1-25232a05b799",
+          "status": "done",
+          "summary": "Wrote audit-checklist.md (39 bytes).",
+          "evidence": [
+            {
+              "kind": "read_back",
+              "target": "workspace:audit-checklist.md",
+              "sha256": "b0df22e9f7e47e374fe08cf5c77a9bbcd739db6606a29f8704a38fb6e6479fc2",
+              "bytes": 39
+            }
+          ],
+          "artifacts": [
+            {
+              "kind": "file",
+              "ref": "workspace:audit-checklist.md",
+              "sha256": "b0df22e9f7e47e374fe08cf5c77a9bbcd739db6606a29f8704a38fb6e6479fc2"
+            }
+          ],
+          "blockers": [],
+          "usage": {
+            "duration_ms": 1.0275849999998172
+          },
+          "follow_up_suggestions": []
+        },
+        "verification": {
+          "ok": true,
+          "checks": [
+            {
+              "requirement": {
+                "kind": "read_back",
+                "target": "workspace:audit-checklist.md",
+                "note": "Read the saved file"
+              },
+              "evidence": {
+                "kind": "read_back",
+                "target": "workspace:audit-checklist.md",
+                "sha256": "b0df22e9f7e47e374fe08cf5c77a9bbcd739db6606a29f8704a38fb6e6479fc2",
+                "bytes": 39
+              },
+              "ok": true,
+              "why": "Nova read workspace:audit-checklist.md itself: 39 bytes, sha256 b0df22e9f7e4…, as reported."
+            }
+          ],
+          "at": "2026-11-09T21:11:31.658Z"
+        },
+        "privacy_mode": "local-only",
+        "approval_tier": 0,
+        "approved_at": null,
+        "cost": {
+          "duration_ms": 1
+        },
+        "parent_id": null,
+        "user_visibility": "handling",
+        "idempotency_key": "525a6174-15ab-4f35-a719-5cda0225091f",
+        "attempts": 1,
+        "created_at": "2026-11-09T21:11:31.635Z",
+        "updated_at": "2026-11-09T21:11:31.660Z",
+        "completed_at": "2026-11-09T21:11:31.660Z"
+      }
+    },
+    {
+      "name": "tasks-completed",
+      "url": "http://127.0.0.1:46215/tasks",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nTasks\nTasks\n\nEverything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.\n\nDONE AND CHECKED\nWrite audit checklist\nWrote audit-checklist.md (39 bytes). · just now\nVerified\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it’s verified.\n\nAll tasks\nDevices\n\nHub · this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth",
+      "errors": []
+    },
+    {
+      "name": "task-evidence",
+      "url": "http://127.0.0.1:46215/tasks",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nTasks\nTasks\n\nEverything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.\n\nDONE AND CHECKED\nWrite audit checklist\nWrote audit-checklist.md (39 bytes). · just now\nVerified\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it’s verified.\n\nAll tasks\nDevices\n\nHub · this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth\n\nVerified\n\nWrite audit checklist\n\nWrite a neutral checklist and verify the file\n\nWrote audit-checklist.md (39 bytes).\n\nHOW NOVA CHECKED\n\nRead back · workspace:audit-checklist.md\n\nRead back workspace:audit-checklist.md: 39 bytes, fingerprint b0df22e9f7e4…\n\nNova read workspace:audit-checklist.md itself: 39 bytes, sha256 b0df22e9f7e4…, as reported.\n\nChecked 11/9/2026, 9:11:31 PM.\n\nThe ledger entry\nWhat happened",
+      "errors": []
+    },
+    {
+      "name": "invalid-task-path-create",
+      "status": 201,
+      "body": {
+        "id": "1089e794-eb7c-459d-b291-109c5934273d",
+        "title": "Unsafe audit path control",
+        "origin": {
+          "kind": "user"
+        },
+        "state": "queued",
+        "reason": null,
+        "owner": "workspace",
+        "brief": {
+          "envelope": "1",
+          "task_id": "1089e794-eb7c-459d-b291-109c5934273d",
+          "goal": "Write a neutral checklist and verify the file",
+          "context_refs": [],
+          "constraints": {},
+          "privacy_mode": "local-only",
+          "approval_tier": 0,
+          "evidence_required": [
+            {
+              "kind": "read_back",
+              "target": "workspace:audit-checklist.md",
+              "note": "Read the saved file"
+            }
+          ],
+          "idempotency_key": "ec126b1f-4fa5-4f14-b671-dc7ef447d2ee",
+          "inputs": {
+            "action": "write",
+            "path": "../outside.md",
+            "content": "synthetic"
+          }
+        },
+        "report": null,
+        "verification": null,
+        "privacy_mode": "local-only",
+        "approval_tier": 0,
+        "approved_at": null,
+        "cost": {},
+        "parent_id": null,
+        "user_visibility": "handling",
+        "idempotency_key": "ec126b1f-4fa5-4f14-b671-dc7ef447d2ee",
+        "attempts": 0,
+        "created_at": "2026-11-09T21:11:33.132Z",
+        "updated_at": "2026-11-09T21:11:33.132Z",
+        "completed_at": null
+      }
+    },
+    {
+      "name": "invalid-task-path-result",
+      "body": {
+        "id": "1089e794-eb7c-459d-b291-109c5934273d",
+        "title": "Unsafe audit path control",
+        "origin": {
+          "kind": "user"
+        },
+        "state": "waiting",
+        "reason": "Blocked: ../outside.md is outside the workspace.",
+        "owner": "workspace",
+        "brief": {
+          "envelope": "1",
+          "task_id": "1089e794-eb7c-459d-b291-109c5934273d",
+          "goal": "Write a neutral checklist and verify the file",
+          "context_refs": [],
+          "constraints": {},
+          "privacy_mode": "local-only",
+          "approval_tier": 0,
+          "evidence_required": [
+            {
+              "kind": "read_back",
+              "target": "workspace:audit-checklist.md",
+              "note": "Read the saved file"
+            }
+          ],
+          "idempotency_key": "ec126b1f-4fa5-4f14-b671-dc7ef447d2ee",
+          "inputs": {
+            "action": "write",
+            "path": "../outside.md",
+            "content": "synthetic"
+          }
+        },
+        "report": {
+          "envelope": "1",
+          "task_id": "1089e794-eb7c-459d-b291-109c5934273d",
+          "status": "blocked",
+          "summary": "../outside.md is outside the workspace.",
+          "evidence": [],
+          "artifacts": [],
+          "blockers": [
+            "../outside.md is outside the workspace."
+          ],
+          "usage": {
+            "duration_ms": 0.14275699999961944
+          },
+          "follow_up_suggestions": []
+        },
+        "verification": null,
+        "privacy_mode": "local-only",
+        "approval_tier": 0,
+        "approved_at": null,
+        "cost": {
+          "duration_ms": 0
+        },
+        "parent_id": null,
+        "user_visibility": "attention",
+        "idempotency_key": "ec126b1f-4fa5-4f14-b671-dc7ef447d2ee",
+        "attempts": 1,
+        "created_at": "2026-11-09T21:11:33.132Z",
+        "updated_at": "2026-11-09T21:11:33.148Z",
+        "completed_at": null
+      }
+    },
+    {
+      "name": "chat-failure",
+      "url": "http://127.0.0.1:46215/chat",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\n1\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nNova\nMonday, the ninth of November\n9:11 PM\nMonday, November 9, 2026, 9:11:33 PM\nfail\n\n`node` exited before replying.\n\nDetails\nTry again\nRegenerate\nMessage Nova\nLocal only\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "chat-recovery",
+      "url": "http://127.0.0.1:46215/chat",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\n1\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nNova\nMonday, the ninth of November\n9:11 PM\nMonday, November 9, 2026, 9:11:33 PM\nfail\n\n`node` exited before replying.\n\nDetails\nTry again\nMonday, November 9, 2026, 9:11:35 PM\nremember this recovery marker is synthetic\n9:11 PM\nMonday, November 9, 2026, 9:11:36 PM\n\nGot it. I'll remember that.\n\nkept in memory: This recovery marker is synthetic.\n\nnoted for the day: Mentioned: This recovery marker is synthetic.\n\nCopy\nRegenerate\nMessage Nova\nLocal only\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "settings-controls",
+      "url": "http://127.0.0.1:46215/settings#you",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\n1\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nYou and Nova\n\nNames and how Nova talks to you\n\nYOU AND NOVA\n\nYour name\n\nWhat Nova calls you.\n\nYour name\nSave\n\nNova’s name\n\nOnly the name changes; the charter stays.\n\nNova’s name\nSave\n\nDirectness\n\nTelling you when Nova thinks something’s wrong isn’t adjustable; this is how it says it.\n\nDirectness\nGently\nPlainly\nBluntly",
+      "errors": []
+    },
+    {
+      "name": "back-navigation",
+      "expected": "/memory",
+      "actual": "/memory",
+      "url": "http://127.0.0.1:46215/memory",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\n1\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nThe audit garden has blue irises.\n\nfrom “remember the audit garden has blue irises”, today\n\nEdit\nForget\n\nThis recovery marker is synthetic.\n\nfrom a conversation, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nDAY NOTES\n\nDetail from each day. Nova looks here when a message calls for it.\n\nMonday, the ninth of November\n\nMentioned: The audit garden has blue irises.\n\n21:11 · from “remember the audit garden has blue irises”\n\nEdit\nForget\n\nMentioned: This recovery marker is synthetic.\n\n21:11 · from a conversation\n\nEdit\nForget\nNova is handling\nUnsafe audit path control\nNeeds you\nAll tasks\nDevices\n\nHub · this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth",
+      "errors": []
+    },
+    {
+      "name": "palette-keyboard",
+      "url": "http://127.0.0.1:46215/memory",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\n1\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nThe audit garden has blue irises.\n\nfrom “remember the audit garden has blue irises”, today\n\nEdit\nForget\n\nThis recovery marker is synthetic.\n\nfrom a conversation, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nDAY NOTES\n\nDetail from each day. Nova looks here when a message calls for it.\n\nMonday, the ninth of November\n\nMentioned: The audit garden has blue irises.\n\n21:11 · from “remember the audit garden has blue irises”\n\nEdit\nForget\n\nMentioned: This recovery marker is synthetic.\n\n21:11 · from a conversation\n\nEdit\nForget\nNova is handling\nUnsafe audit path control\nNeeds you\nAll tasks\nDevices\n\nHub · this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth\nGO TO\nHome\n,\nGo to\nChat\n,\nGo to\nTasks\n,\nGo to\nMemory\n,\nGo to\nAutomations\n,\nGo to\nSkills\n,\nGo to\nActivity\n,\nGo to\nHealth\n,\nGo to\nSettings\n,\nGo to\nCapture\n,\nSettings\nMachines and services\n,\nSettings\nAbout Nova\n,\nSettings\nWhat’s new\n,\nSettings\nWhere Nova stands\n,\nSettings\nCONVERSATIONS\nremember the audit garden has blue irises\n,\nNov 9\nSETTINGS\nYou and Nova\n,\nSettings\nAppearance\n,\nSettings\nPrivacy and permissions\n,\nSettings\nConnections\n,\nSettings\nModels and providers\n,\nSettings\nDevices\n,\nSettings\nCapture\n,\nSettings\nServices\n,\nSettings\nAbout Nova\n,\nSettings\nSecurity\n,\nSettings\nBackups and changes\n,\nSettings\nConfiguration\n,\nSettings\nStart over\n,\nSettings\nACTIONS\nNew conversation\nCtrl\nShift\nO\nHide the right column\nCtrl\n\\\n\n↑↓ move · Enter open · Esc close",
+      "errors": []
+    },
+    {
+      "name": "palette-escape",
+      "active": "<div class=\"thread memory view-enter\" id=\"memory\" tabindex=\"-1\" aria-label=\"Memory\"><header class=\"memory-intro\"><p class=\"empty-date\">What Nova knows</p>\n<p class=\"memory-lede\">Nova reads this before every reply. Change anything, or forget it.</p></header>\n<section class=\"memory-section\" aria-labelledby=\"ms-facts\"><h2 class=\"memory-heading\" id=\"ms-facts\">Facts</h2>\n<p class=\"memory-kind\">Who you are and what is true about your life.</p>\n<ul class=\"memory-list\"><li class=\"memory-item\" id=\"m-46bf4c87-3f39-4ddc-9eba-73b0b9aa77a2\" data-id=\"46bf4c87-3f39-4ddc-9eba-73b0b9aa77a2\" tabindex=\"0\">\n  <p class=\"memory-text\">The audit garden has blue irises.</p>\n  <p class=\"memory-source\">from <a class=\"memory-from\" href=\"/c/2026-11-09-qpt1lx#t-499f0c81\">“remember the audit garden has blue irises”</a>, today</p>\n  <div class=\"memory-actions\">\n    <button type=\"button\" class=\"act\" data-action=\"edit-memory\" aria-label=\"Edit\">Edit</button>\n    <button type=\"button\" class=\"act\" data-action=\"forget-memory\" aria-label=\"Forget\">Forget</button>\n  </div>\n</li><li class=\"memory-item\" id=\"m-9e75af82-5168-4acd-a47c-1c3e5013aaf5\" data-id=\"9e75af82-5168-4acd-a47c-1c3e5013aaf5\" tabindex=\"0\">\n  <p class=\"memory-text\">This recovery marker is synthetic.</p>\n  <p class=\"memory-source\">from a conversation, today</p>\n  <div class=\"memory-actions\">\n    <button type=\"button\" class=\"act\" data-action=\"edit-memory\" aria-label=\"Edit\">Edit</button>\n    <button type=\"button\" class=\"act\" data-action=\"forget-memory\" aria-label=\"Forget\">Forget</button>\n  </div>\n</li></ul></section>\n<section class=\"memory-section\" aria-labelledby=\"ms-preferences\"><h2 class=\"memory-heading\" id=\"ms-preferences\">Preferences</h2>\n<p class=\"memory-kind\">How you like things done.</p>\n<p class=\"memory-none\">Nothing yet.</p></section>\n<section class=\"memory-section\" aria-labelledby=\"ms-decisions\"><h2 class=\"memory-heading\" id=\"ms-decisions\">Decisions</h2>\n<p class=\"memory-kind\">What you settled, so it stays settled.</p>\n<p class=\"memory-none\">Nothing yet.</p></section>\n<section class=\"memory-section\" aria-labelledby=\"ms-commitments\"><h2 class=\"memory-heading\" id=\"ms-commitments\">Commitments</h2>\n<p class=\"memory-kind\">What you or Nova said would happen.</p>\n<p class=\"memory-none\">Nothing yet.</p></section>\n<section class=\"memory-section\" aria-labelledby=\"ms-days\"><h2 class=\"memory-heading\" id=\"ms-days\">Day notes</h2>\n<p class=\"memory-kind\">Detail from each day. Nova looks here when a message calls for it.</p>\n<h3 class=\"memory-day\">Monday, the ninth of November</h3><ul class=\"memory-list\"><li class=\"memory-item\" id=\"m-n7b2ccebd\" data-id=\"n7b2ccebd\" tabindex=\"0\">\n  <p class=\"memory-text\">Mentioned: The audit garden has blue irises.</p>\n  <p class=\"memory-source\">21:11 · from <a class=\"memory-from\" href=\"/c/2026-11-09-qpt1lx#t-499f0c81\">“remember the audit garden has blue irises”</a></p>\n  <div class=\"memory-actions\">\n    <button type=\"button\" class=\"act\" data-action=\"edit-memory\" aria-label=\"Edit\">Edit</button>\n    <button type=\"button\" class=\"act\" data-action=\"forget-memory\" aria-label=\"Forget\">Forget</button>\n  </div>\n</li><li class=\"memory-item\" id=\"m-n1ad902f9\" data-id=\"n1ad902f9\" tabindex=\"0\">\n  <p class=\"memory-text\">Mentioned: This recovery marker is synthetic.</p>\n  <p class=\"memory-source\">21:11 · from a conversation</p>\n  <div class=\"memory-actions\">\n    <button type=\"button\" class=\"act\" data-action=\"edit-memory\" aria-label=\"Edit\">Edit</button>\n    <button type=\"button\" class=\"act\" data-action=\"forget-memory\" aria-label=\"Forget\">Forget</button>\n  </div>\n</li></ul></section></div>"
+    }
+  ]
+}

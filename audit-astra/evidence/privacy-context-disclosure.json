@@ -1,0 +1,47 @@
+{
+  "baseline": "d948aa0a442a9f930b86f4516eeea21981b76714",
+  "boundary": "No remote request: synthetic injected agent inspects parameters only",
+  "classification": "Expected data disclosure under current cloud-allowed mode; not itself proof of unauthorized access",
+  "calls": [
+    {
+      "system_has_private_file": true,
+      "prompt_has_private_file": false
+    }
+  ],
+  "receipt": [
+    {
+      "egress": "remote:audit-cloud-stand-in",
+      "privacy_mode": "cloud-allowed",
+      "context_items": [
+        {
+          "kind": "file",
+          "ref": "system prompt"
+        },
+        {
+          "kind": "standing",
+          "ref": "~/AGENTS.md"
+        },
+        {
+          "kind": "standing",
+          "ref": "~/SOUL.md"
+        },
+        {
+          "kind": "standing",
+          "ref": "~/IDENTITY.md"
+        },
+        {
+          "kind": "standing",
+          "ref": "~/USER.md"
+        },
+        {
+          "kind": "standing",
+          "ref": "~/MEMORY.md"
+        },
+        {
+          "kind": "session",
+          "ref": "main"
+        }
+      ]
+    }
+  ]
+}

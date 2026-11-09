@@ -1,0 +1,19 @@
+{
+  "command": [
+    "sh",
+    "scripts/tripwire.sh",
+    "node",
+    "--test",
+    "--test-concurrency=1",
+    "--test-force-exit",
+    "--test-timeout=300000",
+    "tests/ui/navigation-reachability.test.ts",
+    "tests/ui/offline.test.ts",
+    "tests/ui/settings-rebuild.test.ts",
+    "tests/ui/m9-fold.test.ts"
+  ],
+  "exit_code": 1,
+  "duration_seconds": 188.25,
+  "browser": "/usr/bin/chromium",
+  "evidence": "/workspace/nova-audit-astra/audit-astra/evidence/qa-ui-check.log"
+}

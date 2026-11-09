@@ -1,0 +1,9 @@
+{
+  "action": "SIGTERM to confirmed audit-owned test-file process only",
+  "pid": 30384,
+  "parent_pid": 2465,
+  "test_file": "tests/core/computer-egress-bounds.test.ts",
+  "elapsed": "09:58",
+  "reason": "Test bodies reported failure and finished, but process retained open handles; managed Docker process-list capability fails. Remaining suite allowed to continue. This is an externally interrupted partial file, not a complete successful gate.",
+  "at_utc": "2026-11-09T21:15:51Z"
+}

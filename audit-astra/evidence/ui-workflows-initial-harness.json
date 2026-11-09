@@ -1,0 +1,154 @@
+{
+  "instance": "http://127.0.0.1:39537",
+  "home": "/tmp/nova-astra-ui-workflow-ccRVpZ/nova-home",
+  "source": "d948aa0a",
+  "fixture": "scripts/fake-agent.js; no model; setup seeded over API; service worker blocked in workflow harness",
+  "rows": [
+    {
+      "name": "suggestion-fills-only",
+      "sendInitiallyDisabled": true,
+      "draft": "What do you remember about me?",
+      "posts": [
+        "http://127.0.0.1:39537/api/sessions",
+        "http://127.0.0.1:39537/api/sessions/main/messages"
+      ],
+      "url": "http://127.0.0.1:39537/new",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nNew chat\nGood evening, Alex\nMessage Nova\nLocal only\nWhat do you remember about me?\nRemind me tomorrow at 9:00\nWhat can you do?\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "draft-phone",
+      "preserved": true,
+      "url": "http://127.0.0.1:39537/new",
+      "text": "Skip to content\nNew chat\nGood evening, Alex\nMessage Nova\nLocal only\nWhat do you remember about me?\nRemind me tomorrow at 9:00\nWhat can you do?\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "draft-cover",
+      "preserved": true,
+      "url": "http://127.0.0.1:39537/new",
+      "text": "Skip to content\nNew chat\nGood evening, Alex\nMessage Nova\nLocal only\nWhat do you remember about me?\nRemind me tomorrow at 9:00\nWhat can you do?\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "draft-reload",
+      "preserved": true,
+      "url": "http://127.0.0.1:39537/new",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nNew chat\nGood evening, Alex\nMessage Nova\nLocal only\nWhat do you remember about me?\nRemind me tomorrow at 9:00\nWhat can you do?\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "chat-memory-created",
+      "url": "http://127.0.0.1:39537/c/2026-11-09-hq9xaw",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nremember the audit garden has blue irises\nMonday, the ninth of November\n9:09 PM\nMonday, November 9, 2026, 9:09:53 PM\nremember the audit garden has blue irises\n9:09 PM\nMonday, November 9, 2026, 9:09:54 PM\n\nGot it. I'll remember that.\n\nkept in memory: The audit garden has blue irises.\n\nnoted for the day: Mentioned: The audit garden has blue irises.\n\nCopy\nRegenerate\nMessage Nova\nLocal only\n\nVoice is off in local-only mode: your browser’s speech recognition may send audio to a cloud service.",
+      "errors": []
+    },
+    {
+      "name": "memory-created",
+      "url": "http://127.0.0.1:39537/memory",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nThe audit garden has blue irises.\n\nfrom “remember the audit garden has blue irises”, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nDAY NOTES\n\nDetail from each day. Nova looks here when a message calls for it.\n\nMonday, the ninth of November\n\nMentioned: The audit garden has blue irises.\n\n21:09 · from “remember the audit garden has blue irises”\n\nEdit\nForget\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it’s verified.\n\nAll tasks\nDevices\n\nHub · this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth",
+      "errors": []
+    },
+    {
+      "name": "memory-api-after-chat",
+      "data": {
+        "sections": [
+          {
+            "title": "Facts",
+            "entries": [
+              {
+                "id": "b8714e4e-a93d-4917-acda-413001961812",
+                "text": "The audit garden has blue irises.",
+                "time": null,
+                "from": "2026-11-09-hq9xaw/2737fd3c",
+                "at": "2026-11-09T21:09:54.409Z",
+                "updated": null,
+                "by": "nova"
+              }
+            ]
+          },
+          {
+            "title": "Preferences",
+            "entries": []
+          },
+          {
+            "title": "Decisions",
+            "entries": []
+          },
+          {
+            "title": "Commitments",
+            "entries": []
+          }
+        ],
+        "days": [
+          {
+            "day": "2026-11-09",
+            "entries": [
+              {
+                "id": "n310c7daf",
+                "text": "Mentioned: The audit garden has blue irises.",
+                "time": "21:09",
+                "from": "2026-11-09-hq9xaw/2737fd3c",
+                "at": "2026-11-09T21:09:54.412Z",
+                "updated": null,
+                "by": "nova"
+              }
+            ]
+          }
+        ],
+        "titles": {
+          "2026-11-09-hq9xaw": "remember the audit garden has blue irises"
+        },
+        "candidates": []
+      }
+    },
+    {
+      "name": "create-task-api",
+      "status": 400,
+      "body": {
+        "error": "A read-back requirement must name the file to read back."
+      }
+    },
+    {
+      "name": "tasks-completed",
+      "url": "http://127.0.0.1:39537/tasks",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nTasks\nTasks\n\nEverything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.\n\nNothing needs you\n\nNo tasks yet. When Nova takes something on, it shows here until it’s verified.\n\nAsk Nova to do something\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it’s verified.\n\nAll tasks\nDevices\n\nHub · this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth",
+      "errors": []
+    },
+    {
+      "name": "invalid-task-path-create",
+      "status": 400,
+      "body": {
+        "error": "A read-back requirement must name the file to read back."
+      }
+    },
+    {
+      "name": "failure-recovery",
+      "result": "blocked",
+      "error": "TimeoutError: page.waitForFunction: Timeout 12000ms exceeded."
+    },
+    {
+      "name": "settings-persist",
+      "result": "blocked",
+      "error": "TimeoutError: locator.click: Timeout 12000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: 'You and Nova', exact: true })\u001b[22m\n"
+    },
+    {
+      "name": "back-navigation",
+      "expected": "/memory",
+      "actual": "/memory",
+      "url": "http://127.0.0.1:39537/memory",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nThe audit garden has blue irises.\n\nfrom “remember the audit garden has blue irises”, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nDAY NOTES\n\nDetail from each day. Nova looks here when a message calls for it.\n\nMonday, the ninth of November\n\nMentioned: The audit garden has blue irises.\n\n21:09 · from “remember the audit garden has blue irises”\n\nEdit\nForget\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it’s verified.\n\nAll tasks\nDevices\n\nHub · this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth",
+      "errors": []
+    },
+    {
+      "name": "palette-keyboard",
+      "url": "http://127.0.0.1:39537/memory",
+      "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nMemory\n\nWhat Nova knows\n\nNova reads this before every reply. Change anything, or forget it.\n\nFACTS\n\nWho you are and what is true about your life.\n\nThe audit garden has blue irises.\n\nfrom “remember the audit garden has blue irises”, today\n\nEdit\nForget\nPREFERENCES\n\nHow you like things done.\n\nNothing yet.\n\nDECISIONS\n\nWhat you settled, so it stays settled.\n\nNothing yet.\n\nCOMMITMENTS\n\nWhat you or Nova said would happen.\n\nNothing yet.\n\nDAY NOTES\n\nDetail from each day. Nova looks here when a message calls for it.\n\nMonday, the ninth of November\n\nMentioned: The audit garden has blue irises.\n\n21:09 · from “remember the audit garden has blue irises”\n\nEdit\nForget\nNova is handling\n\nNothing in progress.\n\nWork Nova takes on shows here until it’s verified.\n\nAll tasks\nDevices\n\nHub · this device\n\nThe hub\n\nOnline\n\nOnly this device for now. Pair your phone to reach Nova from it.\n\nMachines and services\nSystem health\n\nAll systems normal\n\nDatabase, ledger and 19 workers are fine.\n\nHealth\nGO TO\nHome\n,\nGo to\nChat\n,\nGo to\nTasks\n,\nGo to\nMemory\n,\nGo to\nAutomations\n,\nGo to\nSkills\n,\nGo to\nActivity\n,\nGo to\nHealth\n,\nGo to\nSettings\n,\nGo to\nCapture\n,\nSettings\nMachines and services\n,\nSettings\nAbout Nova\n,\nSettings\nWhat’s new\n,\nSettings\nWhere Nova stands\n,\nSettings\nCONVERSATIONS\nremember the audit garden has blue irises\n,\nNov 9\nSETTINGS\nYou and Nova\n,\nSettings\nAppearance\n,\nSettings\nPrivacy and permissions\n,\nSettings\nConnections\n,\nSettings\nModels and providers\n,\nSettings\nDevices\n,\nSettings\nCapture\n,\nSettings\nServices\n,\nSettings\nAbout Nova\n,\nSettings\nSecurity\n,\nSettings\nBackups and changes\n,\nSettings\nConfiguration\n,\nSettings\nStart over\n,\nSettings\nACTIONS\nNew conversation\nCtrl\nShift\nO\nHide the right column\nCtrl\n\\\n\n↑↓ move · Enter open · Esc close",
+      "errors": []
+    },
+    {
+      "name": "palette-escape",
+      "active": "<div class=\"thread memory view-enter\" id=\"memory\" tabindex=\"-1\" aria-label=\"Memory\"><header class=\"memory-intro\"><p class=\"empty-date\">What Nova knows</p>\n<p class=\"memory-lede\">Nova reads this before every reply. Change anything, or forget it.</p></header>\n<section class=\"memory-section\" aria-labelledby=\"ms-facts\"><h2 class=\"memory-heading\" id=\"ms-facts\">Facts</h2>\n<p class=\"memory-kind\">Who you are and what is true about your life.</p>\n<ul class=\"memory-list\"><li class=\"memory-item\" id=\"m-b8714e4e-a93d-4917-acda-413001961812\" data-id=\"b8714e4e-a93d-4917-acda-413001961812\" tabindex=\"0\">\n  <p class=\"memory-text\">The audit garden has blue irises.</p>\n  <p class=\"memory-source\">from <a class=\"memory-from\" href=\"/c/2026-11-09-hq9xaw#t-2737fd3c\">“remember the audit garden has blue irises”</a>, today</p>\n  <div class=\"memory-actions\">\n    <button type=\"button\" class=\"act\" data-action=\"edit-memory\" aria-label=\"Edit\">Edit</button>\n    <button type=\"button\" class=\"act\" data-action=\"forget-memory\" aria-label=\"Forget\">Forget</button>\n  </div>\n</li></ul></section>\n<section class=\"memory-section\" aria-labelledby=\"ms-preferences\"><h2 class=\"memory-heading\" id=\"ms-preferences\">Preferences</h2>\n<p class=\"memory-kind\">How you like things done.</p>\n<p class=\"memory-none\">Nothing yet.</p></section>\n<section class=\"memory-section\" aria-labelledby=\"ms-decisions\"><h2 class=\"memory-heading\" id=\"ms-decisions\">Decisions</h2>\n<p class=\"memory-kind\">What you settled, so it stays settled.</p>\n<p class=\"memory-none\">Nothing yet.</p></section>\n<section class=\"memory-section\" aria-labelledby=\"ms-commitments\"><h2 class=\"memory-heading\" id=\"ms-commitments\">Commitments</h2>\n<p class=\"memory-kind\">What you or Nova said would happen.</p>\n<p class=\"memory-none\">Nothing yet.</p></section>\n<section class=\"memory-section\" aria-labelledby=\"ms-days\"><h2 class=\"memory-heading\" id=\"ms-days\">Day notes</h2>\n<p class=\"memory-kind\">Detail from each day. Nova looks here when a message calls for it.</p>\n<h3 class=\"memory-day\">Monday, the ninth of November</h3><ul class=\"memory-list\"><li class=\"memory-item\" id=\"m-n310c7daf\" data-id=\"n310c7daf\" tabindex=\"0\">\n  <p class=\"memory-text\">Mentioned: The audit garden has blue irises.</p>\n  <p class=\"memory-source\">21:09 · from <a class=\"memory-from\" href=\"/c/2026-11-09-hq9xaw#t-2737fd3c\">“remember the audit garden has blue irises”</a></p>\n  <div class=\"memory-actions\">\n    <button type=\"button\" class=\"act\" data-action=\"edit-memory\" aria-label=\"Edit\">Edit</button>\n    <button type=\"button\" class=\"act\" data-action=\"forget-memory\" aria-label=\"Forget\">Forget</button>\n  </div>\n</li></ul></section></div>"
+    }
+  ]
+}

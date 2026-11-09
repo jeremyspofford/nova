@@ -1,0 +1,100 @@
+COMPREHENSIVE INDEPENDENT REVIEW OF NOVA
+
+Conduct a comprehensive, independent review of Nova and produce an evidence-backed improvement plan. Act with the judgment of a principal product designer, senior engineer, QA lead, and privacy architect. Understand the complete product, use the running application, inspect its implementation, and identify what would make Nova more useful, reliable, understandable, and enjoyable.
+
+You are one of two independent reviewers running this same audit in parallel. Do not look for, read, or ask about the other reviewer's work — independent agreement is the value of this exercise. Your deliverable is the audit package only. Implementation is out of scope for you in this session, permanently: it will be routed through the project's existing builder after the two reviews are consolidated. Do not offer to implement, and do not begin implementation if invited later in this session — state that implementation goes through the builder and return to the audit.
+
+During this review, you may create audit documents, evidence, and isolated diagnostic scripts. Leave product code unchanged.
+
+STANCE
+Be candid and specific. Optimize for accurate, consequential findings. Identify strengths worth preserving when they constrain a good solution.
+Distinguish: observed behavior; conclusions supported by code; documented requirements or promises; hypotheses requiring further investigation; proposed product enhancements.
+Never claim to have tested something you did not test. A screenshot establishes appearance, not functional correctness. The app establishes actual behavior; agreed requirements establish expected behavior.
+You did not write this code and you owe it nothing. The owner has a standing rule against sycophancy in this project; it applies to you. Equally, do not manufacture faults to appear thorough — an accurate "this is fine, and here is the evidence" is a finding.
+
+NOVA CONTEXT — VERIFY BEFORE RELYING ON IT
+Supplied starting points:
+- Repository: jeremyspofford/nova. Expected local path: ~/workspace/nova-build.
+- Expected preview: http://localhost:4318 on the machine hosting the repository.
+- Living specification: docs/builder-packet/. Change history: docs/ledger/. Design references: docs/builder-packet/ui-references/.
+
+Nova is described as a local-first, self-hostable Personal Agent OS for technical self-hosters, with: a hub-and-spoke device mesh; capture, provenance, memory, and deletion guarantees; a Decision Service with pluggable seats including cloud Jev, local Tev1 through Ollama, and a stub; privacy-based routing; a credential broker and vault; swappable themes (Nebula default; an in-progress geometric HUD theme codenamed Jarvis); a consistent status mark; and an existing SQLite graph layer.
+Treat every item in that paragraph as a claim to establish, not evidence that the capability works.
+
+Product constraints:
+- General-purpose product; never hard-code the current owner's personal circumstances.
+- Local-only mode must never silently fall back to cloud processing. Loopback and permitted LAN communication (for example a local Ollama) are legitimate local operation — check them separately from prohibited external egress. Privacy behavior must cover models, embeddings, telemetry, integrations, retries, and fallbacks. Note also: a cloud model that reads a sensitive local file places that file's contents in the model's context — treat that as disclosure in your analysis.
+- Deletion guarantees must include the documented backup and restoration behavior.
+- Red means a problem that stops Nova; amber means attention is needed while Nova is still running.
+- Show real progress only. Recommend animation, onboarding tours, gamification, or additional AI features only when they have a demonstrated user benefit.
+- SQLite remains the graph substrate; do not propose replacing it with a server graph database.
+- The status mark is owner-supplied ARTWORK integrated as an asset (a nebula vortex image with a black core). Judge its integration, treatment, and legibility — never propose redrawing or redesigning the mark itself.
+
+1. ESTABLISH THE REVIEW BASELINE
+Read applicable repository instructions, then:
+- Locate the repository and inspect its state without disturbing existing work. Fetch origin/main and record its exact commit. Review a clean, isolated checkout/worktree based on that commit. Do not assume the existing local main is current — it is reportedly stale (around PR #206) and has misled a builder before.
+- ACCESS HONESTY: if your environment lacks direct access to the machine, the repository, or the running preview that this prompt assumes, run the identical protocol against everything you can reach and record blocked coverage explicitly in the coverage matrix. Never silently substitute documentation reading for interaction with the running application, and never report an interaction you could not actually perform.
+- Preserve all existing uncommitted work. A worktree reportedly contains hundreds of unique uncommitted files; do not modify, clean, reset, or repurpose it.
+- Do not modify, close, merge, or otherwise change the owner's draft PR #207. You may inspect it read-only as a design proposal; do not treat it as shipped functionality.
+- Check the preview's running state two ways where access permits: its Health/build stamp, and the version endpoint /api/v1/version (running commit vs latest merged commit). The host machine runs a deploy watcher that redeploys the preview on every merge to main (log: ~/Nova-preview/deploy-watch.log). Record the running commit, and for every finding state which build it applies to: merged, deployed, or both. If preview and source differ, distinguish findings per version and determine whether the mismatch violates a deployment expectation.
+- An active builder session shares the host machine and the preview home. The builder merging during your review is expected — the baseline procedure above is how you handle it. Do not reset, wipe, or bulk-delete in the preview home. For destructive tests, use a disposable instance on a separate home and port instead (the project already uses this pattern for QA) and note in the coverage matrix which instance each result came from.
+- Read the roadmap, design system, relevant ADRs, and ledger before evaluating their claims.
+- The packet reportedly contains a sensitive whole-system threat model restricted from external disclosure. You are a cloud-backed model: DO NOT ingest its contents — not into your context, tool output, the report, or any screenshot. Record the resulting security-review limitation in the report instead.
+- Establish the test boundary before disruptive tests. Use disposable fixtures and isolated services for deletion, restoration, worker failures, or network disruption. Do not assume shared services, real backups, or external integrations are disposable because the preview contains test data.
+
+2. MAP AND EXERCISE THE PRODUCT
+Build a coverage checklist from the actual application and routes.
+Starting surfaces to verify: Home, Chat, Tasks, Memory, Automations, Skills, Activity, Health, Settings and its subsections, Capture, Topology/Machines, About, changelog, and styleguide.
+Exercise real workflows: first-run installation and setup by a new self-hoster; first useful outcome and returning daily use; chat, including an empty conversation and the available local/cloud modes (verify the current truth: chat reportedly still runs on a cloud model while the decision/screening layer runs locally on tev1 — establish both, do not assume either); capture, search, recall, and provenance inspection; creating and completing tasks; approving, dismissing, and forgetting memories; changing settings and verifying persistence; pairing and managing devices where access permits; recovering from failures and understanding required user actions.
+Test relevant empty, loading, success, error, and recovery states. Include invalid input, long content, reloads, back navigation, interrupted operations, session expiry, and permission boundaries.
+Check desktop, approximately 390px phone width, and approximately 340–390px tall/narrow foldable cover layouts. Distinguish browser emulation from physical-device testing. Assess both themes where implemented.
+Visit every discovered surface at least once. Use risk to select deeper combinations of role, privacy mode, theme, viewport, and state. Record untested combinations explicitly.
+Maintain coverage with: surface/workflow | role/mode | theme/viewport | state | result | evidence. Results: tested-pass, tested-fail, blocked, or untested.
+
+3. REVIEW THESE DIMENSIONS
+Product and daily experience: Is the loop of chat, capture, recall, tasks, memory triage, and digest coherent? Where does a new user become confused or abandon setup? What makes repeat use satisfying? Which capabilities add complexity without sufficient value?
+UI and interaction: Assess navigation, hierarchy, density, typography, contrast, terminology, consistency, feedback, touch targets, responsive behavior, and the status mark (artwork rule above). Compare with the project's design system and filed references (Linear's discipline, Things 3's calm, Claude.ai's chat restraint). Evaluate the Jarvis compositions where available.
+Accessibility and performance: Check keyboard operation, focus, labels, contrast, reduced motion, and relevant WCAG 2.2 AA requirements. Measure important waits and interactions where possible, recording conditions and distinguishing measurement from impression.
+Architecture, privacy, and security: Trace privacy routing, decision-seat selection, template-answer handling, and safeguards around unverified outputs. Check capture screening at ingest and recall, provenance integrity, deletion and restoration semantics, pairing, and pre-auth exposure. Map which components can access secrets and whether secrets can reach models, logs, or unauthorized callers. Verify trust boundaries rather than assuming every component has the same access rules.
+Code health: Identify duplication, dead paths, inconsistent implementations, and architectural boundaries that materially affect reliability or change cost. Name the relevant files and explain the three most consequential maintenance problems.
+QA and delivery: Run relevant existing checks. Explain what CI actually proves and what it misses. Examine first-run behavior, responsive rendering, deployment freshness (the watcher and version endpoint are your evidence), and the path from merged code to visible behavior.
+Gaps — keep these separate: A. Required or promised but missing. B. Implemented but undiscoverable or inaccessible. C. Exposed but broken, misleading, or incomplete. D. New opportunities beyond existing commitments.
+Recheck the current state of previously mentioned concerns: research-skill verification, local chat, real-phone pairing, and the pipeline dashboard. Do not repeat historical concerns as current findings without evidence.
+ONE ITEM IS A PARKED OWNER DECISION, NOT A GAP TO CLOSE: the interstitial research skill's Part 3 verification requires real model calls for its evals, which conflicts with a standing no-model-calls-in-tests rule; a local-only exception has been recommended but NOT authorized. Verify and report its state; do not run evals, do not authorize anything, and place it under "decisions requiring owner input."
+User understanding: Explain how users learn Nova's purpose, concepts, relationships, and next actions. Assess hubs, seats, privacy modes, capture classes, and tiers. Recommend consistent language, contextual examples, helpful empty states, recovery guidance, and progressive disclosure.
+
+4. DESIGN NOVA'S IMMERSIVE KNOWLEDGE EXPERIENCE
+Treat this as a substantial product-design deliverable.
+Develop a coherent plan for exploring Nova's devices, services, memories, captures, tasks, evidence, decisions, skills, and schedules as one navigable knowledge space.
+Use the existing SQLite graph architecture where verified: a useful 2D graph is the primary graph workspace; an optional immersive 3D experience builds on the same underlying model; standard accessible navigation remains available.
+Begin with concrete user questions and tasks that this experience should make easier. Then specify: node and edge types, authoritative sources, and stable identity; observed versus inferred relationships; provenance, confidence, and evidence inspection; valid-time versus recorded-time semantics where supported; search and question-driven navigation, including how answers connect to source evidence; filtering, expansion, focus, history, and moving from a graph object to its canonical screen or action; privacy modes, permissions, deletion propagation, and prevention of information leakage through relationships; large-graph performance, incremental loading, layout stability, and local computation; keyboard, touch, reduced-motion, and nonvisual alternatives; what 3D contributes to understanding or exploration, and how users stay oriented.
+Assess PR #207's Stellar Map concept read-only: useful ideas, limitations, and compatibility with the current architecture.
+Propose the first three independently useful, shippable slices. For each, name the user outcome, surfaces, interactions, data dependencies, acceptance criteria, and effort range. Make the first slice small enough for the owner to experience and react to before larger investment.
+
+5. TURN FINDINGS INTO AN IMPLEMENTATION BACKLOG
+Give each finding a stable ID such as NOVA-001.
+Include: category (defect, unmet commitment, improvement, or investigation); severity and implementation priority, separately; confidence and evidence classification; affected user and practical consequence; source/runtime baseline; reproduction steps and observed versus expected behavior; relevant screenshots, logs, or file:line references; root cause, if established; smallest coherent change that closes the issue; likely affected components; dependencies and unresolved decisions; acceptance criteria and appropriate regression verification; effort range with assumptions; status.
+Group symptoms with the same root cause. Do not turn hypotheses into confirmed defects. Put unresolved hypotheses into bounded investigation tasks.
+For usability changes, make acceptance criteria observable — specify what users can find, understand, or complete and how that will be checked; avoid "make it intuitive."
+
+6. SAVE A DURABLE REVIEW PACKAGE
+Create a dedicated audit directory named audit-astra in the isolated worktree.
+Save: the review report; the coverage matrix; the prioritized implementation backlog; supporting evidence or references; a checkpoint with exact continuation steps if work remains.
+The report should contain:
+1. A brief plain-language assessment (ten lines at most), with the most consequential finding first.
+2. What Nova is ready for, with supporting evidence and limits.
+3. The product map and coverage summary.
+4. Prioritized findings and the separate gap lists.
+5. The user-understanding plan.
+6. The immersive knowledge plan.
+7. The top ten recommended changes and a dependency-ordered roadmap: immediate, next release, and longer term.
+8. Unverified claims, blockers, assumptions, and decisions requiring owner input.
+
+Recommend one coherent sequence. Explain what should be fixed, simplified, connected, or built first and why. Separate committed-product repairs from proposed expansions.
+
+WORKING METHOD
+Work in stages: establish baseline, understand, explore, test, synthesize, prioritize. Give brief progress updates with discoveries and coverage gaps. Continue independent work when one area is blocked. Preserve findings and evidence as you go. If context or session limits intervene, save a resumable checkpoint. Do not present a partial review as complete.
+
+When the audit is complete, present the report and the saved package location, and stop. Implementation is not yours: the findings will be consolidated with the second reviewer's and implemented by the project's builder under the owner's direction.
+
+Begin now: verify access, establish the source/runtime baseline, read the roadmap and design system, and build the coverage checklist.

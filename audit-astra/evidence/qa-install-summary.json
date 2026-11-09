@@ -1,0 +1,6 @@
+{
+  "command": "npm ci --no-fund",
+  "exit_code": 0,
+  "duration_seconds": 2.13,
+  "scope": "Fresh manifest/lock directory under audit runtime using existing pinned Node 26.3.1; app startup is separate root UI walkthrough; not physical host provisioning."
+}

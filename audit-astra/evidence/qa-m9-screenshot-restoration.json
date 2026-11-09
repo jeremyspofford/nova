@@ -1,0 +1,24 @@
+{
+  "action": "Copied these audit-generated M9 screenshots to audit evidence, then restored ONLY these tracked baseline PNGs in the isolated worktree",
+  "files": [
+    "docs/screenshots/m9/hinge-book-a-task-open.png",
+    "docs/screenshots/m9/hinge-book-chat.png",
+    "docs/screenshots/m9/hinge-book-conversations-open.png",
+    "docs/screenshots/m9/hinge-book-home.png",
+    "docs/screenshots/m9/hinge-laptop-a-task-open.png",
+    "docs/screenshots/m9/hinge-laptop-chat.png",
+    "docs/screenshots/m9/hinge-laptop-conversations-open.png",
+    "docs/screenshots/m9/hinge-laptop-home.png",
+    "docs/screenshots/m9/text-200-desktop-chat.png",
+    "docs/screenshots/m9/text-200-desktop-home.png",
+    "docs/screenshots/m9/text-200-desktop-memory.png",
+    "docs/screenshots/m9/text-200-desktop-settings.png",
+    "docs/screenshots/m9/text-200-desktop-tasks.png",
+    "docs/screenshots/m9/text-200-phone-chat.png",
+    "docs/screenshots/m9/text-200-phone-home.png",
+    "docs/screenshots/m9/text-200-phone-memory.png",
+    "docs/screenshots/m9/text-200-phone-settings.png",
+    "docs/screenshots/m9/text-200-phone-tasks.png"
+  ],
+  "remaining_tracked_changes": []
+}

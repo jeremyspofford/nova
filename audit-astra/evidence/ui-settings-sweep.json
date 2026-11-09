@@ -1,0 +1,2265 @@
+[
+  {
+    "route": "/settings#you",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1047,
+    "url": "http://127.0.0.1:4418/settings#you",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nYou and Nova\n\nNames and how Nova talks to you\n\nYOU AND NOVA\n\nYour name\n\nWhat Nova calls you.\n\nYour name\nSave\n\nNova’s name\n\nOnly the name changes; the charter stays.\n\nNova’s name\nSave\n\nDirectness\n\nTelling you when Nova thinks something’s wrong isn’t adjustable; this is how it says it.\n\nDirectness\nGently\nPlainly\nBluntly",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#appearance",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1020,
+    "url": "http://127.0.0.1:4418/settings#appearance",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nAppearance\n\nTheme, light and dark, contrast\n\nAPPEARANCE\n\nTheme: Nebula · synced\n\nChange it for\nThis device\nAll my devices\n\nA design you pick shows here at once, and Undo puts the last one back.\n\nRECOMMENDED · NOVA’S DESIGN\n\nNebula\nNova's default look. Neutral surfaces, light or near-black, following your device; the nebula swirl only in the orb, the icon and state accents.\n\nNova’s own design, held to its design bar. Dark like this device’s system setting, and all its text and controls pass the contrast check.\n\nMore designs\n· 6, 5 not yet at Nova’s design bar\n\nEvery text and control here passes the contrast check: 4.5:1 for text, 3:1 for outlines.\n\nLight and dark · all devices\nAuto\nLight\nDark\n\nOn an iPhone with Nova on the Home Screen, a dark design also fills the strip with the time and battery. After you switch to or from a dark design, that strip may only change once you close Nova and open it again.\n\nStyleguide",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": [
+        {
+          "tag": "A",
+          "text": "Styleguide",
+          "rect": {
+            "x": 576,
+            "y": 897.75,
+            "width": 63.859375,
+            "height": 18,
+            "top": 897.75,
+            "right": 639.859375,
+            "bottom": 915.75,
+            "left": 576
+          }
+        }
+      ]
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#privacy",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1033,
+    "url": "http://127.0.0.1:4418/settings#privacy",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nPrivacy and permissions\n\nWhat stays here and what asks first\n\nPRIVACY\n\nThe default for every task. A task can be stricter, never looser.\n\nPrivacy mode\nLocal-only\nLocal first\nCloud allowed\n\nModel calls stay on your own devices.\n\nWITHOUT ASKING\n\nEach kind of step that changes something outside the conversation starts at Ask first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time. A command that follows outside content still asks.\n\nRun commands on this computer\n\nA command can change anything your account can.\n\nAsk first\n\nSave Gmail drafts\n\nNova has no way to send email.\n\nAsk first\n\nTidy Gmail: archive, mark read or unread, labels\n\nNova has no way to delete email.\n\nAsk first\n\nSet up, change and remove schedules\n\nAsk first\n\nChange your settings in a conversation\n\nYou see the change first.\n\nAsk first\n\nOffer memories from a file in workspace/import\n\nThey wait for your OK in Memory.\n\nAsk first\n\nWhen Nova gets a new tool, from an update, a plugin or a connector, anything it can change shows up here, set to Ask first. These switches are kept in permissions.md in your Nova folder.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#connections",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1031,
+    "url": "http://127.0.0.1:4418/settings#connections",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nConnections\n\nAccounts and services Nova can reach\n\nCONNECTIONS\n\nNothing is connected yet. Connect a service and Nova can work with it for you; its passwords and tokens are kept in Nova’s vault.\n\nNova suggests\n\nHome Assistant\n\nYour smart home: Nova can see what your devices are doing, hear when they change, and change them when you ask.\n\nSee the state of your lights, sensors, locks and other devices.\nNotice when something changes, for the rules you set up.\nTurn things on and off when you ask, and tell you what changed.\n\nNever: change anything unless you, or a rule you set up, asks, change anything from a chat that has read something from outside, without asking you first.\n\nHome Assistant address\nLong-lived access token\n\nMake one in Home Assistant: your profile, Security, Long-lived access tokens.\n\nConnect Home Assistant\nOther connections (1)\nSITE SIGN-INS\n\nNova’s own browser hasn’t kept anything for a site yet. Save a sign-in here and Nova can sign in for you; it is saved for the site it belongs to.\n\nSave a sign-in",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#models",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1034,
+    "url": "http://127.0.0.1:4418/settings#models",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nModels and providers\n\nLocal models and outside help\n\nPROVIDERS\n\nOther AIs and automations Nova can hand work to. Each is off until you turn it on, and Nova checks what they do before it counts.\n\nChat uses Your model command\n\nIt is on and working, and keeps everything on this computer.\n\nCoding tasks\n\nTurn on a coding agent to use one here.\n\nAll providers (6)\n\nTest commands a brief declares: Nova asks before running them.\n\nMODELS\n\nNova runs models on your own devices, through Ollama. Ollama isn’t answering: Nova couldn’t reach Ollama at 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nWhere each task runs\n\nLocal only: every task stays on your devices, and no cloud model is used.\n\nGeneral chat\n\nNot set\n\nNot set yet.\n\nCoding\n\nNot set\n\nNot set yet. Coding has no role of its own yet, so it goes where thinking and writing does.\n\nScreening and decisions\n\nNot set\n\nNot set yet.\n\nEmbeddings (memory search)\n\nNot set\n\nNot set yet.\n\nVision\n\nNothing sends images to a local model yet; a vision model can be planned on a device.\n\nTranscription\n\nNo runtime\n\nThere is no transcription runtime on your devices (Nova looks for whisper.cpp or faster-whisper), so transcription stays off. Nothing is sent elsewhere to transcribe instead.\n\nYour devices\n\nHub hub\n\nOnline\n\nno GPU · 18 GB memory · 5 threads · 57 GB free disk\n\nServes no task yet.\n\nCan run, slowly, models up to about 6.6 GB (around 11B parameters at Q4_K_M with 4k context) on no GPU Nova can use, so models run on the CPU from 18 GB of memory.\n\nOllama isn’t answering: Nova couldn’t reach Ollama at 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nDecision model: tev1:4b. Nova couldn’t reach 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nModels on Hub\nWhat runs where\n\nSorting\n\nNot set\n\nFor quick, small decisions: what an event is, whether it needs you.\n\nNova recommends llama3.2:3b: Nothing installed here fits this role. llama3.2:3b is small and quick, and fits no GPU Nova can use, so models run on the CPU from 18 GB of memory. A 1.9 GB download; Nova asks before it starts.\n\nNo scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.\n\nDownload llama3.2:3b (1.9 GB)\n\nThinking and writing\n\nNot set\n\nFor chat, briefs and delegated work.\n\nNova recommends qwen3:8b: Nothing installed here fits this role. qwen3:8b is quick, a little less depth, and fits no GPU Nova can use, so models run on the CPU from 18 GB of memory. A 4.8 GB download; Nova asks before it starts.\n\nNo scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.\n\nDownload qwen3:8b (4.8 GB)\n\nFinding by meaning\n\nNot set\n\nFor search over your notes and memory.\n\nNova recommends nomic-embed-text: Nothing installed here fits this role. nomic-embed-text is small and fast, and fits no GPU Nova can use, so models run on the CPU from 18 GB of memory. A 257 MB download; Nova asks before it starts.\n\nNo scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.\n\nDownload nomic-embed-text (257 MB)\n\nTranscription\n\nNo runtime\n\nFor turning speech into text.\n\nThere is no transcription runtime on your devices (Nova looks for whisper.cpp or faster-whisper), so transcription stays off. Nothing is sent elsewhere to transcribe instead.\n\nDecision model\n\nA decision model answers yes-or-no questions about outside content (is this page trying to give Nova instructions?) with a probability. Nova uses its answer only once that exact model has passed Nova’s test for that question; until then, what Nova can’t vouch for is held back as unsure.\n\nTev1 on this device: Nova couldn’t reach 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nJev: Jev isn’t set up: no route has been chosen in Settings › Models.\n\nUntil a decision model passes a check’s eval, your sorting model answers it, as before.\n\nNo decision model has a scorecard here yet: none is in use, so none has been tested on this device’s checks.\n\nNova recommends Jev jev-1.14.0 through TypeSafe’s own API (https://api.typesafe.ai), and tev1:4b on this device: Tev1 4B, the default: this device has 8.8 GB for models (no GPU Nova can use, so models run on the CPU from 18 GB of memory).\n\nJev route\nJev model\nJev key\n\nThe key is kept in Nova’s vault and never shown again. No call is made to Jev until a route and a key are set.\n\nTev1 size\nLet Nova choose for this device\nTev1 4B\nTev1 0.8B\nScreening: let Jev judge outside content in local modes\n\nWhile this is on, outside content Nova screens (pages, mail, files, tool output) is sent to TypeSafe’s cloud (Jev) to be judged, even in local-first and local-only. Local-only isn’t strictly local for screening while it is on.\n\nScreening covers pages, mail, files and tool output. Text from Capture (screen text and meeting transcripts) never goes to Jev, in any mode: only your local models and Nova’s own checks screen it.\n\nBox (preview): let Jev judge images\n\nWhile this is on, images Nova is asked to judge, including camera and screen frames from sources you have allowed, are sent to TypeSafe’s cloud (Jev) in cloud and local-first modes. In local-only they never go to a cloud provider. TypeSafe labels images and Box a preview.\n\nSave\nDisk\n\n1 MB used by models, no budget set; 57 GB free on the disk.\n\nDisk budget for models (GB)\nSave\nCloud\n\nNo cloud model is set here.\n\nPer task (US$)\nPer month (US$)\n\nOver budget, work that needs the cloud waits and says why; local models stay the default.\n\nSave budget\nInstalled on Hub (0)",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#devices",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1019,
+    "url": "http://127.0.0.1:4418/settings#devices",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nDevices\n\nPhones and computers paired with Nova\n\nDEVICES\n\nOther devices can’t reach this Nova yet, so only this one is here. To pair a phone or a computer, start Nova with a mesh address (NOVA_MESH_URL); the README says how.\n\nMachines and services\n\nHub · this device\n\nThe hub\n\nRoles: Hub candidate, General server\n\nOnline\nModels\nRoles\n\nInstall Nova\n\nYour browser offers Install in its menu when it can.\n\nAppearance id\n\n123251f7-33ed-4387-91e5-778b80d6c461. It lets this browser keep its own appearance.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": [
+        {
+          "tag": "A",
+          "text": "Machines and services",
+          "rect": {
+            "x": 576,
+            "y": 220.25,
+            "width": 145.609375,
+            "height": 18,
+            "top": 220.25,
+            "right": 721.609375,
+            "bottom": 238.25,
+            "left": 576
+          }
+        }
+      ]
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#capture",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1083,
+    "url": "http://127.0.0.1:4418/settings#capture",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nCapture\n\nSources, consent, and what Nova remembers\n\nCAPTURE\n\nWhat Nova may see on your devices, for context. Each source starts turned off, and the top bar shows when capture is on. What is captured is kept on your own devices.\n\nOff.\n\nOpen Capture\nSources\n\nNo source yet. A paired computer lists what it can capture here once its device agent says so.\n\nScreenpipe’s address\nAPI key (if Screenpipe asks for one)\n\nIf Screenpipe runs on this computer, Nova can take in what it records. It stays off until you turn it on.\n\nAdd Screenpipe\nWhat each kind of device can capture\nNever captured\n\nPrivate and incognito windows, always: Nova recognises them by the window’s title, in the major browsers’ common languages. That is a best effort, so also list them in Screenpipe’s own ignored-windows setting, which stops Screenpipe recording them at all. Password managers and banking apps and sites, recognised by their names and addresses: also a best effort. And anything you list here.\n\nBefore it is kept, text shaped like a key, a token, a password, a card or bank account number is blanked out, in the words, the window title and the address. Then a model on this computer or your own network checks the rest for passwords, keys and someone’s money or health details. Until a model trusted for that has checked it, captured text is held: kept on your devices like the rest of capture, not added to memory.\n\nKind\nAn app\nA site\nA space\nA time of day\nWhich (an app, a site, a space, or 12:00–13:00)\nAdd\nLet back in\n\nIf Nova kept out an app or site that isn’t a password manager or a bank, let it back in here, for one source or for all.\n\nKind\nAn app\nA site\nWhich (an app’s name, or a site like example.org)\nFrom\nEvery source\nLet it back in\nSpaces\n\nNova files capture into a space only by what you set here: an app, a device, or your hours. Anything unclear stays unclassified until you say.\n\nWhen\nI use the app\nIt’s these hours (09:00–17:00)\nApp or hours\nSpace\nAdd\n\nRight now\n\nNo switch on: the rules above decide.\n\nSpace\npersonal\nSwitch to it\nKeep capture for\nDays\ndays, then it is deleted for good. What you remember from it stays in Memory.\nSave",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#services",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1024,
+    "url": "http://127.0.0.1:4418/settings#services",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nServices\n\nHow Nova runs its services here\n\nSERVICES\n\nView machines and services\n\nReading how Nova runs its services…",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": [
+        {
+          "tag": "A",
+          "text": "View machines and services",
+          "rect": {
+            "x": 576,
+            "y": 164.25,
+            "width": 180.453125,
+            "height": 18,
+            "top": 164.25,
+            "right": 756.453125,
+            "bottom": 182.25,
+            "left": 576
+          }
+        }
+      ]
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#about",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1021,
+    "url": "http://127.0.0.1:4418/settings#about",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nAbout Nova\n\nIts version and build, what’s new, where it stands\n\nABOUT NOVA\n\nNova 0.1.0-alpha.1.\n\nRunning d948aa0a; Nova doesn't know the latest merged build. Started 2026-11-09 21:02 UTC.\n\nOpen About Nova\nWhat’s new\nWhere Nova stands",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#security",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1024,
+    "url": "http://127.0.0.1:4418/settings#security",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nSecurity\n\nPasskeys that confirm tier-3 actions here\n\nSECURITY\nPASSKEYS FOR TIER-3 ACTIONS\n\nTier-3 actions on Nova’s own screen ask for a passkey, and nothing tier-3 runs until you add one. Your browser will ask you to create it with your security key, fingerprint or screen lock. Nova keeps only its public key. Add two, so losing one never locks you out.\n\nAdd a passkey",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#backups",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1030,
+    "url": "http://127.0.0.1:4418/settings#backups",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nBackups and changes\n\nBackup folders, checkpoints, restores and changes\n\nBackups\nBACKUP COPIES\n\nNo backup folders selected. Choose a backup folder to keep copies outside Nova.\n\nBackup folder\n\nA private folder that already exists, outside Nova’s home and not containing it.\n\nCopies to keep\n\nKeep 1–365 copies. Older copies are removed as new ones arrive.\n\nEncrypted copy folder\n\nA different folder that already exists. Choose a backup folder first.\n\nSave backup settings\n\nRemove a folder explicitly to stop using it. An empty or invalid entry does not remove a saved folder. Saved files stay on disk.\n\nRECOVERY KEY\n\nFor encrypted backup copies. It does not replace Nova Vault recovery factors.\n\nRecovery key\n\nSet up an encrypted copy folder to get its recovery key.\n\nBACKUPS\n\nCheckpoints\n\nA checkpoint is everything Nova keeps on this computer: memories, tasks, settings, its keys. It stays on this computer. Nova takes one by itself before it changes itself, upgrades or restores, and you can take your own.\n\nNova keeps the newest 10 automatic checkpoints, counted in the order they were taken, never by date, and every checkpoint you name until you delete it. A new checkpoint is complete before an old one is removed, and a named one is never removed to make room.\n\nName\nTake a checkpoint\n\nNo checkpoints yet.\n\nCHANGES\n\nA change to Nova goes through these steps: tried on a copy first, tested, released as a version, and watched live before it stays. If a check fails, Nova puts back what was there before.\n\nNo changes yet. When Nova or you propose one, it shows here with every check it went through.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#config",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1028,
+    "url": "http://127.0.0.1:4418/settings#config",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nConfiguration\n\nEvery setting of yours, a few questions, or a file\n\nYOUR SETTINGS\n\nReading your settings…\n\nCONFIGURATION\nBRING IN A CONFIGURATION\n\nA Nova configuration file or a personal pack. Nova checks it and shows every change before applying any; nothing is overwritten that you don’t see first.\n\nChoose a file\nExport your configuration",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#danger",
+    "posture": "desktop",
+    "width": 1440,
+    "height": 900,
+    "elapsed_ms": 1014,
+    "url": "http://127.0.0.1:4418/settings#danger",
+    "text": "Skip to content\n\nPLACES\n\nChat\nTasks\nMemory\nAutomations\nSkills\nActivity\nHealth\nSettings\nNova 0.1.0-alpha.1, build d948aa0a. About Nova\n0.1.0-alpha.1 d948aa0a\nSettings\nSettings\nSearch settings\n/\nYOU\nYou and Nova\nAppearance\nPrivacy and permissions\nWHAT NOVA WORKS WITH\nConnections\nModels and providers\nDevices\nCapture\nServices\nABOUT\nAbout Nova\nKEEPING NOVA SAFE\nSecurity\nBackups and changes\nConfiguration\nStart over\nStart over\n\nExport everything, or erase Nova here\n\nDANGER ZONE\n\nErasing Nova returns it to how it was the first time, on this machine: no memories, conversations, settings, saved passwords, paired devices, checkpoints or backups. Nova offers to export everything first.\n\nErase Nova and start over…",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 1440,
+        "h": 900
+      },
+      "doc": {
+        "w": 1440,
+        "h": 900
+      },
+      "overflows": [],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#you",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1019,
+    "url": "http://127.0.0.1:4418/settings#you",
+    "text": "Skip to content\nSettings\nSettings\nYou and Nova\n\nNames and how Nova talks to you\n\nYOU AND NOVA\n\nYour name\n\nWhat Nova calls you.\n\nYour name\nSave\n\nNova’s name\n\nOnly the name changes; the charter stays.\n\nNova’s name\nSave\n\nDirectness\n\nTelling you when Nova thinks something’s wrong isn’t adjustable; this is how it says it.\n\nDirectness\nGently\nPlainly\nBluntly",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#appearance",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1016,
+    "url": "http://127.0.0.1:4418/settings#appearance",
+    "text": "Skip to content\nSettings\nSettings\nAppearance\n\nTheme, light and dark, contrast\n\nAPPEARANCE\n\nTheme: Nebula · synced\n\nChange it for\nThis device\nAll my devices\n\nA design you pick shows here at once, and Undo puts the last one back.\n\nRECOMMENDED · NOVA’S DESIGN\n\nNebula\nNova's default look. Neutral surfaces, light or near-black, following your device; the nebula swirl only in the orb, the icon and state accents.\n\nNova’s own design, held to its design bar. Dark like this device’s system setting, and all its text and controls pass the contrast check.\n\nMore designs\n· 6, 5 not yet at Nova’s design bar\n\nEvery text and control here passes the contrast check: 4.5:1 for text, 3:1 for outlines.\n\nLight and dark · all devices\nAuto\nLight\nDark\n\nOn an iPhone with Nova on the Home Screen, a dark design also fills the strip with the time and battery. After you switch to or from a dark design, that strip may only change once you close Nova and open it again.\n\nStyleguide",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#privacy",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1020,
+    "url": "http://127.0.0.1:4418/settings#privacy",
+    "text": "Skip to content\nSettings\nSettings\nPrivacy and permissions\n\nWhat stays here and what asks first\n\nPRIVACY\n\nThe default for every task. A task can be stricter, never looser.\n\nPrivacy mode\nLocal-only\nLocal first\nCloud allowed\n\nModel calls stay on your own devices.\n\nWITHOUT ASKING\n\nEach kind of step that changes something outside the conversation starts at Ask first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time. A command that follows outside content still asks.\n\nRun commands on this computer\n\nA command can change anything your account can.\n\nSave Gmail drafts\n\nNova has no way to send email.\n\nTidy Gmail: archive, mark read or unread, labels\n\nNova has no way to delete email.\n\nSet up, change and remove schedules\n\nChange your settings in a conversation\n\nYou see the change first.\n\nOffer memories from a file in workspace/import\n\nThey wait for your OK in Memory.\n\nWhen Nova gets a new tool, from an update, a plugin or a connector, anything it can change shows up here, set to Ask first. These switches are kept in permissions.md in your Nova folder.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#connections",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1024,
+    "url": "http://127.0.0.1:4418/settings#connections",
+    "text": "Skip to content\nSettings\nSettings\nConnections\n\nAccounts and services Nova can reach\n\nCONNECTIONS\n\nNothing is connected yet. Connect a service and Nova can work with it for you; its passwords and tokens are kept in Nova’s vault.\n\nNova suggests\n\nHome Assistant\n\nYour smart home: Nova can see what your devices are doing, hear when they change, and change them when you ask.\n\nSee the state of your lights, sensors, locks and other devices.\nNotice when something changes, for the rules you set up.\nTurn things on and off when you ask, and tell you what changed.\n\nNever: change anything unless you, or a rule you set up, asks, change anything from a chat that has read something from outside, without asking you first.\n\nHome Assistant address\nLong-lived access token\n\nMake one in Home Assistant: your profile, Security, Long-lived access tokens.\n\nConnect Home Assistant\nOther connections (1)\nSITE SIGN-INS\n\nNova’s own browser hasn’t kept anything for a site yet. Save a sign-in here and Nova can sign in for you; it is saved for the site it belongs to.\n\nSave a sign-in",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#models",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1031,
+    "url": "http://127.0.0.1:4418/settings#models",
+    "text": "Skip to content\nSettings\nSettings\nModels and providers\n\nLocal models and outside help\n\nPROVIDERS\n\nOther AIs and automations Nova can hand work to. Each is off until you turn it on, and Nova checks what they do before it counts.\n\nChat uses Your model command\n\nIt is on and working, and keeps everything on this computer.\n\nCoding tasks\n\nTurn on a coding agent to use one here.\n\nAll providers (6)\n\nTest commands a brief declares: Nova asks before running them.\n\nMODELS\n\nNova runs models on your own devices, through Ollama. Ollama isn’t answering: Nova couldn’t reach Ollama at 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nWhere each task runs\n\nLocal only: every task stays on your devices, and no cloud model is used.\n\nGeneral chat\n\nNot set\n\nNot set yet.\n\nCoding\n\nNot set\n\nNot set yet. Coding has no role of its own yet, so it goes where thinking and writing does.\n\nScreening and decisions\n\nNot set\n\nNot set yet.\n\nEmbeddings (memory search)\n\nNot set\n\nNot set yet.\n\nVision\n\nNothing sends images to a local model yet; a vision model can be planned on a device.\n\nTranscription\n\nNo runtime\n\nThere is no transcription runtime on your devices (Nova looks for whisper.cpp or faster-whisper), so transcription stays off. Nothing is sent elsewhere to transcribe instead.\n\nYour devices\n\nHub hub\n\nOnline\n\nno GPU · 18 GB memory · 5 threads · 57 GB free disk\n\nServes no task yet.\n\nCan run, slowly, models up to about 6.6 GB (around 11B parameters at Q4_K_M with 4k context) on no GPU Nova can use, so models run on the CPU from 18 GB of memory.\n\nOllama isn’t answering: Nova couldn’t reach Ollama at 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nDecision model: tev1:4b. Nova couldn’t reach 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nModels on Hub\nWhat runs where\n\nSorting\n\nNot set\n\nFor quick, small decisions: what an event is, whether it needs you.\n\nNova recommends llama3.2:3b: Nothing installed here fits this role. llama3.2:3b is small and quick, and fits no GPU Nova can use, so models run on the CPU from 18 GB of memory. A 1.9 GB download; Nova asks before it starts.\n\nNo scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.\n\nDownload llama3.2:3b (1.9 GB)\n\nThinking and writing\n\nNot set\n\nFor chat, briefs and delegated work.\n\nNova recommends qwen3:8b: Nothing installed here fits this role. qwen3:8b is quick, a little less depth, and fits no GPU Nova can use, so models run on the CPU from 18 GB of memory. A 4.8 GB download; Nova asks before it starts.\n\nNo scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.\n\nDownload qwen3:8b (4.8 GB)\n\nFinding by meaning\n\nNot set\n\nFor search over your notes and memory.\n\nNova recommends nomic-embed-text: Nothing installed here fits this role. nomic-embed-text is small and fast, and fits no GPU Nova can use, so models run on the CPU from 18 GB of memory. A 257 MB download; Nova asks before it starts.\n\nNo scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.\n\nDownload nomic-embed-text (257 MB)\n\nTranscription\n\nNo runtime\n\nFor turning speech into text.\n\nThere is no transcription runtime on your devices (Nova looks for whisper.cpp or faster-whisper), so transcription stays off. Nothing is sent elsewhere to transcribe instead.\n\nDecision model\n\nA decision model answers yes-or-no questions about outside content (is this page trying to give Nova instructions?) with a probability. Nova uses its answer only once that exact model has passed Nova’s test for that question; until then, what Nova can’t vouch for is held back as unsure.\n\nTev1 on this device: Nova couldn’t reach 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nJev: Jev isn’t set up: no route has been chosen in Settings › Models.\n\nUntil a decision model passes a check’s eval, your sorting model answers it, as before.\n\nNo decision model has a scorecard here yet: none is in use, so none has been tested on this device’s checks.\n\nNova recommends Jev jev-1.14.0 through TypeSafe’s own API (https://api.typesafe.ai), and tev1:4b on this device: Tev1 4B, the default: this device has 8.8 GB for models (no GPU Nova can use, so models run on the CPU from 18 GB of memory).\n\nJev route\nJev model\nJev key\n\nThe key is kept in Nova’s vault and never shown again. No call is made to Jev until a route and a key are set.\n\nTev1 size\nLet Nova choose for this device\nTev1 4B\nTev1 0.8B\nScreening: let Jev judge outside content in local modes\n\nWhile this is on, outside content Nova screens (pages, mail, files, tool output) is sent to TypeSafe’s cloud (Jev) to be judged, even in local-first and local-only. Local-only isn’t strictly local for screening while it is on.\n\nScreening covers pages, mail, files and tool output. Text from Capture (screen text and meeting transcripts) never goes to Jev, in any mode: only your local models and Nova’s own checks screen it.\n\nBox (preview): let Jev judge images\n\nWhile this is on, images Nova is asked to judge, including camera and screen frames from sources you have allowed, are sent to TypeSafe’s cloud (Jev) in cloud and local-first modes. In local-only they never go to a cloud provider. TypeSafe labels images and Box a preview.\n\nSave\nDisk\n\n1 MB used by models, no budget set; 57 GB free on the disk.\n\nDisk budget for models (GB)\nSave\nCloud\n\nNo cloud model is set here.\n\nPer task (US$)\nPer month (US$)\n\nOver budget, work that needs the cloud waits and says why; local models stay the default.\n\nSave budget\nInstalled on Hub (0)",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#devices",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1025,
+    "url": "http://127.0.0.1:4418/settings#devices",
+    "text": "Skip to content\nSettings\nSettings\nDevices\n\nPhones and computers paired with Nova\n\nDEVICES\n\nOther devices can’t reach this Nova yet, so only this one is here. To pair a phone or a computer, start Nova with a mesh address (NOVA_MESH_URL); the README says how.\n\nMachines and services\n\nHub · this device\n\nThe hub\n\nRoles: Hub candidate, General server\n\nOnline\nModels\nRoles\n\nInstall Nova\n\nYour browser offers Install in its menu when it can.\n\nAppearance id\n\n92ffebca-5c5f-440a-8a8b-16d5c7744e56. It lets this browser keep its own appearance.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "A",
+          "text": "Machines and services",
+          "rect": {
+            "x": 31,
+            "y": 316.25,
+            "width": 145.609375,
+            "height": 18,
+            "top": 316.25,
+            "right": 176.609375,
+            "bottom": 334.25,
+            "left": 31
+          }
+        }
+      ]
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#capture",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1022,
+    "url": "http://127.0.0.1:4418/settings#capture",
+    "text": "Skip to content\nSettings\nSettings\nCapture\n\nSources, consent, and what Nova remembers\n\nCAPTURE\n\nWhat Nova may see on your devices, for context. Each source starts turned off, and the top bar shows when capture is on. What is captured is kept on your own devices.\n\nOff.\n\nOpen Capture\nSources\n\nNo source yet. A paired computer lists what it can capture here once its device agent says so.\n\nScreenpipe’s address\nAPI key (if Screenpipe asks for one)\n\nIf Screenpipe runs on this computer, Nova can take in what it records. It stays off until you turn it on.\n\nAdd Screenpipe\nWhat each kind of device can capture\nNever captured\n\nPrivate and incognito windows, always: Nova recognises them by the window’s title, in the major browsers’ common languages. That is a best effort, so also list them in Screenpipe’s own ignored-windows setting, which stops Screenpipe recording them at all. Password managers and banking apps and sites, recognised by their names and addresses: also a best effort. And anything you list here.\n\nBefore it is kept, text shaped like a key, a token, a password, a card or bank account number is blanked out, in the words, the window title and the address. Then a model on this computer or your own network checks the rest for passwords, keys and someone’s money or health details. Until a model trusted for that has checked it, captured text is held: kept on your devices like the rest of capture, not added to memory.\n\nKind\nAn app\nA site\nA space\nA time of day\nWhich (an app, a site, a space, or 12:00–13:00)\nAdd\nLet back in\n\nIf Nova kept out an app or site that isn’t a password manager or a bank, let it back in here, for one source or for all.\n\nKind\nAn app\nA site\nWhich (an app’s name, or a site like example.org)\nFrom\nEvery source\nLet it back in\nSpaces\n\nNova files capture into a space only by what you set here: an app, a device, or your hours. Anything unclear stays unclassified until you say.\n\nWhen\nI use the app\nIt’s these hours (09:00–17:00)\nApp or hours\nSpace\nAdd\n\nRight now\n\nNo switch on: the rules above decide.\n\nSpace\npersonal\nSwitch to it\nKeep capture for\nDays\ndays, then it is deleted for good. What you remember from it stays in Memory.\nSave",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#services",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1037,
+    "url": "http://127.0.0.1:4418/settings#services",
+    "text": "Skip to content\nSettings\nSettings\nServices\n\nHow Nova runs its services here\n\nSERVICES\n\nView machines and services\n\nHow Nova runs the services it manages here, and what that means on this computer.\n\nIn use: ordinary programs\n\nRecommended: ordinary programs, under Nova’s supervisor. It’s lighter and needs nothing extra. This is how Nova runs its services here.\n\nOn this computer\n\nK3s, for container services, isn’t available in this version yet.\n\nK3s, a small Kubernetes\n\nNot available yet in this version.\n\nSwitching\n\nSwitching to K3s isn’t available yet, so there is nothing to switch to. When it is, it will be here, and it will ask for your explicit confirmation.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "A",
+          "text": "View machines and services",
+          "rect": {
+            "x": 31,
+            "y": 212.25,
+            "width": 180.453125,
+            "height": 18,
+            "top": 212.25,
+            "right": 211.453125,
+            "bottom": 230.25,
+            "left": 31
+          }
+        }
+      ]
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#about",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1040,
+    "url": "http://127.0.0.1:4418/settings#about",
+    "text": "Skip to content\nSettings\nSettings\nAbout Nova\n\nIts version and build, what’s new, where it stands\n\nABOUT NOVA\n\nNova 0.1.0-alpha.1.\n\nRunning d948aa0a; Nova doesn't know the latest merged build. Started 2026-11-09 21:02 UTC.\n\nOpen About Nova\nWhat’s new\nWhere Nova stands",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#security",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1022,
+    "url": "http://127.0.0.1:4418/settings#security",
+    "text": "Skip to content\nSettings\nSettings\nSecurity\n\nPasskeys that confirm tier-3 actions here\n\nSECURITY\nPASSKEYS FOR TIER-3 ACTIONS\n\nTier-3 actions on Nova’s own screen ask for a passkey, and nothing tier-3 runs until you add one. Your browser will ask you to create it with your security key, fingerprint or screen lock. Nova keeps only its public key. Add two, so losing one never locks you out.\n\nAdd a passkey",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#backups",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1026,
+    "url": "http://127.0.0.1:4418/settings#backups",
+    "text": "Skip to content\nSettings\nSettings\nBackups and changes\n\nBackup folders, checkpoints, restores and changes\n\nBackups\nBACKUP COPIES\n\nNo backup folders selected. Choose a backup folder to keep copies outside Nova.\n\nBackup folder\n\nA private folder that already exists, outside Nova’s home and not containing it.\n\nCopies to keep\n\nKeep 1–365 copies. Older copies are removed as new ones arrive.\n\nEncrypted copy folder\n\nA different folder that already exists. Choose a backup folder first.\n\nSave backup settings\n\nRemove a folder explicitly to stop using it. An empty or invalid entry does not remove a saved folder. Saved files stay on disk.\n\nRECOVERY KEY\n\nFor encrypted backup copies. It does not replace Nova Vault recovery factors.\n\nRecovery key\n\nSet up an encrypted copy folder to get its recovery key.\n\nBACKUPS\n\nCheckpoints\n\nA checkpoint is everything Nova keeps on this computer: memories, tasks, settings, its keys. It stays on this computer. Nova takes one by itself before it changes itself, upgrades or restores, and you can take your own.\n\nNova keeps the newest 10 automatic checkpoints, counted in the order they were taken, never by date, and every checkpoint you name until you delete it. A new checkpoint is complete before an old one is removed, and a named one is never removed to make room.\n\nName\nTake a checkpoint\n\nNo checkpoints yet.\n\nCHANGES\n\nA change to Nova goes through these steps: tried on a copy first, tested, released as a version, and watched live before it stays. If a check fails, Nova puts back what was there before.\n\nNo changes yet. When Nova or you propose one, it shows here with every check it went through.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#config",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1020,
+    "url": "http://127.0.0.1:4418/settings#config",
+    "text": "Skip to content\nSettings\nSettings\nConfiguration\n\nEvery setting of yours, a few questions, or a file\n\nYOUR SETTINGS\n\nEach of your settings, what it is now, and where it came from. Change any of them, then review the changes before anything is saved.\n\nTimezone\n\nTimes, schedules and quiet hours follow it. Set by your pack.\n\nAmerica/New_York\nUTC\nAfrica/Abidjan\nAfrica/Accra\nAfrica/Addis_Ababa\nAfrica/Algiers\nAfrica/Asmera\nAfrica/Bamako\nAfrica/Bangui\nAfrica/Banjul\nAfrica/Bissau\nAfrica/Blantyre\nAfrica/Brazzaville\nAfrica/Bujumbura\nAfrica/Cairo\nAfrica/Casablanca\nAfrica/Ceuta\nAfrica/Conakry\nAfrica/Dakar\nAfrica/Dar_es_Salaam\nAfrica/Djibouti\nAfrica/Douala\nAfrica/El_Aaiun\nAfrica/Freetown\nAfrica/Gaborone\nAfrica/Harare\nAfrica/Johannesburg\nAfrica/Juba\nAfrica/Kampala\nAfrica/Khartoum\nAfrica/Kigali\nAfrica/Kinshasa\nAfrica/Lagos\nAfrica/Libreville\nAfrica/Lome\nAfrica/Luanda\nAfrica/Lubumbashi\nAfrica/Lusaka\nAfrica/Malabo\nAfrica/Maputo\nAfrica/Maseru\nAfrica/Mbabane\nAfrica/Mogadishu\nAfrica/Monrovia\nAfrica/Nairobi\nAfrica/Ndjamena\nAfrica/Niamey\nAfrica/Nouakchott\nAfrica/Ouagadougou\nAfrica/Porto-Novo\nAfrica/Sao_Tome\nAfrica/Tripoli\nAfrica/Tunis\nAfrica/Windhoek\nAmerica/Adak\nAmerica/Anchorage\nAmerica/Anguilla\nAmerica/Antigua\nAmerica/Araguaina\nAmerica/Argentina/La_Rioja\nAmerica/Argentina/Rio_Gallegos\nAmerica/Argentina/Salta\nAmerica/Argentina/San_Juan\nAmerica/Argentina/San_Luis\nAmerica/Argentina/Tucuman\nAmerica/Argentina/Ushuaia\nAmerica/Aruba\nAmerica/Asuncion\nAmerica/Bahia\nAmerica/Bahia_Banderas\nAmerica/Barbados\nAmerica/Belem\nAmerica/Belize\nAmerica/Blanc-Sablon\nAmerica/Boa_Vista\nAmerica/Bogota\nAmerica/Boise\nAmerica/Buenos_Aires\nAmerica/Cambridge_Bay\nAmerica/Campo_Grande\nAmerica/Cancun\nAmerica/Caracas\nAmerica/Catamarca\nAmerica/Cayenne\nAmerica/Cayman\nAmerica/Chicago\nAmerica/Chihuahua\nAmerica/Ciudad_Juarez\nAmerica/Coral_Harbour\nAmerica/Cordoba\nAmerica/Costa_Rica\nAmerica/Coyhaique\nAmerica/Creston\nAmerica/Cuiaba\nAmerica/Curacao\nAmerica/Danmarkshavn\nAmerica/Dawson\nAmerica/Dawson_Creek\nAmerica/Denver\nAmerica/Detroit\nAmerica/Dominica\nAmerica/Edmonton\nAmerica/Eirunepe\nAmerica/El_Salvador\nAmerica/Fort_Nelson\nAmerica/Fortaleza\nAmerica/Glace_Bay\nAmerica/Godthab\nAmerica/Goose_Bay\nAmerica/Grand_Turk\nAmerica/Grenada\nAmerica/Guadeloupe\nAmerica/Guatemala\nAmerica/Guayaquil\nAmerica/Guyana\nAmerica/Halifax\nAmerica/Havana\nAmerica/Hermosillo\nAmerica/Indiana/Knox\nAmerica/Indiana/Marengo\nAmerica/Indiana/Petersburg\nAmerica/Indiana/Tell_City\nAmerica/Indiana/Vevay\nAmerica/Indiana/Vincennes\nAmerica/Indiana/Winamac\nAmerica/Indianapolis\nAmerica/Inuvik\nAmerica/Iqaluit\nAmerica/Jamaica\nAmerica/Jujuy\nAmerica/Juneau\nAmerica/Kentucky/Monticello\nAmerica/Kralendijk\nAmerica/La_Paz\nAmerica/Lima\nAmerica/Los_Angeles\nAmerica/Louisville\nAmerica/Lower_Princes\nAmerica/Maceio\nAmerica/Managua\nAmerica/Manaus\nAmerica/Marigot\nAmerica/Martinique\nAmerica/Matamoros\nAmerica/Mazatlan\nAmerica/Mendoza\nAmerica/Menominee\nAmerica/Merida\nAmerica/Metlakatla\nAmerica/Mexico_City\nAmerica/Miquelon\nAmerica/Moncton\nAmerica/Monterrey\nAmerica/Montevideo\nAmerica/Montserrat\nAmerica/Nassau\nAmerica/Nome\nAmerica/Noronha\nAmerica/North_Dakota/Beulah\nAmerica/North_Dakota/Center\nAmerica/North_Dakota/New_Salem\nAmerica/Ojinaga\nAmerica/Panama\nAmerica/Paramaribo\nAmerica/Phoenix\nAmerica/Port-au-Prince\nAmerica/Port_of_Spain\nAmerica/Porto_Velho\nAmerica/Puerto_Rico\nAmerica/Punta_Arenas\nAmerica/Rankin_Inlet\nAmerica/Recife\nAmerica/Regina\nAmerica/Resolute\nAmerica/Rio_Branco\nAmerica/Santarem\nAmerica/Santiago\nAmerica/Santo_Domingo\nAmerica/Sao_Paulo\nAmerica/Scoresbysund\nAmerica/Sitka\nAmerica/St_Barthelemy\nAmerica/St_Johns\nAmerica/St_Kitts\nAmerica/St_Lucia\nAmerica/St_Thomas\nAmerica/St_Vincent\nAmerica/Swift_Current\nAmerica/Tegucigalpa\nAmerica/Thule\nAmerica/Tijuana\nAmerica/Toronto\nAmerica/Tortola\nAmerica/Vancouver\nAmerica/Whitehorse\nAmerica/Winnipeg\nAmerica/Yakutat\nAntarctica/Casey\nAntarctica/Davis\nAntarctica/DumontDUrville\nAntarctica/Macquarie\nAntarctica/Mawson\nAntarctica/McMurdo\nAntarctica/Palmer\nAntarctica/Rothera\nAntarctica/Syowa\nAntarctica/Troll\nAntarctica/Vostok\nArctic/Longyearbyen\nAsia/Aden\nAsia/Almaty\nAsia/Amman\nAsia/Anadyr\nAsia/Aqtau\nAsia/Aqtobe\nAsia/Ashgabat\nAsia/Atyrau\nAsia/Baghdad\nAsia/Bahrain\nAsia/Baku\nAsia/Bangkok\nAsia/Barnaul\nAsia/Beirut\nAsia/Bishkek\nAsia/Brunei\nAsia/Calcutta\nAsia/Chita\nAsia/Colombo\nAsia/Damascus\nAsia/Dhaka\nAsia/Dili\nAsia/Dubai\nAsia/Dushanbe\nAsia/Famagusta\nAsia/Gaza\nAsia/Hebron\nAsia/Hong_Kong\nAsia/Hovd\nAsia/Irkutsk\nAsia/Jakarta\nAsia/Jayapura\nAsia/Jerusalem\nAsia/Kabul\nAsia/Kamchatka\nAsia/Karachi\nAsia/Katmandu\nAsia/Khandyga\nAsia/Krasnoyarsk\nAsia/Kuala_Lumpur\nAsia/Kuching\nAsia/Kuwait\nAsia/Macau\nAsia/Magadan\nAsia/Makassar\nAsia/Manila\nAsia/Muscat\nAsia/Nicosia\nAsia/Novokuznetsk\nAsia/Novosibirsk\nAsia/Omsk\nAsia/Oral\nAsia/Phnom_Penh\nAsia/Pontianak\nAsia/Pyongyang\nAsia/Qatar\nAsia/Qostanay\nAsia/Qyzylorda\nAsia/Rangoon\nAsia/Riyadh\nAsia/Saigon\nAsia/Sakhalin\nAsia/Samarkand\nAsia/Seoul\nAsia/Shanghai\nAsia/Singapore\nAsia/Srednekolymsk\nAsia/Taipei\nAsia/Tashkent\nAsia/Tbilisi\nAsia/Tehran\nAsia/Thimphu\nAsia/Tokyo\nAsia/Tomsk\nAsia/Ulaanbaatar\nAsia/Urumqi\nAsia/Ust-Nera\nAsia/Vientiane\nAsia/Vladivostok\nAsia/Yakutsk\nAsia/Yekaterinburg\nAsia/Yerevan\nAtlantic/Azores\nAtlantic/Bermuda\nAtlantic/Canary\nAtlantic/Cape_Verde\nAtlantic/Faeroe\nAtlantic/Madeira\nAtlantic/Reykjavik\nAtlantic/South_Georgia\nAtlantic/St_Helena\nAtlantic/Stanley\nAustralia/Adelaide\nAustralia/Brisbane\nAustralia/Broken_Hill\nAustralia/Darwin\nAustralia/Eucla\nAustralia/Hobart\nAustralia/Lindeman\nAustralia/Lord_Howe\nAustralia/Melbourne\nAustralia/Perth\nAustralia/Sydney\nEurope/Amsterdam\nEurope/Andorra\nEurope/Astrakhan\nEurope/Athens\nEurope/Belgrade\nEurope/Berlin\nEurope/Bratislava\nEurope/Brussels\nEurope/Bucharest\nEurope/Budapest\nEurope/Busingen\nEurope/Chisinau\nEurope/Copenhagen\nEurope/Dublin\nEurope/Gibraltar\nEurope/Guernsey\nEurope/Helsinki\nEurope/Isle_of_Man\nEurope/Istanbul\nEurope/Jersey\nEurope/Kaliningrad\nEurope/Kiev\nEurope/Kirov\nEurope/Lisbon\nEurope/Ljubljana\nEurope/London\nEurope/Luxembourg\nEurope/Madrid\nEurope/Malta\nEurope/Mariehamn\nEurope/Minsk\nEurope/Monaco\nEurope/Moscow\nEurope/Oslo\nEurope/Paris\nEurope/Podgorica\nEurope/Prague\nEurope/Riga\nEurope/Rome\nEurope/Samara\nEurope/San_Marino\nEurope/Sarajevo\nEurope/Saratov\nEurope/Simferopol\nEurope/Skopje\nEurope/Sofia\nEurope/Stockholm\nEurope/Tallinn\nEurope/Tirane\nEurope/Ulyanovsk\nEurope/Vaduz\nEurope/Vatican\nEurope/Vienna\nEurope/Vilnius\nEurope/Volgograd\nEurope/Warsaw\nEurope/Zagreb\nEurope/Zurich\nIndian/Antananarivo\nIndian/Chagos\nIndian/Christmas\nIndian/Cocos\nIndian/Comoro\nIndian/Kerguelen\nIndian/Mahe\nIndian/Maldives\nIndian/Mauritius\nIndian/Mayotte\nIndian/Reunion\nPacific/Apia\nPacific/Auckland\nPacific/Bougainville\nPacific/Chatham\nPacific/Easter\nPacific/Efate\nPacific/Enderbury\nPacific/Fakaofo\nPacific/Fiji\nPacific/Funafuti\nPacific/Galapagos\nPacific/Gambier\nPacific/Guadalcanal\nPacific/Guam\nPacific/Honolulu\nPacific/Kiritimati\nPacific/Kosrae\nPacific/Kwajalein\nPacific/Majuro\nPacific/Marquesas\nPacific/Midway\nPacific/Nauru\nPacific/Niue\nPacific/Norfolk\nPacific/Noumea\nPacific/Pago_Pago\nPacific/Palau\nPacific/Pitcairn\nPacific/Ponape\nPacific/Port_Moresby\nPacific/Rarotonga\nPacific/Saipan\nPacific/Tahiti\nPacific/Tarawa\nPacific/Tongatapu\nPacific/Truk\nPacific/Wake\nPacific/Wallis\nYour pack\nUse the default\nQuiet hours\n\nMessages that can wait are held until they end. Write them like 22:00–07:00. Nova’s default.\n\nDefault\nYour name\n\nYour name, as Nova knows it. Set by your pack.\n\nYour pack\nUse the default\nWhat Nova calls you\n\nOnly if it isn’t your name. Set by your pack.\n\nYour pack\nUse the default\nNova’s name\n\nOnly the name changes; the charter stays. Set by your pack.\n\nYour pack\nUse the default\nDirectness\n\nTelling you when Nova thinks something’s wrong isn’t adjustable; this is how it says it. Set by your pack.\n\nGently\nPlainly\nBluntly\nYour pack\nUse the default\nWarmth\n\nHow Nova sounds when it talks to you. Nova’s default.\n\nEven and professional\nWarm\nDefault\nSpeaking up\n\nWhether Nova brings things up on its own, within your policy. Nova’s default.\n\nOnly when asked\nOffers, and asks before acting\nBrings up what matters\nDefault\nPrivacy\n\nThe default for every task. A task can be stricter, never looser. Set by your pack.\n\nLocal-only\nLocal first\nCloud allowed\nYour pack\nUse the default\nReview changes\nAnswer a few questions\n\nCONFIGURATION\nBRING IN A CONFIGURATION\n\nA Nova configuration file or a personal pack. Nova checks it and shows every change before applying any; nothing is overwritten that you don’t see first.\n\nChoose a file\nExport your configuration",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#danger",
+    "posture": "phone",
+    "width": 390,
+    "height": 844,
+    "elapsed_ms": 1030,
+    "url": "http://127.0.0.1:4418/settings#danger",
+    "text": "Skip to content\nSettings\nSettings\nStart over\n\nExport everything, or erase Nova here\n\nDANGER ZONE\n\nErasing Nova returns it to how it was the first time, on this machine: no memories, conversations, settings, saved passwords, paired devices, checkpoints or backups. Nova offers to export everything first.\n\nErase Nova and start over…",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 390,
+        "h": 844
+      },
+      "doc": {
+        "w": 390,
+        "h": 844
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    },
+    "axe": []
+  },
+  {
+    "route": "/settings#you",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1040,
+    "url": "http://127.0.0.1:4418/settings#you",
+    "text": "Skip to content\nSettings\nSettings\nYou and Nova\n\nNames and how Nova talks to you\n\nYOU AND NOVA\n\nYour name\n\nWhat Nova calls you.\n\nYour name\nSave\n\nNova’s name\n\nOnly the name changes; the charter stays.\n\nNova’s name\nSave\n\nDirectness\n\nTelling you when Nova thinks something’s wrong isn’t adjustable; this is how it says it.\n\nDirectness\nGently\nPlainly\nBluntly",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#appearance",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1041,
+    "url": "http://127.0.0.1:4418/settings#appearance",
+    "text": "Skip to content\nSettings\nSettings\nAppearance\n\nTheme, light and dark, contrast\n\nAPPEARANCE\n\nTheme: Nebula · synced\n\nChange it for\nThis device\nAll my devices\n\nA design you pick shows here at once, and Undo puts the last one back.\n\nRECOMMENDED · NOVA’S DESIGN\n\nNebula\nNova's default look. Neutral surfaces, light or near-black, following your device; the nebula swirl only in the orb, the icon and state accents.\n\nNova’s own design, held to its design bar. Dark like this device’s system setting, and all its text and controls pass the contrast check.\n\nMore designs\n· 6, 5 not yet at Nova’s design bar\n\nEvery text and control here passes the contrast check: 4.5:1 for text, 3:1 for outlines.\n\nLight and dark · all devices\nAuto\nLight\nDark\n\nOn an iPhone with Nova on the Home Screen, a dark design also fills the strip with the time and battery. After you switch to or from a dark design, that strip may only change once you close Nova and open it again.\n\nStyleguide",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#privacy",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1029,
+    "url": "http://127.0.0.1:4418/settings#privacy",
+    "text": "Skip to content\nSettings\nSettings\nPrivacy and permissions\n\nWhat stays here and what asks first\n\nPRIVACY\n\nThe default for every task. A task can be stricter, never looser.\n\nPrivacy mode\nLocal-only\nLocal first\nCloud allowed\n\nModel calls stay on your own devices.\n\nWITHOUT ASKING\n\nEach kind of step that changes something outside the conversation starts at Ask first. Turn a switch on and Nova does that without asking, in a conversation or while it works on its own; Activity shows each time. A command that follows outside content still asks.\n\nRun commands on this computer\n\nA command can change anything your account can.\n\nSave Gmail drafts\n\nNova has no way to send email.\n\nTidy Gmail: archive, mark read or unread, labels\n\nNova has no way to delete email.\n\nSet up, change and remove schedules\n\nChange your settings in a conversation\n\nYou see the change first.\n\nOffer memories from a file in workspace/import\n\nThey wait for your OK in Memory.\n\nWhen Nova gets a new tool, from an update, a plugin or a connector, anything it can change shows up here, set to Ask first. These switches are kept in permissions.md in your Nova folder.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#connections",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1025,
+    "url": "http://127.0.0.1:4418/settings#connections",
+    "text": "Skip to content\nSettings\nSettings\nConnections\n\nAccounts and services Nova can reach\n\nCONNECTIONS\n\nNothing is connected yet. Connect a service and Nova can work with it for you; its passwords and tokens are kept in Nova’s vault.\n\nNova suggests\n\nHome Assistant\n\nYour smart home: Nova can see what your devices are doing, hear when they change, and change them when you ask.\n\nSee the state of your lights, sensors, locks and other devices.\nNotice when something changes, for the rules you set up.\nTurn things on and off when you ask, and tell you what changed.\n\nNever: change anything unless you, or a rule you set up, asks, change anything from a chat that has read something from outside, without asking you first.\n\nHome Assistant address\nLong-lived access token\n\nMake one in Home Assistant: your profile, Security, Long-lived access tokens.\n\nConnect Home Assistant\nOther connections (1)\nSITE SIGN-INS\n\nNova’s own browser hasn’t kept anything for a site yet. Save a sign-in here and Nova can sign in for you; it is saved for the site it belongs to.\n\nSave a sign-in",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#models",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1021,
+    "url": "http://127.0.0.1:4418/settings#models",
+    "text": "Skip to content\nSettings\nSettings\nModels and providers\n\nLocal models and outside help\n\nPROVIDERS\n\nOther AIs and automations Nova can hand work to. Each is off until you turn it on, and Nova checks what they do before it counts.\n\nChat uses Your model command\n\nIt is on and working, and keeps everything on this computer.\n\nCoding tasks\n\nTurn on a coding agent to use one here.\n\nAll providers (6)\n\nTest commands a brief declares: Nova asks before running them.\n\nMODELS\n\nNova runs models on your own devices, through Ollama. Ollama isn’t answering: Nova couldn’t reach Ollama at 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nWhere each task runs\n\nLocal only: every task stays on your devices, and no cloud model is used.\n\nGeneral chat\n\nNot set\n\nNot set yet.\n\nCoding\n\nNot set\n\nNot set yet. Coding has no role of its own yet, so it goes where thinking and writing does.\n\nScreening and decisions\n\nNot set\n\nNot set yet.\n\nEmbeddings (memory search)\n\nNot set\n\nNot set yet.\n\nVision\n\nNothing sends images to a local model yet; a vision model can be planned on a device.\n\nTranscription\n\nNo runtime\n\nThere is no transcription runtime on your devices (Nova looks for whisper.cpp or faster-whisper), so transcription stays off. Nothing is sent elsewhere to transcribe instead.\n\nYour devices\n\nHub hub\n\nOnline\n\nno GPU · 18 GB memory · 5 threads · 56 GB free disk\n\nServes no task yet.\n\nCan run, slowly, models up to about 6.6 GB (around 11B parameters at Q4_K_M with 4k context) on no GPU Nova can use, so models run on the CPU from 18 GB of memory.\n\nOllama isn’t answering: Nova couldn’t reach Ollama at 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nDecision model: tev1:4b. Nova couldn’t reach 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nModels on Hub\nWhat runs where\n\nSorting\n\nNot set\n\nFor quick, small decisions: what an event is, whether it needs you.\n\nNova recommends llama3.2:3b: Nothing installed here fits this role. llama3.2:3b is small and quick, and fits no GPU Nova can use, so models run on the CPU from 18 GB of memory. A 1.9 GB download; Nova asks before it starts.\n\nNo scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.\n\nDownload llama3.2:3b (1.9 GB)\n\nThinking and writing\n\nNot set\n\nFor chat, briefs and delegated work.\n\nNova recommends qwen3:8b: Nothing installed here fits this role. qwen3:8b is quick, a little less depth, and fits no GPU Nova can use, so models run on the CPU from 18 GB of memory. A 4.8 GB download; Nova asks before it starts.\n\nNo scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.\n\nDownload qwen3:8b (4.8 GB)\n\nFinding by meaning\n\nNot set\n\nFor search over your notes and memory.\n\nNova recommends nomic-embed-text: Nothing installed here fits this role. nomic-embed-text is small and fast, and fits no GPU Nova can use, so models run on the CPU from 18 GB of memory. A 257 MB download; Nova asks before it starts.\n\nNo scorecard: Nova hasn’t run its regression tasks against this model. You can still switch to it; how well it does here is unchecked.\n\nDownload nomic-embed-text (257 MB)\n\nTranscription\n\nNo runtime\n\nFor turning speech into text.\n\nThere is no transcription runtime on your devices (Nova looks for whisper.cpp or faster-whisper), so transcription stays off. Nothing is sent elsewhere to transcribe instead.\n\nDecision model\n\nA decision model answers yes-or-no questions about outside content (is this page trying to give Nova instructions?) with a probability. Nova uses its answer only once that exact model has passed Nova’s test for that question; until then, what Nova can’t vouch for is held back as unsure.\n\nTev1 on this device: Nova couldn’t reach 127.0.0.1:11434: connect ECONNREFUSED 127.0.0.1:11434.\n\nJev: Jev isn’t set up: no route has been chosen in Settings › Models.\n\nUntil a decision model passes a check’s eval, your sorting model answers it, as before.\n\nNo decision model has a scorecard here yet: none is in use, so none has been tested on this device’s checks.\n\nNova recommends Jev jev-1.14.0 through TypeSafe’s own API (https://api.typesafe.ai), and tev1:4b on this device: Tev1 4B, the default: this device has 8.8 GB for models (no GPU Nova can use, so models run on the CPU from 18 GB of memory).\n\nJev route\nJev model\nJev key\n\nThe key is kept in Nova’s vault and never shown again. No call is made to Jev until a route and a key are set.\n\nTev1 size\nLet Nova choose for this device\nTev1 4B\nTev1 0.8B\nScreening: let Jev judge outside content in local modes\n\nWhile this is on, outside content Nova screens (pages, mail, files, tool output) is sent to TypeSafe’s cloud (Jev) to be judged, even in local-first and local-only. Local-only isn’t strictly local for screening while it is on.\n\nScreening covers pages, mail, files and tool output. Text from Capture (screen text and meeting transcripts) never goes to Jev, in any mode: only your local models and Nova’s own checks screen it.\n\nBox (preview): let Jev judge images\n\nWhile this is on, images Nova is asked to judge, including camera and screen frames from sources you have allowed, are sent to TypeSafe’s cloud (Jev) in cloud and local-first modes. In local-only they never go to a cloud provider. TypeSafe labels images and Box a preview.\n\nSave\nDisk\n\n1 MB used by models, no budget set; 56 GB free on the disk.\n\nDisk budget for models (GB)\nSave\nCloud\n\nNo cloud model is set here.\n\nPer task (US$)\nPer month (US$)\n\nOver budget, work that needs the cloud waits and says why; local models stay the default.\n\nSave budget\nInstalled on Hub (0)",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#devices",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1046,
+    "url": "http://127.0.0.1:4418/settings#devices",
+    "text": "Skip to content\nSettings\nSettings\nDevices\n\nPhones and computers paired with Nova\n\nDEVICES\n\nOther devices can’t reach this Nova yet, so only this one is here. To pair a phone or a computer, start Nova with a mesh address (NOVA_MESH_URL); the README says how.\n\nMachines and services\n\nHub · this device\n\nThe hub\n\nRoles: Hub candidate, General server\n\nOnline\nModels\nRoles\n\nInstall Nova\n\nYour browser offers Install in its menu when it can.\n\nAppearance id\n\n987b3a1e-b215-4104-b0e5-6b8885e421cc. It lets this browser keep its own appearance.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "A",
+          "text": "Machines and services",
+          "rect": {
+            "x": 31,
+            "y": 340.25,
+            "width": 145.609375,
+            "height": 18,
+            "top": 340.25,
+            "right": 176.609375,
+            "bottom": 358.25,
+            "left": 31
+          }
+        }
+      ]
+    }
+  },
+  {
+    "route": "/settings#capture",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1020,
+    "url": "http://127.0.0.1:4418/settings#capture",
+    "text": "Skip to content\nSettings\nSettings\nCapture\n\nSources, consent, and what Nova remembers\n\nCAPTURE\n\nWhat Nova may see on your devices, for context. Each source starts turned off, and the top bar shows when capture is on. What is captured is kept on your own devices.\n\nOff.\n\nOpen Capture\nSources\n\nNo source yet. A paired computer lists what it can capture here once its device agent says so.\n\nScreenpipe’s address\nAPI key (if Screenpipe asks for one)\n\nIf Screenpipe runs on this computer, Nova can take in what it records. It stays off until you turn it on.\n\nAdd Screenpipe\nWhat each kind of device can capture\nNever captured\n\nPrivate and incognito windows, always: Nova recognises them by the window’s title, in the major browsers’ common languages. That is a best effort, so also list them in Screenpipe’s own ignored-windows setting, which stops Screenpipe recording them at all. Password managers and banking apps and sites, recognised by their names and addresses: also a best effort. And anything you list here.\n\nBefore it is kept, text shaped like a key, a token, a password, a card or bank account number is blanked out, in the words, the window title and the address. Then a model on this computer or your own network checks the rest for passwords, keys and someone’s money or health details. Until a model trusted for that has checked it, captured text is held: kept on your devices like the rest of capture, not added to memory.\n\nKind\nAn app\nA site\nA space\nA time of day\nWhich (an app, a site, a space, or 12:00–13:00)\nAdd\nLet back in\n\nIf Nova kept out an app or site that isn’t a password manager or a bank, let it back in here, for one source or for all.\n\nKind\nAn app\nA site\nWhich (an app’s name, or a site like example.org)\nFrom\nEvery source\nLet it back in\nSpaces\n\nNova files capture into a space only by what you set here: an app, a device, or your hours. Anything unclear stays unclassified until you say.\n\nWhen\nI use the app\nIt’s these hours (09:00–17:00)\nApp or hours\nSpace\nAdd\n\nRight now\n\nNo switch on: the rules above decide.\n\nSpace\npersonal\nSwitch to it\nKeep capture for\nDays\ndays, then it is deleted for good. What you remember from it stays in Memory.\nSave",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#services",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1017,
+    "url": "http://127.0.0.1:4418/settings#services",
+    "text": "Skip to content\nSettings\nSettings\nServices\n\nHow Nova runs its services here\n\nSERVICES\n\nView machines and services\n\nHow Nova runs the services it manages here, and what that means on this computer.\n\nIn use: ordinary programs\n\nRecommended: ordinary programs, under Nova’s supervisor. It’s lighter and needs nothing extra. This is how Nova runs its services here.\n\nOn this computer\n\nK3s, for container services, isn’t available in this version yet.\n\nK3s, a small Kubernetes\n\nNot available yet in this version.\n\nSwitching\n\nSwitching to K3s isn’t available yet, so there is nothing to switch to. When it is, it will be here, and it will ask for your explicit confirmation.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": [
+        {
+          "tag": "A",
+          "text": "View machines and services",
+          "rect": {
+            "x": 31,
+            "y": 212.25,
+            "width": 180.453125,
+            "height": 18,
+            "top": 212.25,
+            "right": 211.453125,
+            "bottom": 230.25,
+            "left": 31
+          }
+        }
+      ]
+    }
+  },
+  {
+    "route": "/settings#about",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1021,
+    "url": "http://127.0.0.1:4418/settings#about",
+    "text": "Skip to content\nSettings\nSettings\nAbout Nova\n\nIts version and build, what’s new, where it stands\n\nABOUT NOVA\n\nNova 0.1.0-alpha.1.\n\nRunning d948aa0a; Nova doesn't know the latest merged build. Started 2026-11-09 21:02 UTC.\n\nOpen About Nova\nWhat’s new\nWhere Nova stands",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#security",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1028,
+    "url": "http://127.0.0.1:4418/settings#security",
+    "text": "Skip to content\nSettings\nSettings\nSecurity\n\nPasskeys that confirm tier-3 actions here\n\nSECURITY\nPASSKEYS FOR TIER-3 ACTIONS\n\nTier-3 actions on Nova’s own screen ask for a passkey, and nothing tier-3 runs until you add one. Your browser will ask you to create it with your security key, fingerprint or screen lock. Nova keeps only its public key. Add two, so losing one never locks you out.\n\nAdd a passkey",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#backups",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1031,
+    "url": "http://127.0.0.1:4418/settings#backups",
+    "text": "Skip to content\nSettings\nSettings\nBackups and changes\n\nBackup folders, checkpoints, restores and changes\n\nBackups\nBACKUP COPIES\n\nNo backup folders selected. Choose a backup folder to keep copies outside Nova.\n\nBackup folder\n\nA private folder that already exists, outside Nova’s home and not containing it.\n\nCopies to keep\n\nKeep 1–365 copies. Older copies are removed as new ones arrive.\n\nEncrypted copy folder\n\nA different folder that already exists. Choose a backup folder first.\n\nSave backup settings\n\nRemove a folder explicitly to stop using it. An empty or invalid entry does not remove a saved folder. Saved files stay on disk.\n\nRECOVERY KEY\n\nFor encrypted backup copies. It does not replace Nova Vault recovery factors.\n\nRecovery key\n\nSet up an encrypted copy folder to get its recovery key.\n\nBACKUPS\n\nCheckpoints\n\nA checkpoint is everything Nova keeps on this computer: memories, tasks, settings, its keys. It stays on this computer. Nova takes one by itself before it changes itself, upgrades or restores, and you can take your own.\n\nNova keeps the newest 10 automatic checkpoints, counted in the order they were taken, never by date, and every checkpoint you name until you delete it. A new checkpoint is complete before an old one is removed, and a named one is never removed to make room.\n\nName\nTake a checkpoint\n\nNo checkpoints yet.\n\nCHANGES\n\nA change to Nova goes through these steps: tried on a copy first, tested, released as a version, and watched live before it stays. If a check fails, Nova puts back what was there before.\n\nNo changes yet. When Nova or you propose one, it shows here with every check it went through.",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#config",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1023,
+    "url": "http://127.0.0.1:4418/settings#config",
+    "text": "Skip to content\nSettings\nSettings\nConfiguration\n\nEvery setting of yours, a few questions, or a file\n\nYOUR SETTINGS\n\nEach of your settings, what it is now, and where it came from. Change any of them, then review the changes before anything is saved.\n\nTimezone\n\nTimes, schedules and quiet hours follow it. Set by your pack.\n\nAmerica/New_York\nUTC\nAfrica/Abidjan\nAfrica/Accra\nAfrica/Addis_Ababa\nAfrica/Algiers\nAfrica/Asmera\nAfrica/Bamako\nAfrica/Bangui\nAfrica/Banjul\nAfrica/Bissau\nAfrica/Blantyre\nAfrica/Brazzaville\nAfrica/Bujumbura\nAfrica/Cairo\nAfrica/Casablanca\nAfrica/Ceuta\nAfrica/Conakry\nAfrica/Dakar\nAfrica/Dar_es_Salaam\nAfrica/Djibouti\nAfrica/Douala\nAfrica/El_Aaiun\nAfrica/Freetown\nAfrica/Gaborone\nAfrica/Harare\nAfrica/Johannesburg\nAfrica/Juba\nAfrica/Kampala\nAfrica/Khartoum\nAfrica/Kigali\nAfrica/Kinshasa\nAfrica/Lagos\nAfrica/Libreville\nAfrica/Lome\nAfrica/Luanda\nAfrica/Lubumbashi\nAfrica/Lusaka\nAfrica/Malabo\nAfrica/Maputo\nAfrica/Maseru\nAfrica/Mbabane\nAfrica/Mogadishu\nAfrica/Monrovia\nAfrica/Nairobi\nAfrica/Ndjamena\nAfrica/Niamey\nAfrica/Nouakchott\nAfrica/Ouagadougou\nAfrica/Porto-Novo\nAfrica/Sao_Tome\nAfrica/Tripoli\nAfrica/Tunis\nAfrica/Windhoek\nAmerica/Adak\nAmerica/Anchorage\nAmerica/Anguilla\nAmerica/Antigua\nAmerica/Araguaina\nAmerica/Argentina/La_Rioja\nAmerica/Argentina/Rio_Gallegos\nAmerica/Argentina/Salta\nAmerica/Argentina/San_Juan\nAmerica/Argentina/San_Luis\nAmerica/Argentina/Tucuman\nAmerica/Argentina/Ushuaia\nAmerica/Aruba\nAmerica/Asuncion\nAmerica/Bahia\nAmerica/Bahia_Banderas\nAmerica/Barbados\nAmerica/Belem\nAmerica/Belize\nAmerica/Blanc-Sablon\nAmerica/Boa_Vista\nAmerica/Bogota\nAmerica/Boise\nAmerica/Buenos_Aires\nAmerica/Cambridge_Bay\nAmerica/Campo_Grande\nAmerica/Cancun\nAmerica/Caracas\nAmerica/Catamarca\nAmerica/Cayenne\nAmerica/Cayman\nAmerica/Chicago\nAmerica/Chihuahua\nAmerica/Ciudad_Juarez\nAmerica/Coral_Harbour\nAmerica/Cordoba\nAmerica/Costa_Rica\nAmerica/Coyhaique\nAmerica/Creston\nAmerica/Cuiaba\nAmerica/Curacao\nAmerica/Danmarkshavn\nAmerica/Dawson\nAmerica/Dawson_Creek\nAmerica/Denver\nAmerica/Detroit\nAmerica/Dominica\nAmerica/Edmonton\nAmerica/Eirunepe\nAmerica/El_Salvador\nAmerica/Fort_Nelson\nAmerica/Fortaleza\nAmerica/Glace_Bay\nAmerica/Godthab\nAmerica/Goose_Bay\nAmerica/Grand_Turk\nAmerica/Grenada\nAmerica/Guadeloupe\nAmerica/Guatemala\nAmerica/Guayaquil\nAmerica/Guyana\nAmerica/Halifax\nAmerica/Havana\nAmerica/Hermosillo\nAmerica/Indiana/Knox\nAmerica/Indiana/Marengo\nAmerica/Indiana/Petersburg\nAmerica/Indiana/Tell_City\nAmerica/Indiana/Vevay\nAmerica/Indiana/Vincennes\nAmerica/Indiana/Winamac\nAmerica/Indianapolis\nAmerica/Inuvik\nAmerica/Iqaluit\nAmerica/Jamaica\nAmerica/Jujuy\nAmerica/Juneau\nAmerica/Kentucky/Monticello\nAmerica/Kralendijk\nAmerica/La_Paz\nAmerica/Lima\nAmerica/Los_Angeles\nAmerica/Louisville\nAmerica/Lower_Princes\nAmerica/Maceio\nAmerica/Managua\nAmerica/Manaus\nAmerica/Marigot\nAmerica/Martinique\nAmerica/Matamoros\nAmerica/Mazatlan\nAmerica/Mendoza\nAmerica/Menominee\nAmerica/Merida\nAmerica/Metlakatla\nAmerica/Mexico_City\nAmerica/Miquelon\nAmerica/Moncton\nAmerica/Monterrey\nAmerica/Montevideo\nAmerica/Montserrat\nAmerica/Nassau\nAmerica/Nome\nAmerica/Noronha\nAmerica/North_Dakota/Beulah\nAmerica/North_Dakota/Center\nAmerica/North_Dakota/New_Salem\nAmerica/Ojinaga\nAmerica/Panama\nAmerica/Paramaribo\nAmerica/Phoenix\nAmerica/Port-au-Prince\nAmerica/Port_of_Spain\nAmerica/Porto_Velho\nAmerica/Puerto_Rico\nAmerica/Punta_Arenas\nAmerica/Rankin_Inlet\nAmerica/Recife\nAmerica/Regina\nAmerica/Resolute\nAmerica/Rio_Branco\nAmerica/Santarem\nAmerica/Santiago\nAmerica/Santo_Domingo\nAmerica/Sao_Paulo\nAmerica/Scoresbysund\nAmerica/Sitka\nAmerica/St_Barthelemy\nAmerica/St_Johns\nAmerica/St_Kitts\nAmerica/St_Lucia\nAmerica/St_Thomas\nAmerica/St_Vincent\nAmerica/Swift_Current\nAmerica/Tegucigalpa\nAmerica/Thule\nAmerica/Tijuana\nAmerica/Toronto\nAmerica/Tortola\nAmerica/Vancouver\nAmerica/Whitehorse\nAmerica/Winnipeg\nAmerica/Yakutat\nAntarctica/Casey\nAntarctica/Davis\nAntarctica/DumontDUrville\nAntarctica/Macquarie\nAntarctica/Mawson\nAntarctica/McMurdo\nAntarctica/Palmer\nAntarctica/Rothera\nAntarctica/Syowa\nAntarctica/Troll\nAntarctica/Vostok\nArctic/Longyearbyen\nAsia/Aden\nAsia/Almaty\nAsia/Amman\nAsia/Anadyr\nAsia/Aqtau\nAsia/Aqtobe\nAsia/Ashgabat\nAsia/Atyrau\nAsia/Baghdad\nAsia/Bahrain\nAsia/Baku\nAsia/Bangkok\nAsia/Barnaul\nAsia/Beirut\nAsia/Bishkek\nAsia/Brunei\nAsia/Calcutta\nAsia/Chita\nAsia/Colombo\nAsia/Damascus\nAsia/Dhaka\nAsia/Dili\nAsia/Dubai\nAsia/Dushanbe\nAsia/Famagusta\nAsia/Gaza\nAsia/Hebron\nAsia/Hong_Kong\nAsia/Hovd\nAsia/Irkutsk\nAsia/Jakarta\nAsia/Jayapura\nAsia/Jerusalem\nAsia/Kabul\nAsia/Kamchatka\nAsia/Karachi\nAsia/Katmandu\nAsia/Khandyga\nAsia/Krasnoyarsk\nAsia/Kuala_Lumpur\nAsia/Kuching\nAsia/Kuwait\nAsia/Macau\nAsia/Magadan\nAsia/Makassar\nAsia/Manila\nAsia/Muscat\nAsia/Nicosia\nAsia/Novokuznetsk\nAsia/Novosibirsk\nAsia/Omsk\nAsia/Oral\nAsia/Phnom_Penh\nAsia/Pontianak\nAsia/Pyongyang\nAsia/Qatar\nAsia/Qostanay\nAsia/Qyzylorda\nAsia/Rangoon\nAsia/Riyadh\nAsia/Saigon\nAsia/Sakhalin\nAsia/Samarkand\nAsia/Seoul\nAsia/Shanghai\nAsia/Singapore\nAsia/Srednekolymsk\nAsia/Taipei\nAsia/Tashkent\nAsia/Tbilisi\nAsia/Tehran\nAsia/Thimphu\nAsia/Tokyo\nAsia/Tomsk\nAsia/Ulaanbaatar\nAsia/Urumqi\nAsia/Ust-Nera\nAsia/Vientiane\nAsia/Vladivostok\nAsia/Yakutsk\nAsia/Yekaterinburg\nAsia/Yerevan\nAtlantic/Azores\nAtlantic/Bermuda\nAtlantic/Canary\nAtlantic/Cape_Verde\nAtlantic/Faeroe\nAtlantic/Madeira\nAtlantic/Reykjavik\nAtlantic/South_Georgia\nAtlantic/St_Helena\nAtlantic/Stanley\nAustralia/Adelaide\nAustralia/Brisbane\nAustralia/Broken_Hill\nAustralia/Darwin\nAustralia/Eucla\nAustralia/Hobart\nAustralia/Lindeman\nAustralia/Lord_Howe\nAustralia/Melbourne\nAustralia/Perth\nAustralia/Sydney\nEurope/Amsterdam\nEurope/Andorra\nEurope/Astrakhan\nEurope/Athens\nEurope/Belgrade\nEurope/Berlin\nEurope/Bratislava\nEurope/Brussels\nEurope/Bucharest\nEurope/Budapest\nEurope/Busingen\nEurope/Chisinau\nEurope/Copenhagen\nEurope/Dublin\nEurope/Gibraltar\nEurope/Guernsey\nEurope/Helsinki\nEurope/Isle_of_Man\nEurope/Istanbul\nEurope/Jersey\nEurope/Kaliningrad\nEurope/Kiev\nEurope/Kirov\nEurope/Lisbon\nEurope/Ljubljana\nEurope/London\nEurope/Luxembourg\nEurope/Madrid\nEurope/Malta\nEurope/Mariehamn\nEurope/Minsk\nEurope/Monaco\nEurope/Moscow\nEurope/Oslo\nEurope/Paris\nEurope/Podgorica\nEurope/Prague\nEurope/Riga\nEurope/Rome\nEurope/Samara\nEurope/San_Marino\nEurope/Sarajevo\nEurope/Saratov\nEurope/Simferopol\nEurope/Skopje\nEurope/Sofia\nEurope/Stockholm\nEurope/Tallinn\nEurope/Tirane\nEurope/Ulyanovsk\nEurope/Vaduz\nEurope/Vatican\nEurope/Vienna\nEurope/Vilnius\nEurope/Volgograd\nEurope/Warsaw\nEurope/Zagreb\nEurope/Zurich\nIndian/Antananarivo\nIndian/Chagos\nIndian/Christmas\nIndian/Cocos\nIndian/Comoro\nIndian/Kerguelen\nIndian/Mahe\nIndian/Maldives\nIndian/Mauritius\nIndian/Mayotte\nIndian/Reunion\nPacific/Apia\nPacific/Auckland\nPacific/Bougainville\nPacific/Chatham\nPacific/Easter\nPacific/Efate\nPacific/Enderbury\nPacific/Fakaofo\nPacific/Fiji\nPacific/Funafuti\nPacific/Galapagos\nPacific/Gambier\nPacific/Guadalcanal\nPacific/Guam\nPacific/Honolulu\nPacific/Kiritimati\nPacific/Kosrae\nPacific/Kwajalein\nPacific/Majuro\nPacific/Marquesas\nPacific/Midway\nPacific/Nauru\nPacific/Niue\nPacific/Norfolk\nPacific/Noumea\nPacific/Pago_Pago\nPacific/Palau\nPacific/Pitcairn\nPacific/Ponape\nPacific/Port_Moresby\nPacific/Rarotonga\nPacific/Saipan\nPacific/Tahiti\nPacific/Tarawa\nPacific/Tongatapu\nPacific/Truk\nPacific/Wake\nPacific/Wallis\nYour pack\nUse the default\nQuiet hours\n\nMessages that can wait are held until they end. Write them like 22:00–07:00. Nova’s default.\n\nDefault\nYour name\n\nYour name, as Nova knows it. Set by your pack.\n\nYour pack\nUse the default\nWhat Nova calls you\n\nOnly if it isn’t your name. Set by your pack.\n\nYour pack\nUse the default\nNova’s name\n\nOnly the name changes; the charter stays. Set by your pack.\n\nYour pack\nUse the default\nDirectness\n\nTelling you when Nova thinks something’s wrong isn’t adjustable; this is how it says it. Set by your pack.\n\nGently\nPlainly\nBluntly\nYour pack\nUse the default\nWarmth\n\nHow Nova sounds when it talks to you. Nova’s default.\n\nEven and professional\nWarm\nDefault\nSpeaking up\n\nWhether Nova brings things up on its own, within your policy. Nova’s default.\n\nOnly when asked\nOffers, and asks before acting\nBrings up what matters\nDefault\nPrivacy\n\nThe default for every task. A task can be stricter, never looser. Set by your pack.\n\nLocal-only\nLocal first\nCloud allowed\nYour pack\nUse the default\nReview changes\nAnswer a few questions\n\nCONFIGURATION\nBRING IN A CONFIGURATION\n\nA Nova configuration file or a personal pack. Nova checks it and shows every change before applying any; nothing is overwritten that you don’t see first.\n\nChoose a file\nExport your configuration",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  },
+  {
+    "route": "/settings#danger",
+    "posture": "cover",
+    "width": 360,
+    "height": 360,
+    "elapsed_ms": 1027,
+    "url": "http://127.0.0.1:4418/settings#danger",
+    "text": "Skip to content\nSettings\nSettings\nStart over\n\nExport everything, or erase Nova here\n\nDANGER ZONE\n\nErasing Nova returns it to how it was the first time, on this machine: no memories, conversations, settings, saved passwords, paired devices, checkpoints or backups. Nova offers to export everything first.\n\nErase Nova and start over…",
+    "errors": [],
+    "geometry": {
+      "viewport": {
+        "w": 360,
+        "h": 360
+      },
+      "doc": {
+        "w": 360,
+        "h": 360
+      },
+      "overflows": [
+        {
+          "tag": "BUTTON",
+          "id": "rail-search",
+          "cl": "icon-btn rail-search",
+          "text": "",
+          "rect": {
+            "x": -248,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -204,
+            "bottom": 56,
+            "left": -248
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-new",
+          "cl": "icon-btn rail-new",
+          "text": "",
+          "rect": {
+            "x": -196,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -152,
+            "bottom": 56,
+            "left": -196
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "id": "nav-close",
+          "cl": "icon-btn",
+          "text": "",
+          "rect": {
+            "x": -53,
+            "y": 12,
+            "width": 44,
+            "height": 44,
+            "top": 12,
+            "right": -9,
+            "bottom": 56,
+            "left": -53
+          }
+        }
+      ],
+      "smallTargets": []
+    }
+  }
+]

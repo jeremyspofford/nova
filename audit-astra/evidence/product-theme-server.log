@@ -1,0 +1,3 @@
+Nova is ready at http://localhost:35883  (91 ms)
+Home: /tmp/nova-astra-product-workflows-NzankK/nova-home
+Warning: whoever reaches port 35883 from this computer controls Nova completely. Don’t point a port forward, tunnel or proxy at it; other devices pair at the mesh address (NOVA_MESH_URL) instead.

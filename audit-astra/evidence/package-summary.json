@@ -1,0 +1,12 @@
+{
+  "rows": 200,
+  "results": {
+    "tested-pass": 145,
+    "tested-fail": 17,
+    "blocked": 15,
+    "untested": 23
+  },
+  "findings": 31,
+  "appearance_visits": 90,
+  "note": "Rows overlap workflows/observations and are not a coverage percentage. Source inspection, synthetic fixture, remote CI and own runtime are explicitly distinguished."
+}

@@ -1,0 +1,228 @@
+{
+  "note": "Final reporter fail40 also includes failed parent tests of nested cases; the detailed failure section has the following leaf failures. Environment-sensitive classifications are not deployed-defect claims.",
+  "reported_failures": 40,
+  "detailed_failure_records": [
+    {
+      "location": "tests/acceptance/m10a-computer.test.ts:16:1",
+      "name": "\u2716 M10a gate: a fresh user\u2019s workspace \u2014 a command as a ledger task with evidence, checkpoint and reset, no egress when local-only, durable across a restart (9538.076964ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Nova Computer couldn't do it: Docker couldn\u2019t pause the workspace for its checkpoint, so none was taken.\n  \n  'failed' !== 'done'\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/acceptance/m10a-computer.test.ts:56:12)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1389:7)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/acceptance/m10a-isolation.test.ts:90:1",
+      "name": "\u2716 M10a gate: no escape from a workspace to the console, the mesh, Nova\u2019s home, the Docker socket, the host network or an undeclared host (9704.071903ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/acceptance/m10a-isolation.test.ts:116:15)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/acceptance/m4b-device-agent.test.ts:23:1",
+      "name": "\u2716 M4b: join by the one-line command, Online, offline queue across a hub outage (exactly once), revocation (12939.656093ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:\n  \n    assert.ok(!alive(first))\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/acceptance/m4b-device-agent.test.ts:103:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {",
+      "classification": "orphan-process liveness qualification"
+    },
+    {
+      "location": "tests/core/computer-docker.test.ts:28:1",
+      "name": "\u2716 a workspace: created, a command runs as Nova\u2019s own user, a checkpoint and a reset return it byte for byte (8704.953638ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-docker.test.ts:39:15)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-docker.test.ts:104:1",
+      "name": "\u2716 a machine that went missing is made again from its image on the next command (28410.413278ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-docker.test.ts:112:15)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-egress-bounds.test.ts:113:13",
+      "name": "\u2716 streaming 128 MiB after a refusal (546.749917ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async inside (file:///workspace/nova-audit-astra/tests/core/computer-egress-bounds.test.ts:111:61)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-egress-bounds.test.ts:115:17)\n      at async Test.run (node:internal/test_runner/test:1389:7)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-egress-bounds.test.ts:121:13",
+      "name": "\u2716 uploading 128 MiB to a declared host that never reads (652.026385ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async inside (file:///workspace/nova-audit-astra/tests/core/computer-egress-bounds.test.ts:111:61)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-egress-bounds.test.ts:123:17)\n      at async Test.run (node:internal/test_runner/test:1389:7)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-egress-bounds.test.ts:129:13",
+      "name": "\u2716 a declared host sending 256 MiB to a command that never reads (68.133548ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: the relay is running:\n  Error response from daemon: runc did not terminate successfully: exit status 1: unable to get all container pids: lstat /sys/fs/cgroup/2d61fdf9bb16ce2152c0081a2dbd5b573076be2459bddc851bf27ff78832f83c: no such file or directory\n  \n      at relayRss (file:///workspace/nova-audit-astra/tests/core/computer-egress-bounds.test.ts:92:10)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-egress-bounds.test.ts:131:20)\n      at async Test.run (node:internal/test_runner/test:1389:7)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-egress-bounds.test.ts:150:1",
+      "name": "\u2716 a tunnel carries TLS for the name it was opened to: another SNI, or no TLS at all, is refused (16971.127505ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async inside (file:///workspace/nova-audit-astra/tests/core/computer-egress-bounds.test.ts:164:61)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-egress-bounds.test.ts:165:16)\n      at async Test.run (node:internal/test_runner/test:1389:7)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-egress-bounds.test.ts:222:1",
+      "name": "\u2716 what a command asks the proxy for stays out of summaries: declared names and fixed reasons only, attempts capped (14124.555223ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Nova Computer couldn't do it: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n  \n  'failed' !== 'done'\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-egress-bounds.test.ts:252:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-egress.test.ts:71:1",
+      "name": "\u2716 from inside a workspace: a declared host is reached through Nova; anything else is refused, and nothing gets out around it (11411.868779ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async inside (file:///workspace/nova-audit-astra/tests/core/computer-egress.test.ts:93:50)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-egress.test.ts:95:16)\n      at async Test.run (node:internal/test_runner/test:1389:7)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-folder.test.ts:55:1",
+      "name": "\u2716 a folder replaced by a link (here by an outer workspace) is never reset, copied or mounted through (27334.175426ms)",
+      "initial_error": "  Error [CoreError]: Docker couldn\u2019t pause the workspace for its checkpoint, so none was taken.\n      at DockerComputer.checkpoint (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:322:46)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-folder.test.ts:73:16)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    code: 'conflict',",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-folder.test.ts:167:1",
+      "name": "\u2716 the project\u2019s .git is read-only inside unless the person chose otherwise; a .git that is a link is never mounted (16975.606499ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-folder.test.ts:192:17)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-folder.test.ts:226:1",
+      "name": "\u2716 a command that changes what tools on this computer run by themselves (.git, .envrc, editor settings) is reported (15434.79157ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Nova Computer couldn't do it: Docker couldn\u2019t pause the workspace for its checkpoint, so none was taken.\n  \n  'failed' !== 'done'\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-folder.test.ts:236:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-folder.test.ts:264:1",
+      "name": "\u2716 a nested repository\u2019s .git, and a .git file, are read-only inside as the top one is (7510.985248ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-folder.test.ts:284:25)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-ledger.test.ts:30:1",
+      "name": "\u2716 the computer through the ledger: tiers, evidence, screening, undo, a read that writes, egress and local-only (26242.471925ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Nova Computer couldn't do it: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n  \n  'failed' !== 'done'\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-ledger.test.ts:77:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-limits.test.ts:63:13",
+      "name": "\u2716 checkpoint copies stay under the workspace\u2019s cap: the oldest automatic ones go first (1075.210608ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Nova Computer couldn't do it: Docker couldn\u2019t pause the workspace for its checkpoint, so none was taken.\n  \n  'failed' !== 'done'\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-limits.test.ts:66:16)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-limits.test.ts:63:5)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-limits.test.ts:73:13",
+      "name": "\u2716 a command that grows the folder past its cap is stopped, and fails saying so (947.846818ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /grew past the 2 MiB/. Input:\n  \n  \"Nova Computer couldn't do it: Docker couldn\u2019t pause the workspace for its checkpoint, so none was taken.\"\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-limits.test.ts:77:14)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-limits.test.ts:73:5)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-limits.test.ts:93:13",
+      "name": "\u2716 a command that fills the machine\u2019s own layer past its cap is stopped (851.043583ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /grew past the 16 MiB a workspace\u2019s machine may hold|No space left/. Input:\n  \n  \"Nova Computer couldn't do it: Docker couldn\u2019t pause the workspace for its checkpoint, so none was taken.\"\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-limits.test.ts:96:14)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-limits.test.ts:93:5)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-limits.test.ts:109:1",
+      "name": "\u2716 a command\u2019s raw output is never handed back unless the ingest gate passed it (16979.608018ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Nova Computer couldn't do it: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n  \n  'failed' !== 'done'\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-limits.test.ts:122:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-limits.test.ts:149:1",
+      "name": "\u2716 a tree too deep for the host to walk stops the command at the cap check; a reset removes it (8145.888888ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /It was stopped: Nova couldn\u2019t check the project folder/. Input:\n  \n  \"Nova Computer couldn't do it: Docker couldn\u2019t pause the workspace for its checkpoint, so none was taken.\"\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-limits.test.ts:162:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-processes.test.ts:23:1",
+      "name": "\u2716 when Nova can\u2019t list the machine\u2019s processes it restarts it, and runs nothing it can\u2019t check (6697.721491ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-processes.test.ts:34:19)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    code: 'conflict',",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-processes.test.ts:57:1",
+      "name": "\u2716 no process outlives its task: a read that leaves a delayed write behind changes nothing (17155.763775ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Nova Computer couldn't do it: Docker couldn\u2019t pause the workspace for its checkpoint, so none was taken.\n  \n  'failed' !== 'done'\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-processes.test.ts:69:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-processes.test.ts:118:13",
+      "name": "\u2716 a process already holding the relay\u2019s port is cleared before the relay starts; the command never talks to it (9298.860181ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: the fake proxy runs\n  \n  0 !== 3\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-processes.test.ts:123:14)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async Test.run (node:internal/test_runner/test:1389:7)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-processes.test.ts:131:13",
+      "name": "\u2716 a detached process trying egress after its task ended, even after a switch to local-only, is refused (2858.906647ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Nova Computer couldn't do it: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n  \n  'failed' !== 'done'\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-processes.test.ts:133:14)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-processes.test.ts:131:5)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-processes.test.ts:141:13",
+      "name": "\u2716 a switch to local-only while a command runs refuses its next connection (20262.203869ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: the first connection got through\n  \n  0 !== 3\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-processes.test.ts:144:14)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-processes.test.ts:141:5)",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-snapshot.test.ts:45:1",
+      "name": "\u2716 a link in the folder to a file outside it is kept as a link: the outside\u2019s bytes never enter a checkpoint or its digest (16432.64396ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-snapshot.test.ts:54:19)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-snapshot.test.ts:72:1",
+      "name": "\u2716 a process racing a checkpoint (swapping files for links to the outside) can\u2019t pull the outside into it (12570.418924ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-snapshot.test.ts:82:19)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-snapshot.test.ts:95:1",
+      "name": "\u2716 a FIFO or a socket in the folder never blocks or breaks a checkpoint, a digest or a reset (10353.810007ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-snapshot.test.ts:101:18)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    code: 'conflict',",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-snapshot.test.ts:122:1",
+      "name": "\u2716 a read is checked by content: same size and time, or a path that had already changed, is still seen (18451.519437ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Nova Computer couldn't do it: Docker couldn\u2019t pause the workspace for its checkpoint, so none was taken.\n  \n  'failed' !== 'done'\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-snapshot.test.ts:132:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-snapshot.test.ts:156:1",
+      "name": "\u2716 a checkpoint whose copy stops part way leaves nothing on disk (18650.246375ms)",
+      "initial_error": "  Error [CoreError]: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\n      at #settle (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:264:39)\n      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n      at async DockerComputer.exec (file:///workspace/nova-audit-astra/src/core/computer/docker.ts:272:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-snapshot.test.ts:163:19)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/computer-snapshot.test.ts:179:1",
+      "name": "\u2716 the paths a command changed never reach a summary; the API withholds them with the output (26563.337729ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /changed the workspace: the project folder and \\d+ paths in the machine\\./. Input:\n  \n  \"Nova Computer couldn't do it: Nova couldn\u2019t see what runs in the workspace (Docker didn\u2019t list its processes), even after restarting it, so it runs nothing in it.\"\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/computer-snapshot.test.ts:191:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "Docker capability blocked"
+    },
+    {
+      "location": "tests/core/provider-guard.test.ts:136:1",
+      "name": "\u2716 a background process a test run leaves behind is stopped when it exits (2226.946875ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: the background process was stopped\n  \n  true !== false\n  \n      at TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/core/provider-guard.test.ts:150:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "orphan-process liveness qualification"
+    },
+    {
+      "location": "tests/supervisor/services-cli.test.ts:105:1",
+      "name": "\u2716 a supervisor killed outright leaves its service running; the next one ends that process group before starting its own (34588.163731ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Timed out waiting for the leftover process group to be ended\n      at until (file:///workspace/nova-audit-astra/tests/supervisor/support.ts:96:10)\n      at async killedSupervisor (file:///workspace/nova-audit-astra/tests/supervisor/services-cli.test.ts:94:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/supervisor/services-cli.test.ts:106:3)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: false,",
+      "classification": "orphan-process liveness qualification"
+    },
+    {
+      "location": "tests/supervisor/services-cli.test.ts:109:1",
+      "name": "\u2716 S5: the leftover\u2019s leader died since, its child lives on in the group: the next supervisor still ends it (34345.934999ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Timed out waiting for the leader alone to die\n      at until (file:///workspace/nova-audit-astra/tests/supervisor/support.ts:96:10)\n      at async Object.then (file:///workspace/nova-audit-astra/tests/supervisor/services-cli.test.ts:113:7)\n      at async killedSupervisor (file:///workspace/nova-audit-astra/tests/supervisor/services-cli.test.ts:88:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/supervisor/services-cli.test.ts:110:3)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {",
+      "classification": "orphan-process liveness qualification"
+    },
+    {
+      "location": "tests/supervisor/services-cli.test.ts:119:1",
+      "name": "\u2716 S5: the leftover moved its working folder: the next supervisor still knows it, by pid and start time, and ends it (34737.07447ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Timed out waiting for the leftover process group to be ended\n      at until (file:///workspace/nova-audit-astra/tests/supervisor/support.ts:96:10)\n      at async killedSupervisor (file:///workspace/nova-audit-astra/tests/supervisor/services-cli.test.ts:94:5)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/supervisor/services-cli.test.ts:121:3)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: false,",
+      "classification": "orphan-process liveness qualification"
+    },
+    {
+      "location": "tests/supervisor/services.test.ts:20:1",
+      "name": "\u2716 deployed alongside with no traffic, promoted on the typed word, soaked, and the old slot removed after the soak (35383.360433ms)",
+      "initial_error": "  AssertionError [ERR_ASSERTION]: Timed out waiting for the old version\u2019s child process to stop\n      at until (file:///workspace/nova-audit-astra/tests/supervisor/support.ts:96:10)\n      at async TestContext.<anonymous> (file:///workspace/nova-audit-astra/tests/supervisor/services.test.ts:60:5)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',",
+      "classification": "orphan-process liveness qualification"
+    }
+  ]
+}
