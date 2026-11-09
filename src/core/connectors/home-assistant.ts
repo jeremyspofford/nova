@@ -20,6 +20,7 @@ import { reportOf, type Brief, type Evidence, type Tier } from '../envelope.ts';
 import type { Task } from '../ledger.ts';
 import type { Egress } from '../workers.ts';
 import type { Route } from '../api.ts';
+import type { ManifestApproval } from '../approvals/index.ts';
 import type { Connector, ConnectorContext, ConnectorStatus } from './index.ts';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { addressEgress, needsResolving, resolvesLocal } from './index.ts';
@@ -56,6 +57,13 @@ export const HA_MANIFEST = {
   health_check: { kind: 'http', path: '/api/' },
   nova_compat: '>=0.1.0 <1.0.0',
   on_remove: { delete: ['config.json'], keep: [], export: [] },
+  // Its one capability that acts, for the approvals registry, declared like any extension's: a
+  // device change (irreversible class); the owner's ruling makes Nova's own default 1 (act and
+  // report), and it is 1 or 2, since tier 3 is per domain (the targets the person marks).
+  approvals: [{
+    id: 'service', name: 'Change your home through Home Assistant', effect: 'irreversible', default: 1, tiers: [1, 2],
+    tools: ['home_call'], guard: 'change your home', targets: 'Home Assistant domains (lock, alarm_control_panel) marked to confirm every time',
+  }] as ManifestApproval[],
 };
 
 interface State { entity_id: string; state: string; attributes?: Record<string, unknown>; last_changed?: string; last_updated?: string }
@@ -260,7 +268,18 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
       state: s.state, last_changed: s.last_changed ?? null,
     });
     const tier3 = (): readonly string[] => cfg().tier3_domains ?? DEFAULT_TIER3;
-    const serviceTier = (): ServiceTier => (SERVICE_TIERS.includes(cfg().service_tier as ServiceTier) ? cfg().service_tier! : DEFAULT_SERVICE_TIER as ServiceTier);
+    // The service tier is an ordinary capability in the approvals registry (home-assistant.service,
+    // declared in the manifest below, stored in policy.approvals like every other). A tier kept in
+    // this connector's own settings file before that moves there once, as it was.
+    const serviceTier = (): ServiceTier => {
+      const c = cfg();
+      if (c.service_tier !== undefined && ctx.adoptTier) {
+        if (SERVICE_TIERS.includes(c.service_tier)) ctx.adoptTier('service', c.service_tier);
+        ctx.config.set({ service_tier: undefined });
+      }
+      if (ctx.tier) return (ctx.tier('service') >= 2 ? 2 : 1) as ServiceTier;
+      return SERVICE_TIERS.includes(c.service_tier as ServiceTier) ? c.service_tier! : DEFAULT_SERVICE_TIER as ServiceTier;
+    };
     const tierFor = (domain: string): Tier => (tier3().includes(domain) ? 3 : serviceTier());
     // From the domain and every entity the call names: homeassistant.turn_off on a lock is a lock.
     const tierOf = (domain: string, entities: string[]): Tier => (entities.some((e) => tierFor(e.split('.')[0]!) === 3) ? 3 : tierFor(domain));
@@ -288,7 +307,8 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
     const worker = {
       id: HA_ID,
       name: 'Home Assistant',
-      about: 'Changes things in your home through Home Assistant when you ask, and reports what changed. Domains you mark confirm every time.',
+      // Its words follow the service tier: at 2 it asks first.
+      get about() { return serviceTier() >= 2 ? 'Changes things in your home through Home Assistant when you ask, after your OK, and reports what changed. Domains you mark confirm every time.' : 'Changes things in your home through Home Assistant when you ask, and reports what changed. Domains you mark confirm every time.'; },
       get egress() { return egress(); },
       evidence: ['confirmation' as const],
       // A service call changes the home (and `toggle` a second time undoes the first): after a
@@ -352,7 +372,9 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
         handle: ({ params, body }) => callService(params.domain!, params.service!, body),
       },
       {
-        method: 'GET', path: '/settings', summary: 'Home Assistant: the tier a service call runs at (service_tier: 1, act and report, or 2, ask first), and which domains need an explicit confirmation every time (tier3_domains, tier 3).',
+        // The service tier here is the approvals registry's home-assistant.service, read through this
+        // older route; the domains are this connector's targets marked "confirm every time".
+        method: 'GET', path: '/settings', summary: 'Home Assistant: the tier a service call runs at (service_tier: 1, act and report, or 2, ask first; the same setting as PUT /approvals/home-assistant.service), and which domains need an explicit confirmation every time (tier3_domains, tier 3).',
         handle: () => ({ tier3_domains: tier3(), default: DEFAULT_TIER3, service_tier: serviceTier(), default_service_tier: DEFAULT_SERVICE_TIER }),
       },
       {
@@ -368,7 +390,12 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
           if (loosened.length && body.confirm !== true) throw new CoreError('validation', `Taking ${loosened.join(', ')} off the list means Nova no longer asks for a confirmation every time. Send confirm: true to do that.`);
           if (st !== undefined && (st as number) < serviceTier() && body.confirm !== true) throw new CoreError('validation', 'Lowering the service tier to 1 means Nova changes your home when you ask, without waiting for your OK, and tells you what it did. Send confirm: true to do that.');
           if (!cfg().url) throw new CoreError('conflict', 'Connect Home Assistant first.');
-          ctx.config.set({ ...(list !== undefined ? { tier3_domains: [...new Set(list as string[])] } : {}), ...(st !== undefined ? { service_tier: st } : {}) });
+          if (list !== undefined) ctx.config.set({ tier3_domains: [...new Set(list as string[])] });
+          // The service tier goes to the approvals registry; this route checked the confirmation above.
+          if (st !== undefined) {
+            if (ctx.setTier) ctx.setTier('service', st as Tier, { confirm: true, by: 'home-assistant settings' });
+            else ctx.config.set({ service_tier: st });
+          }
           return { tier3_domains: tier3(), default: DEFAULT_TIER3, service_tier: serviceTier(), default_service_tier: DEFAULT_SERVICE_TIER };
         },
       },
@@ -377,12 +404,17 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
     return {
       manifest: HA_MANIFEST,
       callService,
+      // Its targets marked "confirm every time" (approvals/index.ts): the domains.
+      marked: (capability: string) => (capability === 'service' ? tier3() : []),
       summary: 'Your smart home: Nova can see what your devices are doing, hear when they change, and change them when you ask.',
-      can: [
-        'See the state of your lights, sensors, locks and other devices.',
-        'Notice when something changes, for the rules you set up.',
-        'Turn things on and off when you ask, and tell you what changed.',
-      ],
+      // The third line follows the service tier: at 2 it asks first.
+      get can() {
+        return [
+          'See the state of your lights, sensors, locks and other devices.',
+          'Notice when something changes, for the rules you set up.',
+          serviceTier() >= 2 ? 'Turn things on and off when you ask, after your OK, and tell you what changed.' : 'Turn things on and off when you ask, and tell you what changed.',
+        ];
+      },
       never: ['Change anything unless you, or a rule you set up, asks.', 'Change anything from a chat that has read something from outside, without asking you first.'],
       setup: {
         kind: 'form',

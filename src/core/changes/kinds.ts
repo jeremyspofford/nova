@@ -498,6 +498,7 @@ const config: KindOps = {
     if (a.section === 'privacy' && a.key === 'default' && !PRIVACY_MODES.includes(a.value as PrivacyMode)) problems.push(`privacy.default is one of ${PRIVACY_MODES.join(', ')}.`);
     if (a.section === 'policy' && a.key === 'quiet_hours' && a.value !== null && !(isObj(a.value) && /^\d\d:\d\d$/.test(String(a.value.start)) && /^\d\d:\d\d$/.test(String(a.value.end)))) problems.push('policy.quiet_hours is {start: "HH:MM", end: "HH:MM"} or null.');
     if (a.section === 'policy' && a.key === 'task_tests') problems.push('policy.task_tests is set through Settings › Providers.');
+    if (a.section === 'policy' && a.key === 'approvals') problems.push('policy.approvals is set through /api/v1/approvals, where floors and confirmations are checked.');
     if (JSON.stringify(a.value).length > 16_000) problems.push('The value is too large for a setting.');
     out.push(problems.length ? bad('manifest', problems.join(' ')) : ok('manifest', 'The value fits the setting.'));
     out.push(ok('permissions', this.asks(a).join(' ')));

@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
 import { checkFolder } from '../computer/policy.ts';
+import { DEFAULT_TIERS, byTier, type CapabilityId, type Tiers } from '../approvals/index.ts';
 import { addSecretValue } from '../log.ts';
 import { tail } from '../providers/cli.ts';
 import { Redactor } from '../browser/logins.ts';
@@ -38,7 +39,8 @@ export const RUN_STATES = ['planning', 'review', 'applying', 'applied', 'nothing
 export type RunState = (typeof RUN_STATES)[number];
 const ENDED: readonly RunState[] = ['applied', 'nothing', 'over_budget', 'unpriced', 'too_large', 'failed', 'declined', 'cancelled'];
 const OPEN: readonly RunState[] = ['planning', 'review', 'applying'];
-const TIER: Record<Step, Tier> = { plan: 1, apply: 3 };
+// Each step's tier is a setting (approvals/index.ts: infra.plan, infra.apply; defaults 1 and 3).
+const CAP: Record<Step, CapabilityId> = { plan: 'infra.plan', apply: 'infra.apply' };
 const PLAN_FILE = 'plan.tfplan';
 const STATE_FILE = 'terraform.tfstate';
 const MAX_PLAN_TEXT = 1024 * 1024;
@@ -72,6 +74,8 @@ export interface InfraOptions {
   userHome?: string;
   timeoutS?: number;
   now?: () => Date;
+  // Approval tiers as settings (approvals/index.ts); the defaults when not given.
+  tiers?: Tiers;
 }
 
 const clip = (s: string, n = 80) => { const t = s.trim().replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
@@ -86,6 +90,11 @@ export class Infra {
   #now: () => Date;
   #key = Symbol('infra');
 
+  // A step's tier now: its setting, or its default. Anything that isn't a step is tier 3.
+  #tier(step: unknown): Tier {
+    return Object.hasOwn(CAP, String(step)) ? (this.#o.tiers ?? DEFAULT_TIERS).effective(CAP[step as Step]) : 3;
+  }
+
   constructor(o: InfraOptions) {
     this.#o = o;
     this.#now = o.now ?? (() => new Date());
@@ -97,7 +106,10 @@ export class Infra {
     this.worker = {
       id: INFRA_WORKER,
       name: 'Infrastructure',
-      about: 'Plans and applies infrastructure with OpenTofu in a project you registered: the plan runs by itself and changes nothing; Nova shows it to you in full, priced against the project’s budget, and applies it only when you confirm, after a checkpoint. A plan over budget, or one it can’t price, is never offered.',
+      // Its words follow the apply's tier (approvals/index.ts); at the default, as before.
+      get about() {
+        return `Plans and applies infrastructure with OpenTofu in a project you registered: the plan runs by itself and changes nothing; Nova shows it to you in full, priced against the project’s budget, and applies it ${byTier(self.#tier('apply'), { confirm: 'only when you confirm', ok: 'only after your OK', free: 'without asking, as you set' })}, after a checkpoint. A plan over budget, or one it can’t price, is never offered.`;
+      },
       egress: 'remote',
       evidence: ['confirmation'],
       timeoutMs: 60 * 60_000,
@@ -106,7 +118,7 @@ export class Infra {
         const p = self.#o.db.get<ProjectRow>('SELECT * FROM infra_project WHERE id = ?', String(brief.inputs?.project_id ?? ''));
         return p ? p.egress : 'remote';
       },
-      minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => TIER[input.inputs?.step as Step] ?? 3,
+      minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => self.#tier(input.inputs?.step),
       // An apply changes what exists outside, and may have by the time it stops: it never runs again
       // by itself once it passed its commit point.
       effects: (brief: Brief) => (brief.inputs?.step === 'apply' ? 'external' : 'none'),
@@ -258,7 +270,7 @@ export class Infra {
         ? `Run ${this.tool.name}’s plan for “${p.name}” (${p.folder})${r.destroy ? ', destroying everything in it' : ''}, and price it against the project’s budget. It changes no infrastructure, but OpenTofu runs the project’s providers and data sources, which reach their services and can run programs the configuration names (data "external").`
         : `Apply the reviewed plan for “${p.name}” (sha256 ${String(r.plan_sha).slice(0, 12)}…): ${signed(r.delta_cents ?? 0)} a month, ${v?.words ?? ''}. Nova takes a checkpoint first.`,
       origin, evidence_required: [{ kind: 'confirmation', note: step === 'plan' ? 'the saved plan, as Nova recorded it' : 'Nova reads the tool’s state back' }],
-      privacy_mode: r.privacy_mode, approval_tier: TIER[step],
+      privacy_mode: r.privacy_mode, approval_tier: this.#tier(step),
       inputs: { step, run_id: r.id, project_id: p.id, destroy: r.destroy === 1, ...(step === 'apply' ? { plan_sha: r.plan_sha } : {}) },
       idempotency_key: `infra:${r.id}:${step}`,
       ...(tasks[0] ? { parent_id: tasks[0].id } : {}),
@@ -320,12 +332,18 @@ export class Infra {
           this.#drop(r.id);
           return;
         }
-        this.#set(r.id, { state: 'review', reason: `Ready for you: the plan in full, ${signed(r.delta_cents ?? 0)} a month (${v.words}). Nova applies it only when you confirm.` });
+        // The words follow the apply's tier (approvals/index.ts); at the default, as before.
+        const a = this.#tier('apply');
+        this.#set(r.id, { state: 'review', reason: a >= 2
+          ? `Ready for you: the plan in full, ${signed(r.delta_cents ?? 0)} a month (${v.words}). Nova applies it ${a >= 3 ? 'only when you confirm' : 'only after your OK'}.`
+          : `The plan in full, ${signed(r.delta_cents ?? 0)} a month (${v.words}). Nova applies it without asking (you set applies to not ask), after a checkpoint, and tells you.` });
         this.#make(this.#run_(r.id), 'apply');
         // Past 80 %: the ask says so, and the person is told; once applied, the project's own level
         // raises the alert (#level).
-        if (v.level === 'warn') this.#tell(`infra:${r.id}:warn`, `Budget alert: applying the plan for “${p.name}” would take it to ${v.words}, past 80 %. Nova still asks before it applies.`);
-        this.#tell(`infra:${r.id}:review`, `The plan for “${p.name}” is ready for you to review: ${this.#counts(ch.priced)}, ${signed(r.delta_cents ?? 0)} a month (${v.words}). Nova applies it only when you confirm, in Tasks.`);
+        if (v.level === 'warn') this.#tell(`infra:${r.id}:warn`, `Budget alert: applying the plan for “${p.name}” would take it to ${v.words}, past 80 %. ${a >= 2 ? 'Nova still asks before it applies.' : 'It is inside the budget, so Nova applies it without asking (your setting).'}`);
+        this.#tell(`infra:${r.id}:review`, a >= 2
+          ? `The plan for “${p.name}” is ready for you to review: ${this.#counts(ch.priced)}, ${signed(r.delta_cents ?? 0)} a month (${v.words}). Nova applies it ${a >= 3 ? 'only when you confirm' : 'only after your OK'}, in Tasks.`
+          : `The plan for “${p.name}”: ${this.#counts(ch.priced)}, ${signed(r.delta_cents ?? 0)} a month (${v.words}). Nova is applying it now, without asking (you set applies to not ask), after a checkpoint, and tells you when it is applied.`);
       } else if (step === 'apply') {
         const total = this.#total(p.id);
         const v = verdict(total, 0, p.budget_cents);
@@ -586,7 +604,7 @@ export class Infra {
     const tasks = (parse<TaskRef[]>(r.tasks) ?? []).map((x) => {
       let t: Task | null = null;
       try { t = this.#o.ledger.get(x.id); } catch { /* gone */ }
-      return { ...x, state: t?.state ?? 'gone', reason: t?.reason ?? null, approval_tier: t?.approval_tier ?? TIER[x.step] };
+      return { ...x, state: t?.state ?? 'gone', reason: t?.reason ?? null, approval_tier: t?.approval_tier ?? this.#tier(x.step) };
     });
     return { id: r.id, title: r.title, project: { id: p.id, name: p.name }, destroy: r.destroy === 1, state: r.state, reason: r.reason, session_id: r.session_id, tasks, created_at: r.created_at, updated_at: r.updated_at };
   }

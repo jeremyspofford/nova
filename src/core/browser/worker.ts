@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { reportOf, type Brief, type Evidence, type Report, type Tier } from '../envelope.ts';
 import { Sse } from '../api.ts';
+import { DEFAULT_TIERS, type Tiers } from '../approvals/index.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
 import type { Db } from '../db.ts';
@@ -45,6 +46,8 @@ export const ACCOUNT_PRESENT_MS = 10 * 60_000;
 // `launch`: how a browser is started; a stand-in in tests.
 export interface BrowserOptions {
   home: string; log: Log; now?: () => Date; env?: NodeJS.ProcessEnv; hub?: () => Hub; launch?: SessionOptions['launch'];
+  // Approval tiers as settings (approvals/index.ts); the defaults when not given.
+  tiers?: Tiers;
 }
 
 // What the rest of the core gives Nova Browser once it exists (index.ts): the vault (sign-ins), the
@@ -123,7 +126,7 @@ export class Browser extends EventEmitter {
       // (owner ruling 2026-11-09). Checkout and account changes are tier 3, always. A plan that
       // can't run gets no tier here; it is refused when delegated.
       minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => {
-        try { return minTierOf(self.#plan(input.inputs)); } catch { return 0; }
+        try { return minTierOf(self.#plan(input.inputs), self.#o.tiers ?? DEFAULT_TIERS); } catch { return 0; }
       },
       health: () => {
         const f = self.chromium();
@@ -298,7 +301,7 @@ export class Browser extends EventEmitter {
     return this.#ledger.create({
       title, owner: BROWSER_WORKER,
       goal: `${title}, in Nova’s browser, with you there: Nova types saved sign-ins and the new password it makes itself, and you type any code. Nothing here holds a password.`,
-      origin: o.origin ?? { kind: 'user' }, evidence_required: [{ kind: 'screenshot' }, { kind: 'url' }], approval_tier: 3, inputs,
+      origin: o.origin ?? { kind: 'user' }, evidence_required: [{ kind: 'screenshot' }, { kind: 'url' }], approval_tier: (this.#o.tiers ?? DEFAULT_TIERS).effective('browser.account'), inputs,
     });
   }
 

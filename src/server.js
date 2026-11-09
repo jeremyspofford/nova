@@ -145,6 +145,9 @@ export function createNova(config = loadConfig(), deps = {}) {
   runner.ops = { infra: core.infra, network: core.network, browser: core.browser };
   // Home Assistant through chat (owner ruling 2026-11-09): home_call, offered while it is connected.
   runner.homeControl = core.homeControl;
+  // Approval tiers as settings (core approvals): the tools' words follow them, and the guard covers
+  // every registered capability's chat tool.
+  runner.approvals = core.approvals;
   // Grounding (core self.ts): the agent's briefing and status tools, with Era 2's schedules and approvals.
   runner.self = core.self.attach({
     schedules: () => { const last = runner.schedules.latest(); return runner.schedules.list().map((s) => { const next = runner.schedules.next(s); return { ...s, next: next ? formatWhen(next, config.timezone) : null, last: last.get(s.id) ?? null }; }); },

@@ -63,6 +63,7 @@ export function plan(profile: Profile, file: unknown): Plan {
       else if (section in HUB) changes.push({ ...base, refused: `The hub’s own settings are changed in ${HUB[section]}, where they are checked; this line was left out.` });
       else if (section === 'appearance' && name !== 'mode') changes.push({ ...base, refused: 'Designs are chosen in Settings › Appearance, so they are checked and can be rolled back; this line was left out.' });
       else if (section === 'policy' && name === 'task_tests') changes.push({ ...base, refused: 'Whether test commands ask first is set in Settings › Models and providers; this line was left out.' });
+      else if (section === 'policy' && name === 'approvals') changes.push({ ...base, refused: 'Approval tiers are set through /api/v1/approvals, where floors and confirmations are checked; this line was left out.' });
       else if (to === undefined || to === null) changes.push({ ...base, refused: 'An empty value changes nothing; to go back to a default, use “Use the default” in Settings.' });
       // A value the schema says doesn't fit: the whole thing applies nothing (design #303).
       else if (wrong) problems.push(wrong);

@@ -6,6 +6,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { HOST, normalizeHost } from '../browser/plan.ts';
 import type { Tier } from '../envelope.ts';
+import type { CapabilityId } from '../approvals/index.ts';
 import type { Egress } from '../workers.ts';
 import { sha256 } from '../workspace.ts';
 
@@ -236,5 +237,18 @@ export function tierFor(o: { op: Op; egress: EgressDecl; access?: 'read' | 'writ
     case 'checkpoint': return 1;
     case 'reset': return o.discard ? 2 : 1;
     case 'destroy': return 3;
+  }
+}
+
+// The setting (approvals/index.ts) each situation above is: tierFor stays the record of today's
+// tiers, and each capability's default is tierFor's answer for its situations (a test pins it).
+export function capabilityOf(o: { op: Op; egress: EgressDecl; access?: 'read' | 'write'; ownFolder?: boolean; gitWritable?: boolean; discard?: boolean }): CapabilityId {
+  const outside = o.egress.mode !== 'none';
+  switch (o.op) {
+    case 'exec': return outside ? 'computer.outside' : o.access === 'read' ? 'computer.read' : 'computer.write';
+    case 'create': return outside ? 'computer.outside' : o.ownFolder && !o.gitWritable ? 'computer.create' : 'computer.create_shared';
+    case 'checkpoint': return 'computer.checkpoint';
+    case 'reset': return o.discard ? 'computer.reset_discard' : 'computer.reset';
+    case 'destroy': return 'computer.destroy';
   }
 }

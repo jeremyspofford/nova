@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { CoreError } from '../errors.ts';
 import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
 import { unifiedDiff } from '../providers/taskspace.ts';
+import { DEFAULT_TIERS, byTier, type Tiers } from '../approvals/index.ts';
 import { ADAPTERS, KINDS, changedPaths, checkUrl, digest, httpConfig, inexactNumbers, leafPaths, mask, mergePatch, pretty, secretChanges, shape, showPath, urlEgress, validatePatch, valueAt, without, type Config, type Json, type NetworkTarget } from './targets.ts';
 import { jsonOrNull as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -79,6 +80,8 @@ export interface NetworkOptions {
   // The first wait before the switch tries a failed revert again (doubling, at most 10 minutes).
   retryMs?: number;
   now?: () => Date;
+  // Approval tiers as settings (approvals/index.ts); the defaults when not given.
+  tiers?: Tiers;
 }
 
 const clip = (s: string, n = 80) => { const t = s.trim().replace(/\s+/g, ' '); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
@@ -96,6 +99,18 @@ export class Network {
   // here was stopped mid-write (Nova restarted): the switch covers it.
   #applying = new Set<string>();
 
+  // A step's tier now (approvals/index.ts): prepare is network.prepare (1 by default); an apply, and
+  // a revert the person asks for (a network change of its own), are network.apply (3 by default).
+  // The switch's own revert stays 1, not a setting: it was confirmed with the change and puts back
+  // what was there. Anything else is tier 3.
+  #tier(step: unknown, by: unknown): Tier {
+    const tiers = this.#o.tiers ?? DEFAULT_TIERS;
+    if (step === 'prepare') return tiers.effective('network.prepare');
+    if (step === 'revert' && by === 'switch') return 1;
+    if (step === 'apply' || step === 'revert') return tiers.effective('network.apply');
+    return 3;
+  }
+
   constructor(o: NetworkOptions) {
     this.#o = o;
     this.#now = o.now ?? (() => new Date());
@@ -104,7 +119,10 @@ export class Network {
     this.worker = {
       id: NETWORK_WORKER,
       name: 'Network',
-      about: 'Changes a network target’s configuration you registered (a router, DNS, a firewall, a tailnet’s policy): it takes a snapshot and shows you the diff, applies only when you confirm, and puts the snapshot back by itself if Nova can’t hear from one of your devices within the window afterwards.',
+      // Its words follow the apply's tier (approvals/index.ts); at the default, as before.
+      get about() {
+        return `Changes a network target’s configuration you registered (a router, DNS, a firewall, a tailnet’s policy): it takes a snapshot and shows you the diff, applies ${byTier(self.#tier('apply', null), { confirm: 'only when you confirm', ok: 'only after your OK', free: 'without asking, as you set' })}, and puts the snapshot back by itself if Nova can’t hear from one of your devices within the window afterwards.`;
+      },
       egress: 'remote',
       evidence: ['confirmation'],
       timeoutMs: 10 * 60_000,
@@ -115,10 +133,7 @@ export class Network {
       },
       // A revert the switch makes was confirmed with the change (tier 3) and puts back what was
       // there: it runs by itself. One the person asks for is a network change of its own: tier 3.
-      minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => {
-        const step = input.inputs?.step as Step;
-        return step === 'prepare' ? 1 : step === 'revert' && input.inputs?.by === 'switch' ? 1 : 3;
-      },
+      minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => self.#tier(input.inputs?.step, input.inputs?.by),
       effects: (brief: Brief) => (brief.inputs?.step === 'prepare' ? 'none' : 'external'),
       commits: (brief: Brief) => brief.inputs?.step === 'apply' || brief.inputs?.step === 'revert',
       internal: { key: this.#key, why: 'Only Nova’s network changes make their own tasks. Ask for a change in chat, or start one with POST /network/changes.' },
@@ -252,7 +267,7 @@ export class Network {
     const task = this.#o.ledger.create({
       title: titles[step], owner: NETWORK_WORKER, goal: goals[step], origin,
       evidence_required: [{ kind: 'confirmation', note: step === 'prepare' ? 'the snapshot, as Nova recorded it' : `Nova reads ${t.name} back` }],
-      privacy_mode: c.privacy_mode, approval_tier: step === 'prepare' || (step === 'revert' && by === 'switch') ? 1 : 3,
+      privacy_mode: c.privacy_mode, approval_tier: this.#tier(step, by),
       inputs: { step, change_id: c.id, target_id: t.id, ...(step === 'revert' ? { by } : {}), ...(step !== 'prepare' ? { snapshot_sha: c.snapshot_sha, proposed_sha: c.proposed_sha } : {}) },
       idempotency_key: `network:${c.id}:${step}:${n + (step === 'revert' ? 1 : 0)}:${by}`,
       ...(tasks[0] ? { parent_id: tasks[0].id } : {}),
@@ -287,9 +302,14 @@ export class Network {
           this.#dropFiles(c.id);
           return;
         }
-        this.#set(c.id, { state: 'review', reason: `Ready for you: the diff against the snapshot. Nova applies it only when you confirm, and puts the snapshot back by itself if it can’t hear from your devices within ${minutes(c.window_s)}.` });
+        // The words follow the apply's tier (approvals/index.ts); at the default, as before.
+        const a = this.#tier('apply', null);
+        const how = byTier(a, { confirm: 'only when you confirm', ok: 'only after your OK', free: 'without asking (you set network changes to not ask)' });
+        this.#set(c.id, { state: 'review', reason: `${a >= 2 ? 'Ready for you: the diff' : 'The diff'} against the snapshot. Nova applies it ${how}, and puts the snapshot back by itself if it can’t hear from your devices within ${minutes(c.window_s)}.` });
         this.#make(this.#change(c.id), 'apply');
-        this.#tell(`network:${c.id}:review`, `The change “${c.title}” to ${target.name} is ready for you to review (${(parse<string[]>(c.changed_keys) ?? []).join(', ')}). Nova applies it only when you confirm, in Tasks.`);
+        this.#tell(`network:${c.id}:review`, a >= 2
+          ? `The change “${c.title}” to ${target.name} is ready for you to review (${(parse<string[]>(c.changed_keys) ?? []).join(', ')}). Nova applies it ${how}, in Tasks.`
+          : `The change “${c.title}” to ${target.name} (${(parse<string[]>(c.changed_keys) ?? []).join(', ')}): Nova is applying it now, ${how}, and tells you when it is applied.`);
       } else if (t.state === 'failed' || t.state === 'cancelled') {
         this.#set(c.id, { state: t.state === 'failed' ? 'failed' : 'cancelled', reason: t.reason });
         this.#dropFiles(c.id);

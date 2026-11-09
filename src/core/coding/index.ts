@@ -18,6 +18,7 @@ import { CoreError } from '../errors.ts';
 import { PRIVACY_MODES, reporter, type Brief, type Evidence, type PrivacyMode, type Report, type Tier, type Reporter } from '../envelope.ts';
 import { sha256, plural } from '../workspace.ts';
 import { checkFolder } from '../computer/policy.ts';
+import { DEFAULT_TIERS, byTier, type CapabilityId, type Tiers } from '../approvals/index.ts';
 import { runLines, tail } from '../providers/cli.ts';
 import { testEnv } from '../providers/checks.ts';
 import { TEST_FILE, editableList, outOfScope, runsTests, scopeOf } from '../providers/taskspace.ts';
@@ -40,7 +41,9 @@ export type Step = (typeof STEPS)[number];
 export const RUN_STATES = ['writing', 'checking', 'review', 'merging', 'moved', 'merged', 'declined', 'failed', 'conflict', 'cancelled', 'discarded'] as const;
 export type RunState = (typeof RUN_STATES)[number];
 const ENDED: readonly RunState[] = ['merged', 'declined', 'failed', 'conflict', 'cancelled', 'discarded'];
-const TIER: Record<Step, Tier> = { write: 1, update: 1, check: 2, merge: 3 };
+// Each step's tier is a setting (approvals/index.ts: coding.write, coding.update, coding.check,
+// coding.merge; defaults 1, 1, 2, 3).
+const CAP: Record<Step, CapabilityId> = { write: 'coding.write', update: 'coding.update', check: 'coding.check', merge: 'coding.merge' };
 // The reviewed diff as shown, at most (the record keeps the whole list of files).
 const MAX_DIFF = 512 * 1024;
 const MAX_GOAL = 4000;
@@ -79,6 +82,8 @@ export interface CodingOptions {
   testTimeoutS?: number;
   previewTimeoutS?: number;
   now?: () => Date;
+  // Approval tiers as settings (approvals/index.ts); the defaults when not given.
+  tiers?: Tiers;
 }
 
 const short = (oid: string | null | undefined) => (oid ? oid.slice(0, 7) : '');
@@ -96,6 +101,11 @@ export class Coding {
   // runs on one repository would otherwise race for its refs.
   #queues = new Map<string, Promise<unknown>>();
 
+  // A step's tier now: its setting, or its default. Anything that isn't a step is tier 3.
+  #tier(step: unknown): Tier {
+    return Object.hasOwn(CAP, String(step)) ? (this.#o.tiers ?? DEFAULT_TIERS).effective(CAP[step as Step]) : 3;
+  }
+
   constructor(o: CodingOptions) {
     this.#o = o;
     this.#now = o.now ?? (() => new Date());
@@ -105,7 +115,10 @@ export class Coding {
     this.worker = {
       id: CODING_WORKER,
       name: 'Coding',
-      about: 'Makes a code change you asked for in chat: a coding agent writes it in a git worktree of Nova’s own, Nova runs the tests and a preview (asking first), and merges into your branch only when you confirm. It never pushes.',
+      // Its words follow the check's and the merge's tiers (approvals/index.ts); at the defaults, as before.
+      get about() {
+        return `Makes a code change you asked for in chat: a coding agent writes it in a git worktree of Nova’s own, Nova runs the tests and a preview (${self.#tier('check') >= 2 ? 'asking first' : 'without asking, as you set'}), and merges into your branch ${byTier(self.#tier('merge'), { confirm: 'only when you confirm', ok: 'only after your OK', free: 'without asking, as you set, and tells you' })}. It never pushes.`;
+      },
       // The most it could reach: the coding agent's; each step's own reach is its brief's.
       egress: 'remote',
       evidence: ['confirmation', 'test_result'],
@@ -116,7 +129,7 @@ export class Coding {
         if (step !== 'write') return 'none';
         try { return self.#o.providers.where(String(brief.inputs?.agent ?? '')).coarse; } catch { return 'remote'; }
       },
-      minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => TIER[input.inputs?.step as Step] ?? 3,
+      minTier: (input: Pick<TaskInput, 'inputs' | 'evidence_required'>): Tier => self.#tier(input.inputs?.step),
       // Running the agent's code (check) and moving the person's branch (merge) may already have
       // happened by the time a step stops: neither runs again by itself. A merge marks its point.
       effects: (brief: Brief) => (brief.inputs?.step === 'check' || brief.inputs?.step === 'merge' ? 'external' : 'none'),
@@ -233,11 +246,11 @@ export class Coding {
       : [{ kind: 'confirmation' as const, note: step === 'merge' ? `Nova reads ${r.branch} back` : 'Nova’s commit on its own branch' }];
     const plan = [
       `Write the change in a git worktree of Nova’s own, on nova/${r.id} from ${r.branch} (${this.#agentName(r.agent)}).`,
-      `Run \`${r.test_command}\`${r.preview_command ? ` and start the preview \`${r.preview_command}\`` : ''} on it, after your OK.`,
-      `Merge into ${r.branch}, only when you confirm. Nothing is pushed.`,
+      `Run \`${r.test_command}\`${r.preview_command ? ` and start the preview \`${r.preview_command}\`` : ''} on it, ${this.#tier('check') >= 2 ? 'after your OK' : 'without asking (your setting)'}.`,
+      `Merge into ${r.branch}, ${byTier(this.#tier('merge'), { confirm: 'only when you confirm', ok: 'only after your OK', free: 'without asking (your setting), and tell you' })}. Nothing is pushed.`,
     ];
     const t = this.#o.ledger.create({
-      title: words[step], owner: CODING_WORKER, goal: goals[step], origin, evidence_required: evidence, privacy_mode: r.privacy_mode, approval_tier: TIER[step],
+      title: words[step], owner: CODING_WORKER, goal: goals[step], origin, evidence_required: evidence, privacy_mode: r.privacy_mode, approval_tier: this.#tier(step),
       inputs: { step, run_id: r.id, round, agent: r.agent, repo: r.repo, branch: r.branch, test_command: r.test_command, ...(r.preview_command ? { preview_command: r.preview_command } : {}),
         ...(r.editable ? { editable: JSON.parse(r.editable) } : {}), ...(step === 'write' ? { plan } : {}), ...(r.head && step !== 'write' && step !== 'update' ? { head: r.head, base: r.base } : {}) },
       idempotency_key: `coding:${r.id}:${step}:${round}`,
@@ -265,13 +278,20 @@ export class Coding {
     if (!r || r.round !== round) return;
     if (t.state === 'done') {
       if (step === 'write' || step === 'update') {
-        this.#set(r.id, { state: 'checking', reason: `Nova needs your OK to run \`${r.test_command}\`${r.preview_command ? ' and the preview' : ''} on the change.` });
+        this.#set(r.id, { state: 'checking', reason: this.#tier('check') >= 2
+          ? `Nova needs your OK to run \`${r.test_command}\`${r.preview_command ? ' and the preview' : ''} on the change.`
+          : `Nova runs \`${r.test_command}\`${r.preview_command ? ' and the preview' : ''} on the change without asking (you set checks to not ask), and tells you.` });
         this.#make(this.#row(r.id), 'check', round);
       } else if (step === 'check') {
         const p = parse<PreviewRecord>(this.#row(r.id).preview);
-        this.#set(r.id, { state: 'review', reason: `Ready for you: \`${r.test_command}\` passed${p ? `, and the preview is at ${p.url}` : ''}. Nova asks before it merges into ${r.branch}.` });
+        const m = this.#tier('merge');
+        this.#set(r.id, { state: 'review', reason: m >= 2
+          ? `Ready for you: \`${r.test_command}\` passed${p ? `, and the preview is at ${p.url}` : ''}. Nova asks before it merges into ${r.branch}.`
+          : `\`${r.test_command}\` passed${p ? `, and the preview is at ${p.url}` : ''}. Nova merges it into ${r.branch} without asking (you set merges to not ask), and tells you.` });
         this.#make(this.#row(r.id), 'merge', round);
-        this.#tell(r.id, `review:${round}`, `The change “${r.title}” is ready for you to review: \`${r.test_command}\` passed${p ? `, and its preview is at ${p.url} (on this computer)` : ''}. Nova merges it into ${r.branch} only when you confirm, in Tasks.`);
+        this.#tell(r.id, `review:${round}`, m >= 2
+          ? `The change “${r.title}” is ready for you to review: \`${r.test_command}\` passed${p ? `, and its preview is at ${p.url} (on this computer)` : ''}. Nova merges it into ${r.branch} ${m >= 3 ? 'only when you confirm' : 'only after your OK'}, in Tasks.`
+          : `The change “${r.title}” passed \`${r.test_command}\`${p ? `, and its preview is at ${p.url} (on this computer)` : ''}. Nova is merging it into ${r.branch} now, without asking (you set merges to not ask), and tells you when it is merged.`);
       } else if (step === 'merge') {
         this.#set(r.id, { state: 'merged', reason: `Merged: ${r.branch} is at ${short(r.head)}, the reviewed commit. Nothing was pushed.` });
         this.#cleanup(r.id, 'the change was merged');
@@ -520,7 +540,7 @@ export class Coding {
     const testEvidence: Evidence = { kind: 'test_result', name: `${TEST_PREFIX}${rec.id}`, passed: rec.passed, output: rec.output };
     if (!rec.passed) {
       const last = rec.output.trim().split('\n').slice(-3).join(' / ');
-      return report('failed', `Nova ran \`${r.test_command}\` itself on ${short(r.head)}: it failed (exit ${rec.exit ?? 'none'})${last ? `: ${clip(last, 300)}` : ''}. Nova won’t ask you to merge it.`, { evidence: [testEvidence] });
+      return report('failed', `Nova ran \`${r.test_command}\` itself on ${short(r.head)}: it failed (exit ${rec.exit ?? 'none'})${last ? `: ${clip(last, 300)}` : ''}. ${this.#tier('merge') >= 2 ? 'Nova won’t ask you to merge it.' : 'Nova won’t merge it.'}`, { evidence: [testEvidence] });
     }
     let summary = `Nova ran \`${r.test_command}\` itself on ${short(r.head)}: it passed (${(rec.ms / 1000).toFixed(1)} s).`;
     const evidence: Evidence[] = [testEvidence];
@@ -574,7 +594,7 @@ export class Coding {
     const checkedOut = await this.#checkedOut(r);
     if (checkedOut) {
       const dirty = (await this.#git.run(['-C', checkedOut, 'status', '--porcelain=v1', '--untracked-files=no', '-z'])).out;
-      if (dirty) return report('blocked', `${r.branch} is checked out in ${checkedOut}, which has changes that aren’t committed. Nova doesn’t merge over them. Commit or put them away, then retry; Nova asks you again.`);
+      if (dirty) return report('blocked', `${r.branch} is checked out in ${checkedOut}, which has changes that aren’t committed. Nova doesn’t merge over them. Commit or put them away, then retry${this.#tier('merge') >= 2 ? '; Nova asks you again' : ''}.`);
     }
     // The reviewed commit's objects into the person's repository: a pack made in Nova's repository and
     // unpacked in theirs. No fetch runs there, so nothing in their config (insteadOf, a protocol, a
@@ -618,7 +638,7 @@ export class Coding {
   // The branch moved under the merge: nothing unreviewed is merged, and a new round starts (#advance).
   #moved(r: RunRow, now: string, base: string, report: Reporter): Report {
     this.#set(r.id, { state: 'moved', reason: `${r.branch} moved since the review.` });
-    return report('failed', `${r.branch} moved since you reviewed the change (it is at ${short(now) || 'nothing'} now; the review was against ${short(base)}). Nova merged nothing, and brings the change up to date to ask you again.`);
+    return report('failed', `${r.branch} moved since you reviewed the change (it is at ${short(now) || 'nothing'} now; the review was against ${short(base)}). Nova merged nothing, and brings the change up to date ${Math.max(this.#tier('check'), this.#tier('merge')) >= 2 ? 'to ask you again' : 'to check and merge it again, without asking (your setting)'}.`);
   }
 
   // After the ref moved: the checkout that has this branch (`known`, or found now) is brought from the
@@ -784,7 +804,7 @@ export class Coding {
     const tasks = (parse<TaskRef[]>(r.tasks) ?? []).map((x) => {
       let t: Task | null = null;
       try { t = this.#o.ledger.get(x.id); } catch { /* gone */ }
-      return { ...x, state: t?.state ?? 'gone', reason: t?.reason ?? null, approval_tier: t?.approval_tier ?? TIER[x.step], approved_at: t?.approved_at ?? null };
+      return { ...x, state: t?.state ?? 'gone', reason: t?.reason ?? null, approval_tier: t?.approval_tier ?? this.#tier(x.step), approved_at: t?.approved_at ?? null };
     });
     const open = [...tasks].reverse().find((t) => !['done', 'failed', 'cancelled', 'gone'].includes(t.state)) ?? null;
     return {

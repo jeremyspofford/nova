@@ -21,8 +21,9 @@ import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Checker, Verifier } from '../verify.ts';
 import { FOLDER_COPY, checkFolderId, copyTree, findNamed, folderIdentity, removeTree, treeDigest, treeSize, type ExecResult, type FolderId, type Machine } from './computer.ts';
 import { DockerComputer } from './docker.ts';
+import { DEFAULT_TIERS, type Tiers } from '../approvals/index.ts';
 import { CODE_WORDS, RELAY_ARGV, RELAY_USER, Tunnel, proxyConnection, type Attempt, type Code } from './egress.ts';
-import { DEFAULT_TIMEOUT_S, DISK, HOST_RUN, IMAGE, IMAGE_ABOUT, MAX_TIMEOUT_S, OPS, checkFolder, declaredHosts, egressOf, sizeWords, tierFor, validateArgv, validateEgress, type DiskLimits, type EgressDecl, type Op } from './policy.ts';
+import { DEFAULT_TIMEOUT_S, DISK, HOST_RUN, IMAGE, IMAGE_ABOUT, MAX_TIMEOUT_S, OPS, capabilityOf, checkFolder, declaredHosts, egressOf, sizeWords, validateArgv, validateEgress, type DiskLimits, type EgressDecl, type Op } from './policy.ts';
 
 export const COMPUTER_WORKER = 'computer';
 export const CONFIRMATION_SYSTEM = 'nova-computer';
@@ -54,6 +55,8 @@ export interface ComputerOptions {
   // Disk caps (policy.ts DISK unless said), and labels for the containers (tests mark theirs).
   limits?: Partial<DiskLimits>;
   labels?: Record<string, string>;
+  // Approval tiers as settings (approvals/index.ts); the defaults when not given.
+  tiers?: Tiers;
 }
 
 export interface Inputs {
@@ -302,7 +305,8 @@ export class NovaComputer {
   }
 
   #tier(i: Inputs): Tier {
-    return tierFor({ op: i.op, egress: this.#declOf(i), ...(i.access ? { access: i.access } : {}), ownFolder: i.folder === undefined, gitWritable: !!i.git_writable, discard: !!i.discard });
+    // The situation's setting (approvals/index.ts); its default is tierFor's answer (policy.ts).
+    return (this.#o.tiers ?? DEFAULT_TIERS).effective(capabilityOf({ op: i.op, egress: this.#declOf(i), ...(i.access ? { access: i.access } : {}), ownFolder: i.folder === undefined, gitWritable: !!i.git_writable, discard: !!i.discard }));
   }
 
   // Undo a command: back to the checkpoint taken just before it (a reset, so it can itself be undone).

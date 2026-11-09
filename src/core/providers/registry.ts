@@ -32,6 +32,7 @@ import type { Verifier } from '../verify.ts';
 import type { FireInput, TriggerRecord } from '../triggers.ts';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { Route } from '../api.ts';
+import { DEFAULT_TIERS, type CapabilityId, type Tiers } from '../approvals/index.ts';
 
 export type ProviderManifest = Manifest & { adapter: AdapterBlock };
 
@@ -142,6 +143,8 @@ export interface ProvidersOptions {
   // Why the cloud budget keeps this brief from going to a provider off the devices now, or null.
   budget?: ((brief: Brief) => string | null) | undefined;
   now?: () => Date;
+  // Approval tiers as settings (approvals/index.ts); the defaults when not given.
+  tiers?: Tiers | undefined;
 }
 
 export class Providers extends EventEmitter {
@@ -154,6 +157,10 @@ export class Providers extends EventEmitter {
   #probes = new Map<string, { key: string; problem: string | null; at: string }>();
   #later = new Map<string, ReturnType<typeof setTimeout>>();
   #now: () => Date;
+
+  #tier(id: CapabilityId): Tier {
+    return (this.#o.tiers ?? DEFAULT_TIERS).effective(id);
+  }
 
   constructor(o: ProvidersOptions) {
     super();
@@ -356,11 +363,13 @@ export class Providers extends EventEmitter {
     // What it was OK'd to run, and where it sends, don't change under that OK unasked; nor do its
     // permissions loosen without an explicit confirmation (tier 3). Checked before anything is
     // saved or contacted, so a new address never hears from Nova, or gets its key, first.
+    // Loosening is a setting (approvals/index.ts: providers.loosen, 3 by default; at 1 it doesn't
+    // ask). What it runs or where it sends is not part of it: that always needs the confirmation.
     if (o.confirm !== true) {
       const now = this.config(id);
       const moved = WHERE_KEYS.filter((k) => patch[k] !== undefined && str(patch[k]) !== str(now[k]));
       if (x.state === 'enabled' && moved.length) throw new CoreError('validation', `${x.manifest.name} is on, and changing ${moved.join(' and ')} changes what it runs or where it sends your data${now.api_key ? ', and its key goes along' : ''}. Send confirm: true to do that.`);
-      const looser = looserOf(patch, now);
+      const looser = this.#tier('providers.loosen') >= 2 ? looserOf(patch, now) : null;
       if (looser) throw new CoreError('validation', `${looser} gives ${x.manifest.name} more room than it has now. Send confirm: true to do that.`);
     }
     if (x.manifest.adapter.implementation === 'custom-cli') throw new CoreError('validation', 'The model command is set in nova.config.json (agent_cmd and agent_egress), where Era 2 kept it.');
@@ -395,12 +404,15 @@ export class Providers extends EventEmitter {
   }
 
   // Turning a provider on is tier 2: the extension host asks for an OK on its permissions. One that
-  // isn't installed or configured can't be turned on.
-  enable(id: string, o: { approved?: boolean } = {}) {
+  // isn't installed or configured can't be turned on. The tier is a setting (approvals/index.ts:
+  // providers.enable): at 1 it doesn't ask; at 3 it needs {confirm: true}.
+  enable(id: string, o: { approved?: boolean; confirm?: boolean } = {}) {
     const x = this.#entry(id);
     const h = this.health(id);
     if (h.state === 'not_installed' || h.state === 'not_configured') throw new CoreError('conflict', `Nova can’t turn on ${x.manifest.name} yet. ${h.words}`);
-    this.#o.extensions.enable(id, { approved: o.approved === true });
+    const tier = this.#tier('providers.enable');
+    if (tier >= 3 && o.confirm !== true) throw new CoreError('validation', `Turning on ${x.manifest.name} is set to confirm every time: send confirm: true to do that.`);
+    this.#o.extensions.enable(id, { approved: tier <= 1 || o.approved === true || (tier >= 3 && o.confirm === true) });
     if (this.#impl(x).probe) this.#checkLater(id);
     return this.view(id);
   }
@@ -462,7 +474,7 @@ export class Providers extends EventEmitter {
   // Letting Nova run a brief's test command without asking loosens a permission: tier 3.
   setTestPolicy(value: unknown, confirm: boolean) {
     if (value !== 'ask' && value !== 'allow') throw new CoreError('validation', 'task_tests is ask or allow.');
-    if (value === 'allow' && !confirm) throw new CoreError('validation', 'Letting Nova run test commands without asking needs an explicit confirmation: send confirm: true.');
+    if (value === 'allow' && !confirm && this.#tier('providers.loosen') >= 2) throw new CoreError('validation', 'Letting Nova run test commands without asking needs an explicit confirmation: send confirm: true.');
     this.#o.profile.set('policy', 'task_tests', value, 'settings');
     return this.choices();
   }
@@ -1022,7 +1034,7 @@ export class Providers extends EventEmitter {
       { method: 'GET', path: '/providers', summary: 'Every provider: class, where its data goes, health in plain words, settings; with the chat model and each class’s default, current and recommended.', handle: () => ({ providers: this.list(), ...this.choices() }) },
       { method: 'GET', path: '/providers/{id}', summary: 'One provider.', handle: ({ params }) => this.view(id(params)) },
       { method: 'PUT', path: '/providers/{id}/config', summary: 'Change a provider’s settings. Secrets are names only (secret://NAME). An n8n provider’s callback token is returned here once. Changing what an enabled provider runs or where it sends (command, base_url, webhook_url, callback_url), or loosening its permissions (tier 3), needs {confirm: true}.', body: '{config, confirm?}', handle: ({ params, body }) => this.configure(id(params), body.config, { confirm: body.confirm === true }) },
-      { method: 'POST', path: '/providers/{id}/enable', summary: 'Turn a provider on (tier 2: needs {approved: true} for its permissions). It must be installed and configured.', body: '{approved}', handle: ({ params, body }) => this.enable(id(params), { approved: body.approved === true }) },
+      { method: 'POST', path: '/providers/{id}/enable', summary: 'Turn a provider on (tier 2 by default: needs {approved: true} for its permissions; its tier is a setting, PUT /approvals/providers.enable, and at 3 it needs {confirm: true}). It must be installed and configured.', body: '{approved, confirm?}', handle: ({ params, body }) => this.enable(id(params), { approved: body.approved === true, confirm: body.confirm === true }) },
       { method: 'POST', path: '/providers/{id}/disable', summary: 'Turn a provider off. Its tasks wait until it is on again.', handle: ({ params }) => this.disable(id(params)) },
       { method: 'POST', path: '/providers/{id}/check', summary: 'Check whether an HTTP provider’s address answers, now.', handle: ({ params }) => this.check(id(params)) },
       { method: 'POST', path: '/providers/{id}/callback-token', summary: 'A new callback token for an n8n provider, shown this once; the old one stops working.', handle: ({ params }) => this.newCallbackToken(id(params)) },
