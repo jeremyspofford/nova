@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Page } from 'playwright-core';
 import { stop, until } from '../acceptance/support.ts';
-import { ROOT, blank, browser, device, finishSetup, ready, still } from './support.ts';
+import { ROOT, addStyle, blank, browser, device, finishSetup, ready, still } from './support.ts';
 
 const MATRIX = {
   'desktop-1920': { width: 1920, height: 1080 }, 'desktop-1440': { width: 1440, height: 900 }, 'desktop-1280': { width: 1280, height: 800 },
@@ -37,7 +37,7 @@ test('Stage-2 composition over the real shell: every core surface across the res
     const visit = async (p: Page, path: string, composed: boolean) => {
       await p.goto(m.base + path);
       await ready(p);
-      if (composed) await p.addStyleTag({ content: COMPOSITION });
+      if (composed) await addStyle(p, COMPOSITION);
       await still(p);
     };
     for (const [size, dimensions] of Object.entries(MATRIX)) {

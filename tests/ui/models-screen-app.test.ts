@@ -184,7 +184,7 @@ async function capture(page: Page, path: string) {
 
 async function axe(page: Page, label: string) {
   await still(page);
-  if (!await page.evaluate(() => 'axe' in window)) await page.addScriptTag({ content: readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8') });
+  if (!await page.evaluate(() => 'axe' in window)) await page.evaluate(readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8'));
   const r = await page.evaluate(async () => (window as any).axe.run(document.querySelector('#settings-devices')));
   assert.deepEqual(r.violations.map((v: { id: string; nodes: { target: string[] }[] }) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`), [], `${label}: axe`);
 }

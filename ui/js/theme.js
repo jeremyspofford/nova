@@ -21,7 +21,20 @@ export async function swap({ force = false } = {}) {
   if (previewing && !force) return;
   const res = await fetch(`/design-system.css${query()}`, { cache: 'no-store' });
   if (!res.ok) return;
-  document.getElementById('ds').textContent = await res.text();
+  installCss(await res.text());
+}
+
+// Puts a design system's CSS in place of <style id="ds">. The page's Content-Security-Policy
+// applies only the <style> elements the server shipped with this response's nonce (core csp.ts),
+// and WebKit checks a changed element again without it, so the CSS goes into a new element that
+// carries the same nonce, in the old one's place in the cascade.
+export function installCss(text) {
+  const old = document.getElementById('ds');
+  const style = document.createElement('style');
+  style.nonce = old.nonce;
+  style.textContent = text;
+  old.replaceWith(style);
+  style.id = 'ds';
   document.getElementById('ds-boot')?.remove();
 }
 
@@ -92,8 +105,7 @@ export async function preview(id, mode) {
   const res = await fetch(previewCss(id, mode), { cache: 'no-store' });
   if (!res.ok) throw new Error('Nova couldn’t show that design here.');
   previewing = { id, mode };
-  document.getElementById('ds').textContent = await res.text();
-  document.getElementById('ds-boot')?.remove();
+  installCss(await res.text());
 }
 
 // Back to what is saved for this device.

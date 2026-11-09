@@ -81,7 +81,7 @@ export async function sweep(b: Browser, base: string, { postures = Object.keys(P
         await page.goto(base + view, { waitUntil: 'load' });
         await page.waitForSelector('html[data-ready]', { timeout: 20000 });
         await page.waitForTimeout(900);
-        await page.addScriptTag({ content: AXE });
+        await page.evaluate(AXE);
         r.violations = await page.evaluate(async () => {
           const res = await (window as any).axe.run();
           return res.violations.map((v: any) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, targets: v.nodes.map((n: any) => String(n.target?.[0] ?? '')) }));

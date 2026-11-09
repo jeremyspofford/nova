@@ -178,7 +178,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         assert.equal(await p.locator('#banner').isVisible(), false, 'live Core responses override the browser network hint');
         assert.notEqual(await p.locator('.status-icon[data-presence]').first().getAttribute('data-state'), 'offline', 'live Core is not shown as an offline orb');
         await healthFromHome(p, touch);
-        await p.addScriptTag({ content: axe });
+        await p.evaluate(axe);
         await healthLandmarks(p, `${engine}/${posture}/Home-entry`);
         // The build stamp: Health says which commit is running, and when it was built or started.
         const build = await m.get('/api/v1/version');
@@ -536,7 +536,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         assert.deepEqual(files(m.home), beforeDownload, 'no retained diagnostics bundle');
         assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
         assert.equal(documentRequests(p).filter(url => new URL(url).pathname !== '/api/v1/diagnostics').length, 2, 'only initial Home and the deliberate save-proof reload; native attachment is not an SPA route');
-        await p.addScriptTag({ content: axe });
+        await p.evaluate(axe);
         const accessibility = await p.evaluate(async () => (await (window as any).axe.run({ include: ['.work-costs', '.diagnostics-download'] }, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] } })).violations.map((v: any) => ({ id: v.id, impact: v.impact, targets: v.nodes.map((n: any) => n.target) })));
         assert.deepEqual(accessibility, [], 'bounded WCAG AA check of the two new surfaces');
         await healthLandmarks(p, `${engine}/${posture}/after-save-reload-SSE`);

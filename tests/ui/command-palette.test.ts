@@ -96,7 +96,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     assert.ok(wide.page <= 0 && wide.left >= 0 && wide.right >= 0 && wide.list <= 0, `no horizontal overflow at 1440: ${JSON.stringify(wide)}`);
 
     // axe, on the open palette.
-    await page.addScriptTag({ content: AXE });
+    await page.evaluate(AXE);
     const violations = await page.evaluate(async () => {
       const res = await (window as any).axe.run({ include: [['#palette']] });
       return res.violations.map((v: any) => `${v.id}: ${v.nodes.map((n: any) => String(n.target?.[0] ?? '')).join(', ')}`);

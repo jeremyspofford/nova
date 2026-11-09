@@ -21,7 +21,7 @@ import { createServer as createNet, type Server as NetServer, type Socket } from
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { alive, ensureMark, unsafeHome, supervisorResetPending, finishReset, homeEntries, sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState, writeJson } from '../core/index.ts';
+import { alive, ensureMark, unsafeHome, supervisorResetPending, finishReset, homeEntries, sameServiceExpected, validServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, ServiceManager, consoleDefinition, consoleStatus, copyHome, dropScratch, makeScratch, restoreBackup, cspHash, smoke, stagedPending, startSandbox, takeCheckpoint, type DeployStage, type ProbeLine, type ReleaseSlot, type ServiceDefinition, type SupervisorProblem, type SupervisorState, writeJson } from '../core/index.ts';
 import { runningPid } from '../home.js';
 import { startBroker, stopBroker, type Started } from '../broker/spawn.ts';
 import { ServerProcess } from './server.ts';
@@ -1003,7 +1003,7 @@ export class Supervisor {
         res.end(JSON.stringify({ ok: false, safe_mode: s, said: 'Nova is held in safe mode by its supervisor.' }));
         return;
       }
-      res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...SAFE_PAGE_HEADERS });
       res.end(safePage(s));
     });
     await new Promise<void>((resolve) => {
@@ -1021,10 +1021,18 @@ export class Supervisor {
 
 // The safe-mode page uses the design system's tokens like every page, with a plain fallback when
 // the stylesheet can't be had (the server that serves it is the one held).
+// The page loads nothing and runs no script: its one inline style is allowed by its hash (core csp.ts).
+const SAFE_STYLE = 'body{font:16px/1.5 system-ui,sans-serif;margin:0;padding:24px;max-width:40rem;background:var(--bg-base,Canvas);color:var(--text-primary,CanvasText)}pre{white-space:pre-wrap;overflow-wrap:anywhere}code{font-family:ui-monospace,monospace}';
+export const SAFE_PAGE_HEADERS = {
+  'content-security-policy': `default-src 'none'; style-src ${cspHash(SAFE_STYLE)}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+};
+
 function safePage(s: SupervisorState['safe_mode']): string {
   const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Nova is in safe mode</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;margin:0;padding:24px;max-width:40rem;background:var(--bg-base,Canvas);color:var(--text-primary,CanvasText)}pre{white-space:pre-wrap;overflow-wrap:anywhere}code{font-family:ui-monospace,monospace}</style></head>
+<style>${SAFE_STYLE}</style></head>
 <body><main><h1>Nova is in safe mode</h1><p>${esc(s?.reason ?? 'Nova is held by its supervisor.')}</p>
 <p>Nothing is lost: your data is as Nova left it. To go on, run one of these on this computer:</p>
 <ul>${s?.last_good ? `<li><code>node src/supervisor/main.ts rollback</code>: go back to ${esc(s.last_good)}, the last release that worked.</li>` : ''}<li><code>node src/supervisor/main.ts recover</code>: start it again once the cause is fixed.</li></ul>

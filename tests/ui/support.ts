@@ -105,6 +105,22 @@ export function shotsDir(): string | null {
   return abs;
 }
 
+// WebKit's words for a refused <style> element (Chromium's screenshots inject none).
+const HARNESS_STYLE = /^Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive/;
+// locator.screenshot() too, once for every locator (they share one prototype).
+let locatorsGuarded = false;
+function guardLocatorShots(page: Page) {
+  if (locatorsGuarded) return;
+  locatorsGuarded = true;
+  const proto = Object.getPrototypeOf(page.locator('html')) as { screenshot: (...a: unknown[]) => Promise<Buffer>; page: () => Page };
+  const original = proto.screenshot;
+  proto.screenshot = function (this: typeof proto, ...a: unknown[]) {
+    const during = (this.page() as unknown as { __novaShot?: <T>(p: Promise<T>) => Promise<T> }).__novaShot;
+    const shot = original.apply(this, a);
+    return during ? during(shot) : shot;
+  };
+}
+
 // A browser context is one device: it gets its own device id, as the PWA keeps it in localStorage.
 // `touch` makes it a phone you tap (touch events, no hover); `scheme` is the system's light or dark.
 export async function device(b: Browser, { width = 1280, height = 820, id = `ui-test-${Math.random().toString(36).slice(2, 10)}`, scheme = 'light' as 'light' | 'dark', touch = false, timezone = '', serviceWorkers = 'allow' as 'allow' | 'block', scale = 1 } = {}): Promise<{ ctx: BrowserContext; page: Page; id: string; errors: string[] }> {
@@ -113,8 +129,18 @@ export async function device(b: Browser, { width = 1280, height = 820, id = `ui-
   await ctx.addInitScript(authenticator, { jwk: PASSKEY.jwk, spki: PASSKEY.spki, base: PASSKEY.base });
   const page = await ctx.newPage();
   const errors: string[] = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  // Playwright's WebKit screenshots put a <style> of their own into the page (it hides the caret,
+  // even with caret: 'initial'), and Nova's Content-Security-Policy refuses it as it should. That
+  // refusal, and only while a screenshot is being taken, is the harness's, not the page's: the CSP
+  // gate (csp.test.ts) checks every page for violations with no screenshot in the way.
+  let shooting = 0;
+  const during = <T>(p: Promise<T>) => { shooting++; return p.finally(() => { shooting--; }); };
+  const screenshot = page.screenshot.bind(page);
+  page.screenshot = ((o?: Parameters<Page['screenshot']>[0]) => during(screenshot(o))) as Page['screenshot'];
+  (page as unknown as { __novaShot: typeof during }).__novaShot = during;
+  guardLocatorShots(page);
+  page.on('pageerror', (e) => { if (!(shooting && HARNESS_STYLE.test(e.message))) errors.push(e.message); });
+  page.on('console', (m) => { if (m.type() === 'error' && !(shooting && HARNESS_STYLE.test(m.text()))) errors.push(m.text()); });
   return { ctx, page, id, errors };
 }
 
@@ -157,6 +183,32 @@ export async function until<A>(page: Page, check: (arg: A) => unknown, arg?: A, 
 }
 export const shoot = async (page: Page, path: string) => { await still(page); await page.screenshot({ path }); };
 export const cssVar = (page: Page, name: string) => page.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim().toLowerCase(), name);
+
+// Content-Security-Policy violations (the policy: src/core/csp.ts) on a page, from each document's
+// first script on: every `securitypolicyviolation` event and every console line about the policy.
+// Read with the returned function before the page navigates away (the events live in the document).
+export async function watchCsp(page: Page): Promise<() => Promise<string[]>> {
+  const seen: string[] = [];
+  page.on('console', (m) => { if (/Content[- ]Security[- ]Policy/i.test(m.text())) seen.push(`console ${m.type()}: ${m.text()}`); });
+  await page.addInitScript(() => {
+    const w = window as unknown as { __csp: string[] };
+    w.__csp = [];
+    document.addEventListener('securitypolicyviolation', (e) => w.__csp.push(`${e.effectiveDirective} blocked ${e.blockedURI || '(inline)'} at ${e.sourceFile || e.documentURI}:${e.lineNumber} ${e.sample}`), true);
+  });
+  return async () => {
+    const events = await page.evaluate(() => (window as unknown as { __csp?: string[] }).__csp?.splice(0) ?? []).catch(() => []);
+    return [...events.map((e) => `event: ${e}`), ...seen.splice(0)];
+  };
+}
+
+// A test's own CSS on a Nova page: the Content-Security-Policy applies only <style> elements with
+// the page's nonce (playwright's addStyleTag has none, so it is refused), so it borrows #ds's.
+export const addStyle = (page: Page, css: string) => page.evaluate((text) => {
+  const s = document.createElement('style');
+  s.nonce = (document.getElementById('ds') as HTMLStyleElement | null)?.nonce ?? '';
+  s.textContent = text;
+  document.head.append(s);
+}, css);
 
 // Setup answered over the API, for tests about everything after it.
 export async function finishSetup(m: ReturnType<typeof blank>, { passkeys = true } = {}) {

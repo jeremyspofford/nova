@@ -109,7 +109,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               assert.equal(await root.locator('h2').isVisible(), true);
               if (out) await page.screenshot({ path: join(out, `${posture}-${state}-${kind}-fields.png`), fullPage: false, animations: 'disabled', caret: 'hide' });
             }
-            await page.addScriptTag({ content: readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8') });
+            await page.evaluate(readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8'));
             const violations = await page.evaluate(async () => (await (window as any).axe.run(document.querySelector('.backups-settings'))).violations.map((v: any) => ({ id: v.id, nodes: v.nodes.map((n: any) => n.target) })));
             assert.deepEqual(violations, [], `${engine}/${posture}/${state}/${kind}: axe`);
           }

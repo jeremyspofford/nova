@@ -140,7 +140,7 @@ function screen(kind, state, body, { rail: railHtml = '', mode = '' } = {}) {
 }
 
 function composer(id, { replying = false, big = false } = {}) {
-  return `<form class="uc-composer${big ? ' is-big' : ''}" onsubmit="return false"><label class="sr-only" for="${id}-ask">Message Nova</label><textarea id="${id}-ask" rows="${big ? 2 : 1}" placeholder="${replying ? 'Reply to Nova…' : 'Ask Nova anything…'}"></textarea>
+  return `<form class="uc-composer${big ? ' is-big' : ''}" data-sg-inert><label class="sr-only" for="${id}-ask">Message Nova</label><textarea id="${id}-ask" rows="${big ? 2 : 1}" placeholder="${replying ? 'Reply to Nova…' : 'Ask Nova anything…'}"></textarea>
 <div class="uc-composer-bar"><button type="button" class="uc-icon" aria-label="Add a file">${icon('plus')}</button><button type="button" class="uc-quiet" aria-label="Privacy: local only. Change">Local only</button><span class="uc-spacer"></span><button type="button" class="uc-icon" aria-label="Talk to Nova">${icon('mic')}</button>${replying ? `<button type="button" class="uc-send is-stop" aria-label="Stop">${icon('stop')}</button>` : `<button type="button" class="uc-send" aria-label="Send">${icon('send')}</button>`}</div></form>`;
 }
 

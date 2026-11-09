@@ -182,7 +182,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
               await open(p, `${base}/styleguide?entry=${entry}`, theme);
               await geometry(p, `${engine}/${size}/${theme}/${entry}`, { overlap: false });
               if (engine === 'chromium' && theme === 'dark' && (size === 'phone' || size === 'desktop-1440')) {
-                if (!await p.evaluate(() => 'axe' in window)) await p.addScriptTag({ content: readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8') });
+                if (!await p.evaluate(() => 'axe' in window)) await p.evaluate(readFileSync(join(ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8'));
                 const axe = await p.evaluate(async () => (window as any).axe.run(document.querySelector('.sg-main'), { rules: { region: { enabled: false } } }));
                 assert.deepEqual(axe.violations.map((v: { id: string; nodes: { target: string[] }[] }) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`), [], `${engine}/${size}/${entry}: axe`);
               }
