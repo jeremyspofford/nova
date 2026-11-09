@@ -23,6 +23,7 @@ import { bindReceipts, isRcFrame, rcEntry, rcFrame } from './sg-receipts.js';
 import { bindInbox, ibEntry, ibFrame, isIbFrame } from './sg-inbox.js';
 import { bindComputer, isNcFrame, ncEntry, ncFrame } from './sg-computer.js';
 import { bindInfraForms, ifEntry, ifFrame, isIfFrame } from './sg-infra-forms.js';
+import { bindMemory, isMmFrame, mmEntry, mmFrame } from './sg-memory.js';
 import { bindVault, isVtFrame, vtEntry, vtFrame } from './sg-vault.js';
 
 const sg = document.getElementById('sg');
@@ -42,6 +43,8 @@ const inboxFrame = only === 'inbox' && isIbFrame(params.get('frame')) ? params.g
 const computerFrame = only === 'computer-door' && isNcFrame(params.get('frame')) ? params.get('frame') : null;
 // And for infrastructure projects and network targets (?entry=infra-forms&frame=<state>).
 const infraFrame = only === 'infra-forms' && isIfFrame(params.get('frame')) ? params.get('frame') : null;
+// And for core memory: search, confirm, correct, export (?entry=memory-surface&frame=<state>).
+const memoryFrame = only === 'memory-surface' && isMmFrame(params.get('frame')) ? params.get('frame') : null;
 // And for the vault: names, delete and reset (?entry=vault&frame=<state>).
 const vaultFrame = only === 'vault' && isVtFrame(params.get('frame')) ? params.get('frame') : null;
 
@@ -804,6 +807,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['inbox', 'Messages and quiet hours (for the owner’s reaction)', 'Design first, nothing wired: what Nova tells you on its own, unread and read, each with where it came from; one opened; what quiet hours hold and what happens when they end; and editing them. Drawn from the real model (src/core/triggers.ts): a message traces to a trigger, from an automation or one of Nova’s own parts; read and Let it through are the only actions; held messages go out one by one after quiet hours end, with no digest. A held message no automation sent is withdrawn today, not sent: flagged for the owner.', () => ibEntry((l, h) => state(l, h))],
       ['computer-door', 'Nova’s computer: the door (for the owner’s reaction)', 'Design first, nothing wired: where you meet Nova’s computer and what is inside. Proposed as a category in Settings › What Nova works with, not a new place in the rail (a question for the owner). Drawn from the real model (src/core/computer/, GET /api/v1/computer): Docker on this machine, a workspace per project with one folder, no network unless declared, each command a task with a checkpoint before any change. There is no terminal, screen or file browser, and no on or off: Nova checks Docker and its image, and a workspace is ready, broken or being made. Chat can’t use it yet. Failures are the backend’s own words.', () => ncEntry((l, h) => state(l, h))],
       ['infra-forms', 'Infrastructure projects and network targets (for the owner’s reaction)', 'Design first, nothing wired, every project, target and host made up, no secret value drawn: both lists and their empty state, adding a project and a target with in-place validation in the core’s words, the credential step (the value goes into Nova’s vault and isn’t shown again), a failed first use, and editing. Drawn from the real model (src/core/infra, src/core/network; /api/v1/infra and /network): a project changes only its budget and price sheet, a target only its token. The backend has no remove, rename or readdress route and no connection test on save (the first plan, or a change’s snapshot, is the first use); adding, editing and saving a secret need no passkey; only applies are tier 3, confirmed in Tasks. Those gaps are flagged, not drawn as working.', () => ifEntry((l, h) => state(l, h))],
+      ['memory-surface', 'Memory: search, confirm, correct and export (for the owner’s reaction)', 'Design first, nothing wired, every memory made up: the list by kind, search with results and with none, one memory and where it came from, what Nova kept on its own to confirm, what waits for your OK with the memory gate off (the default) and on, correcting (the old wording is kept, marked corrected), exporting to plain files, and the failures in the backend’s words. Drawn from the real model (src/core/memory.ts, /api/v1/memory; the Memory view’s /api/memory): search matches whole words, not meaning; Nova reads a memory whether or not it is confirmed; export writes memory.json and memory.md on the computer Nova runs on, with no download. The gate has no switch in Settings. Those gaps are flagged, not drawn as working.', () => mmEntry((l, h) => state(l, h))],
       ['vault', 'The vault: secret names, deleting one, starting over (for the owner’s reaction)', 'Design first, nothing wired, every secret made up and no value ever drawn: the names grouped by the part of Nova that uses each, a provider’s secret with replacing and deleting it (what stops, said first), a connection’s secret removed where it is used, one of Nova’s own keys, starting a new vault (tier 3) with a passkey, with none added, and from a paired phone, and a vault that can’t open (the backend’s words). Drawn from the real model (src/core/vault.ts; GET, PUT and DELETE /api/v1/vault/{name}, POST /vault/reset): the vault deletes only providers’ secrets; delete asks no confirm or passkey; a reset sets the old file aside and leaves its key where it was; a paired phone resets with the box alone; no route says which part of Nova uses a secret. Those gaps are flagged, not drawn as working.', () => vtEntry((l, h) => state(l, h))],
       ['jarvis', 'Jarvis rings (proposed)', 'Compositions for the owner’s reaction, not a shipped theme: a HUD instrument of concentric segmented rings, arc sweeps and fine ticks in one cyan family on near-black, for the same ten states as the status icon. Told apart by structure and motion, also in greyscale and under reduced motion. Red only for stopped, amber only for needs-you.', jarvisEntry],
     ]],
@@ -861,6 +865,12 @@ function render() {
     bindInfraForms(sg);
     return;
   }
+  if (memoryFrame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => mmFrame(memoryFrame));
+    bindMemory(sg);
+    return;
+  }
   if (vaultFrame) {
     document.body.classList.add('sg-full');
     sg.innerHTML = draw(() => vtFrame(vaultFrame));
@@ -892,6 +902,7 @@ function render() {
   bindInbox(sg);
   bindComputer(sg);
   bindInfraForms(sg);
+  bindMemory(sg);
   bindVault(sg);
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
