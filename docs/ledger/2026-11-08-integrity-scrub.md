@@ -1,0 +1,29 @@
+**2026-11-08 · Diagnostics · Integrity scrub and disk-health signals (backend)**
+- What changed: the open part of diagnostics Part 6 (ROADMAP-AND-GATES.md:190; docs/plans/diagnostics.md:273-274). The plan, docs/plans/integrity-scrub.md, set the gate first, and the build follows it.
+  - The gate, inherited from diagnostics:
+    - Output is fixed words and numbers only: no paths, file names, checkpoint names or ids, device names, or SQLite message text.
+    - It is built per request, and nothing is kept.
+    - It is bounded: 10 s in total, with the database check in a worker stopped at the deadline, and a 256 MB read budget for checkpoint hashing. A cut-short check reports unfinished or partial, never ok.
+    - One scrub runs at a time, with a 60 s cool-down. It is refused during a handover, restore, factory reset or checkpoint write.
+  - Checks:
+    - SQLite quick_check (integrity_check with ?full=1), read-only, and immutable when Nova isn't running. Damage is red.
+    - The newest sealed checkpoint hashed against its own manifest. Damage is amber, naming only Nova's own folder.
+    - Disk free space and inodes. Red below room for a pre-upgrade checkpoint, 512 MiB or 1% of inodes; amber below 2 GiB, 5% free space or 5% of inodes.
+    - ext4's error counter, readable without root; other filesystems report unavailable.
+    - SMART is always unavailable, with the reason (it needs root).
+  - Findings use the existing Problem fields, and are returned but not stored.
+  - GET /api/v1/integrity, at person access like /diagnostics, wired in src/core/index.ts.
+  - New: src/core/integrity/index.ts, src/core/integrity/worker.ts.
+- What you can now do: ask Nova, through the API, whether its database, newest checkpoint and disk are sound.
+- Still unfinished: five owner calls.
+  - Should findings be raised as stored problems, so they reach the orb and standby? That writes to the database.
+  - The thresholds and the 60 s cool-down.
+  - Whether a paired device may ask for the full check.
+  - A schedule.
+  - A Health entry, which needs the owner's approval of a rendered entry.
+  - Also: with Nova running, a reader necessarily touches SQLite's nova.db-shm index file. The test proves no file is created and nova.db is byte-identical, not that -shm is untouched.
+- Checked:
+  - typecheck.
+  - tests/core/integrity.test.ts 9/9: a corrupt database, a full disk, redaction, the time bound, nothing written, damaged checkpoints, the guards and cool-down, the ext4 counter.
+  - Diagnostics tests 16/16.
+  - npm test: 2172 passed and 2 failed. provider-guard also fails about 1 run in 3 on clean main. skills-api timed out in the full run and passes alone.
