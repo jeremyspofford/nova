@@ -13,6 +13,7 @@ const HELPERS = {
     card: 'the frame every card is drawn in (BriefCard, HandlingCard, …)', deviceDetail: 'words inside DeviceRow', pickedRoles: 'reads a form',
     takeoverState: 'what the takeover panel says', takeoverActions: 'buttons inside the takeover panel', takeoverRefused: 'a line inside the takeover panel',
     problemsSummary: 'words inside HealthCard', voiceState: 'words beside the composer',
+    playbookEvents: 'logic: folds identical neighbouring repair events, drawn inside the Health problem card',
     configField: 'one setting inside the config setup step (config doors)',
     memoryBudget: 'the budget bar and its legend, drawn inside deviceModels (models-screen)', taskPicks: 'the per-task picks, drawn inside deviceModels (models-screen)',
     passkeyLine: 'a line inside ApprovalSheet and every tier-3 sheet (passkey.js)', passkeyConfirm: 'drawn inside ApprovalSheet', passkeyAction: 'buttons inside ApprovalSheet',
