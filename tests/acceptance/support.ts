@@ -2,7 +2,7 @@
 // preloaded. Shared by the gate tests.
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,6 +22,9 @@ export async function start(env: Record<string, string>): Promise<Running> {
     if (proc.exitCode !== null) break;
     await sleep(25);
   }
+  // A server that never said it was ready is still a process: end it before failing, or it
+  // outlives the test.
+  if (!out.join('').includes('Nova is ready')) await halt({ proc, out, port: 0, mesh: null });
   assert.ok(out.join('').includes('Nova is ready'), `server did not start:\n${out.join('')}`);
   // The server picks its own free port (NOVA_PORT=0) and says which, so no other test can take it
   // between choosing and binding.
@@ -46,9 +49,28 @@ export async function stop(r: Running) {
   for (let i = 0; i < 200 && r.proc.exitCode === null; i++) await sleep(25);
 }
 
+// Cleanup's stop: whatever state the server is in, it is gone when this returns (SIGTERM, as
+// `stop`, then SIGKILL if it hasn't exited within the same 5 s).
+export async function halt(r: Running) {
+  const gone = () => r.proc.exitCode !== null || r.proc.signalCode !== null;
+  if (gone() || r.proc.pid === undefined) return;
+  const exited = new Promise<void>((ok) => r.proc.once('exit', () => ok()));
+  r.proc.kill('SIGTERM');
+  for (let i = 0; i < 200 && !gone(); i++) await sleep(25);
+  if (!gone()) r.proc.kill('SIGKILL');
+  await exited;
+}
+
 // A blank machine: its own user folder and Nova home, an empty egress log. `start` sets the port.
-export function blank(prefix: string) {
+// Given the test's context, cleanup is registered as it is created: when the test ends, passing or
+// failing at any point, every server it started is halted and the folder removed.
+export function blank(prefix: string, t?: { after(fn: () => Promise<void>): unknown }) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
+  const started: Running[] = [];
+  t?.after(async () => {
+    for (const r of started) await halt(r);
+    rmSync(dir, { recursive: true, force: true });
+  });
   const egress = join(dir, 'egress.log');
   writeFileSync(egress, '');
   const home = join(dir, 'nova-home');
@@ -58,6 +80,7 @@ export function blank(prefix: string) {
     dir, home, egress, env, base: '',
     async start(extra: Record<string, string> = {}) {
       const r = await start({ ...env, ...extra });
+      started.push(r);
       m.base = `http://127.0.0.1:${r.port}`;
       return r;
     },

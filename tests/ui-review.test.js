@@ -3,6 +3,7 @@
 // control's outline; every time on screen passes 4.5:1; the contrast panel never says "passes"
 // when it couldn't check, and a fix can always be undone; Settings search knows more words.
 process.env.TZ = 'UTC';
+import './support/no-browser-storage.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';

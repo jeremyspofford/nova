@@ -1,6 +1,7 @@
 // M9 (DESIGN-SYSTEM §1 "Progress and waiting", binding): the timing bands, real units, general
 // estimates, and no artificial delay or simulated streaming anywhere in the PWA. The pure rules are
 // in ui/js/wait.js; the browser half is tests/ui/m9-progress.test.ts.
+import './support/no-browser-storage.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
