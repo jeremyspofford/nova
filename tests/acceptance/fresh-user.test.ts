@@ -15,7 +15,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sampleManifest } from '../core/fixtures.ts';
 import { blank, sleep, stop } from './support.ts';
-import { fakeMdns, fakeRuntime, freePort } from '../support/fake-mdns.ts';
+import { discoveryStandIns } from '../support/fake-mdns.ts';
 import { NOTE_WORD, seedUserHome } from '../support/onboard-home.ts';
 
 const FIRST_WIN_LIMIT_MS = 15 * 60_000;
@@ -25,9 +25,10 @@ const READ_WPM = 200;
 const ANSWER_S = 10;
 const CLICK_S = 5;
 
-test('fresh user: blank profile → conversational setup → a delegated task verified with evidence, local-only, durable across a restart', async () => {
-  // A new machine: its own user folder, nothing pinned, no config file in play.
-  const m = blank('nova-fresh-');
+test('fresh user: blank profile → conversational setup → a delegated task verified with evidence, local-only, durable across a restart', async (t) => {
+  // A new machine: its own user folder, nothing pinned, no config file in play. Everything the test
+  // starts is cleaned up when it ends, however it ends (servers, stand-ins, the folder).
+  const m = blank('nova-fresh-', t);
   const { home, egress } = m;
   const get = (p: string) => m.get(`/api/v1${p}`);
   const post = async (p: string, body: unknown) => {
@@ -36,14 +37,10 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
   };
   const evidence: string[] = ['# Fresh-user acceptance test #1', ''];
   // The blank user's own folder, with notes, a calendar file and bookmarks to offer; stand-ins on
-  // loopback for a model runtime and a home hub on the network.
+  // loopback for a model runtime and a home hub on the network; Screenpipe and Home Assistant on
+  // this computer held absent, at ports the test keeps.
   seedUserHome(m.env.HOME);
-  const runtime = await fakeRuntime();
-  const mdns = await fakeMdns();
-  const discovery = {
-    NOVA_DISCOVERY_PORTS: `model-runtime=${runtime.port},screenpipe=${await freePort()},home-assistant=${await freePort()}`,
-    NOVA_DISCOVERY_MDNS: `127.0.0.1:${mdns.port}`,
-  };
+  const { runtime, mdns, screenpipe, homeAssistant, env: discovery } = await discoveryStandIns((close) => t.after(close));
 
   let nova = await m.start(discovery);
   try {
@@ -93,6 +90,8 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     // suggested action.
     const firstView = last!.view.first!;
     assert.deepEqual(firstView.found.map((f) => [f.kind, f.connected]), [['model-runtime', false], ['home-assistant', false], ['computer', false]]);
+    // Discovery did look for Screenpipe and Home Assistant here, at the ports held absent.
+    assert.ok(screenpipe.attempts > 0 && homeAssistant.attempts > 0, `probes refused: screenpipe ${screenpipe.attempts}, home-assistant ${homeAssistant.attempts}`);
     assert.ok(firstView.waiting >= 3, `imported and waiting: ${firstView.waiting}`);
     assert.equal(firstView.device.backend, 'supervisor');
     assert.equal(firstView.action.id, 'review-imports');
@@ -193,8 +192,6 @@ test('fresh user: blank profile → conversational setup → a delegated task ve
     evidence.push('## After a restart', '', `- Health ok: ${h1.ok}; setup done: ${h1.setup.done}; tasks done: ${h1.checks.ledger.counts.done}; open problems: ${h1.checks.problems.open}`, '');
   } finally {
     await stop(nova);
-    await runtime.close();
-    await mdns.close();
   }
 
   // 7. Local-only held: nothing tried to leave the machine.

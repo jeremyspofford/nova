@@ -122,6 +122,9 @@ test('the test run gets a bare environment, a home of its own, and nothing it st
     const vars = Object.fromEntries(env.output.split('\n').filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
     assert.equal(vars.EXAMPLE_API_KEY, undefined, 'no keys from the environment');
     assert.deepEqual(Object.keys(vars).filter((k) => !['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'PWD', 'SHLVL', '_', 'OLDPWD'].includes(k)), []);
+    // The run must say what its home was. (Without this, an empty output passed every check here,
+    // existsSync(undefined) included, which is false and Node's DEP0187 warning besides.)
+    assert.equal(typeof vars.HOME, 'string', `the test run reported no HOME:\n${env.output}`);
     assert.notEqual(vars.HOME, homedir());
     assert.equal(existsSync(vars.HOME!), false, 'its home is gone afterwards');
   } finally {
