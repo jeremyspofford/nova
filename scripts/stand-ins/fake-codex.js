@@ -38,10 +38,14 @@ for (const step of s.steps) {
   }
 }
 await sleep(s.delay_ms);
+// The exit code is set, not forced: stdout into a pipe is written asynchronously, and process.exit()
+// would drop whatever the reader hasn't taken yet (a long script's last lines among them). Ending
+// on its own, the process first writes out everything it said.
 if (s.error) {
   out({ type: 'turn.failed', error: { message: s.error } });
-  process.exit(s.exit || 1);
+  process.exitCode = s.exit || 1;
+} else {
+  out({ type: 'item.completed', item: { id: item(), type: 'agent_message', text: s.result } });
+  out({ type: 'turn.completed', usage: { input_tokens: 150, cached_input_tokens: 0, output_tokens: 30 } });
+  process.exitCode = s.exit;
 }
-out({ type: 'item.completed', item: { id: item(), type: 'agent_message', text: s.result } });
-out({ type: 'turn.completed', usage: { input_tokens: 150, cached_input_tokens: 0, output_tokens: 30 } });
-process.exit(s.exit);
