@@ -4,13 +4,19 @@
 // approves on the hub, it checks the hub signed the roster, starts a session (an HttpOnly cookie)
 // and goes Home. A browser that is already paired comes here to sign in again.
 //
-// This page loads only public files, so it carries its own small helpers.
+// This page loads only public files, so it carries its own small helpers. The status icon is public
+// on the owner's condition that it only draws (src/core/mesh/access.ts, PUBLIC_PATHS).
 import * as key from './device-key.js';
+import { statusIcon } from './status-icon.js';
 
 const $ = (id) => document.getElementById(id);
 const body = $('pair-body');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const orb = (state) => { $('pair-orb').dataset.state = state; };
+// The hero's status icon, at the app's hero size (shell.js LIVE_PX.hero). Decorative: the heading
+// and the live text below it say the state.
+const icon = statusIcon({ status: 'idle', size: 112, decorative: true });
+$('pair-icon').append(icon);
+const showState = (state) => icon.setStatus(state);
 const title = (t) => { $('pair-title').textContent = t; };
 const group = (d) => `${d.slice(0, 3)} ${d.slice(3)}`;
 
@@ -42,14 +48,14 @@ const platform = () => (navigator.userAgentData?.platform || navigator.platform 
 let hello = null;
 
 function stop(heading, text, { retry = false, state = 'needs-you' } = {}) {
-  orb(state);
+  showState(state);
   title(heading);
   body.innerHTML = `<p class="pair-line">${esc(text)}</p>${retry ? '<div class="pair-actions"><button type="button" class="btn primary" id="again">Start again</button></div>' : ''}`;
   $('again')?.addEventListener('click', () => form());
 }
 
 function form(note = '') {
-  orb('idle');
+  showState('idle');
   title('Pair with Nova');
   body.innerHTML = `${note ? `<p class="pair-line">${esc(note)}</p>` : ''}
 <form class="pair-form" id="join-form">
@@ -71,7 +77,7 @@ function fail(e) {
 
 async function join(code, name) {
   $('join').disabled = true;
-  orb('working');
+  showState('working');
   // A fresh key for every new pairing: a key that was turned away is never used again.
   const id = await key.create();
   const nonce = key.nonce();
@@ -99,7 +105,7 @@ async function join(code, name) {
 // The digits, and a signed check on the request every two seconds until the person decides.
 function wait(id) {
   const { requestId, digits } = id.pending;
-  orb('needs-you');
+  showState('needs-you');
   title('Check the digits');
   body.innerHTML = `<p class="pair-digits" aria-label="${esc(digits.split('').join(' '))}">${esc(group(digits))}</p>
 <p class="pair-line">Your hub shows six digits too. If they match, approve this device there. If they don’t, deny it.</p>
@@ -134,11 +140,11 @@ async function approved(s) {
 }
 
 async function signIn(id) {
-  orb('working');
+  showState('working');
   title('Signing in');
   body.innerHTML = '<p class="pair-line">One moment.</p>';
   await key.startSession(id);
-  orb('idle');
+  showState('idle');
   title('Paired');
   body.innerHTML = '<p class="pair-line">This device is paired. Opening Nova.</p>';
   location.replace('/');
