@@ -589,6 +589,10 @@ export class Supervisor {
       this.#problem({ source: 'supervisor', playbook: 'release-stopped', subject: version, said: `Release ${version} didn’t pass its ${name === 'tests' ? 'tests' : name === 'smoke' ? 'smoke probes' : name === 'sandbox' ? 'sandbox start' : 'checks'}, so Nova kept running ${from === BASE ? 'what it had' : from}.`, detail: said });
       return { ok: false, said: `Stopped at ${name}: ${said}` };
     };
+    // Going back by itself is the deploy failing safely, never the deploy passing: the release isn't
+    // live and nothing is kept to go back to, so whoever asked (the command line's exit code, the
+    // Service Manager's promote) hears "not deployed", as a service's own rolled-back switch says.
+    const rolledBack = async (reason: string) => ({ ...(await this.rollback({ auto: true, reason, target: from, say })), ok: false });
     try {
       // 1. The slot: a worktree of the tag's commit.
       let slot: { path: string; commit: string };
@@ -661,11 +665,11 @@ export class Supervisor {
           return stopped('switch', `${why}. Nova went back to running ${from === BASE ? 'the code the supervisor started from' : from}.`);
         }
         stage('switch', false, why);
-        return await this.rollback({ auto: true, reason: why, target: from, say });
+        return await rolledBack(why);
       }
       if (!port) {
         stage('switch', false, `It didn’t start on your home: ${this.#lastWords()}`);
-        return await this.rollback({ auto: true, reason: `Release ${version} didn’t start on your home.`, target: from, say });
+        return await rolledBack(`Release ${version} didn’t start on your home.`);
       }
       stage('switch', true, `Running ${version} on your home${migration ? `; the database was upgraded from ${migration.from} to ${migration.to}, with the backup from before kept` : ''}.`);
 
@@ -683,7 +687,7 @@ export class Supervisor {
         this.#save();
         if (!p.ok) {
           stage('canary', false, p.said);
-          return await this.rollback({ auto: true, reason: p.said, target: from, say });
+          return await rolledBack(p.said);
         }
       }
       stage('canary', true, `${n} probes over ${Math.round(this.t.canaryMs / 1000)} s, all healthy.`);

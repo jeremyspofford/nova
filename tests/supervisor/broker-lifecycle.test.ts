@@ -382,7 +382,8 @@ test('failed release Core startup with confirmed broker cleanup can recover the 
     fakeRelease(f.repo, 'v1.1.0', 'two');
     await f.sup.run(); await until(() => f.sup.state.mode === 'running', 'original ready');
     const result = await f.sup.deploy('v1.1.0');
-    assert.equal(result.ok, true, result.said); assert.match(result.said, /Rolled back/);
+    // Rolled back is not deployed: the release didn't stay, so the deploy says it failed.
+    assert.equal(result.ok, false, result.said); assert.match(result.said, /Rolled back/);
     assert.equal(f.sup.state.releases.current, 'base'); assert.equal(f.sup.state.mode, 'running');
     assert.ok(f.sup.server); assert.equal((f.sup.state as any).broker.status, 'running');
   } finally { await f.sup.close(); rmSync(f.dir, { recursive: true, force: true }); }
