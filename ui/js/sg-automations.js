@@ -128,7 +128,7 @@ function listPane(id, { current = '', creating = false, runs = RUNS, off = [] } 
     const rules = RULES.filter(test);
     return rules.length ? `<h3 class="uc-group" id="${id}-g${i}">${name}</h3><ul class="au-rules" aria-labelledby="${id}-g${i}">${rules.map((r) => ruleRow(id, r, { current: r.id === current, runs, off })).join('')}</ul>` : '';
   }).join('');
-  return `<div class="au-list"><p class="au-intro">What Nova does on its own. Nothing runs that isn’t listed here.</p>
+  return `<div class="au-list"><p class="au-intro">Rules Nova runs on its own. Each can be paused or removed.</p>
 <a class="uc-row au-new${creating ? ' is-on' : ''}" href="#${id}-new"${creating ? ' aria-current="true"' : ''}><span class="uc-ic" aria-hidden="true">${icon('plus')}</span><span class="uc-label">New automation</span></a>${groups}</div>`;
 }
 
@@ -251,8 +251,8 @@ function screen(state, panes, pane) {
 }
 
 const pair = (list, right) => (id) => `${list(id)}<div class="au-detail">${right(id)}</div>`;
-const emptyDetail = (id) => `<h3 class="uc-h" id="${id}-none">No automations yet</h3><p class="au-sentence">An automation runs on a schedule, when a webhook is called, or when a connection reports something, and either tells you something or starts a task.</p><p class="au-note">Everything Nova does on its own will be listed here, with when it last ran and what happened. Nothing runs that isn’t.</p><div class="au-actions"><a class="btn primary" href="#${id}-new">New automation</a></div>`;
-const emptyList = (id) => `<div class="au-list"><p class="au-intro">What Nova does on its own. Nothing runs that isn’t listed here.</p><a class="uc-row au-new" href="#${id}-new"><span class="uc-ic" aria-hidden="true">${icon('plus')}</span><span class="uc-label">New automation</span></a><p class="au-intro au-none">None yet.</p></div>`;
+const emptyDetail = (id) => `<h3 class="uc-h" id="${id}-none">No automations yet</h3><p class="au-sentence">An automation runs on a schedule, when a webhook is called, or when a connection reports something, and either tells you something or starts a task.</p><p class="au-note">Each rule you make is listed here, with when it last ran and what happened. You can pause or remove any of them.</p><div class="au-actions"><a class="btn primary" href="#${id}-new">New automation</a></div>`;
+const emptyList = (id) => `<div class="au-list"><p class="au-intro">Rules Nova runs on its own. Each can be paused or removed.</p><a class="uc-row au-new" href="#${id}-new"><span class="uc-ic" aria-hidden="true">${icon('plus')}</span><span class="uc-label">New automation</span></a><p class="au-intro au-none">None yet.</p></div>`;
 
 // The list frame with the build webhook selected, for the token frames.
 const withBuild = (stage) => pair((id) => listPane(id, { current: 'r-build' }), (id) => detail(id, rule('r-build'), { token: stage }));
