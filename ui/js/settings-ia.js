@@ -40,6 +40,9 @@ export const ENTRIES = Object.freeze([
   { cat: 'appearance', label: 'Light and dark', target: 'appearance-mode', words: ['mode', 'color scheme', 'colour scheme', 'appearance mode', 'dark mode', 'light mode', 'dark', 'light', 'night mode', 'night', 'auto', 'brightness', 'dark theme', 'light theme'] },
   { cat: 'appearance', label: 'Contrast', target: 'contrast-check', words: ['high contrast', 'low vision', 'hard to see', 'contrast', 'readability', 'readable', 'hard to read', 'accessibility', 'legibility', 'wcag', 'faint'] },
   { cat: 'privacy', label: 'Privacy', target: 'privacy', words: ['privacy mode', 'voice', 'microphone', 'mic', 'dictation', 'speech', 'talk', 'privacy', 'private', 'local', 'local only', 'cloud', 'offline', 'data', 'send data'] },
+  // Before Without asking: "ask first" and "approvals" find the whole place first, the
+  // conversation's switches next.
+  { cat: 'privacy', label: 'Approvals', target: 'approvals', words: ['approvals', 'approval', 'approval tiers', 'tier', 'tiers', 'ask first', 'asks first', 'confirm every time', 'confirms every time', 'just does it', 'does it and tells you', 'what asks first', 'loosen', 'tighten', 'never presses pay'] },
   { cat: 'privacy', label: 'Without asking', target: 'perms', words: ['permissions', 'permission', 'ask first', 'approvals', 'approve', 'allow', 'trust', 'without asking', 'auto approve'] },
   { cat: 'capture', label: 'Capture', target: 'capture', words: ['screenpipe', 'capture source', 'capture sources', 'sources', 'never capture', 'spaces', 'retention', 'capture', 'screen', 'record', 'recording', 'watch', 'clipboard', 'what nova sees', 'notes from apps'] },
   { cat: 'connections', label: 'Connections', target: 'connections', words: ['connections', 'connection', 'connectors', 'integrations', 'accounts', 'account', 'home assistant', 'gmail', 'email', 'mail', 'calendar', 'services', 'link'] },
