@@ -125,6 +125,14 @@ capability the person relies on; 3 for the rest.
 | `setup.always-says-wrong` | `src/core/setup.ts:188` | “I’ll always tell you when I think something’s wrong” | “Telling you when I think something’s wrong isn’t adjustable.” | `claim.says-when-something-wrong` | 3 |
 | `settings.always-says-wrong` | `ui/js/surfaces.js:435` | “Nova always says when it thinks something’s wrong” | “Telling you when Nova thinks something’s wrong isn’t adjustable; this is how it says it.” | `claim.says-when-something-wrong` | 3 |
 
+*Amended 2026-11-09 (owner ruling, `docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md`):* the
+`ha.asks-every-time` row above is retired. A Home Assistant change the person asks for is now tier
+1, act and report, so "after asking you first" is no longer true. Its successor is
+`ha.changes-when-asked` (`src/core/connectors/home-assistant.ts`): now “'Turn things on and off when
+you ask, and tell you what changed.'”, strong “'… tell you what changed, every time.'”, eval
+`claim.home-change-reported`, priority 1. After outside content, chat still asks
+(`tests/ingest/home-guard.test.js`).
+
 ### Reviewed and kept
 
 These are accurate by construction:
@@ -135,7 +143,11 @@ These are accurate by construction:
 - **Gmail's "never" list** (Send email, Delete email; `src/connectors/gmail-connector.js`): there is
   no tool for either.
 - **Home Assistant's "never" list:** every service call is a ledger task at tier 2 or 3. It lost
-  "every time" from its "can" line, since standing approvals exist.
+  "every time" from its "can" line, since standing approvals exist. *Amended 2026-11-09 (owner
+  ruling, `docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md`):* a call is now a ledger task at
+  `service_tier` (1 by default) or tier 3 for a listed domain, and the "never" list now reads
+  “Change anything unless you, or a rule you set up, asks.” and “Change anything from a chat that has
+  read something from outside, without asking you first.”
 - **Code comments and API route summaries:** they are not shown to the person. One false comment
   in `src/tools.js` ("exec … always asks first") was corrected anyway.
 - **Rules and requirements in the packet** (OPERATING-RULES' "local-only never falls back", the
@@ -199,7 +211,7 @@ untouched: `INPUT-*`, `AMENDMENT-*`, the `nova-*-design-*.md` notes and the rese
 | `claim.forget-leaves-no-copy` | 1 | `readme.forget-no-copy` |
 | `claim.forget-reaches-backups` | 1 | `readme.forget-every-backup`, `capture.forget-for-good` |
 | `claim.gmail-secret-not-shown` | 1 | `gmail.secret-location` |
-| `claim.home-changes-ask-first` | 1 | `ha.asks-every-time` |
+| `claim.home-change-reported` (was `claim.home-changes-ask-first`, renamed by the 2026-11-09 owner ruling, `docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md`) | 1 | `ha.changes-when-asked` (was `ha.asks-every-time`) |
 | `claim.irreversible-step-asks` | 1 | `briefing.irreversible-always-asks` |
 | `claim.local-only-no-cloud-fallback` | 1 | `privacy.never-falls-back-to-cloud` |
 | `claim.local-only-nothing-leaves` | 1 | `setup.local-only-nothing-leaves`, `setup.local-only-summary`, `approval.privacy-row`, `briefing.local-only`, `computer.local-only-refusal` |

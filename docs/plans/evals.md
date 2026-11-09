@@ -342,7 +342,7 @@ A partial case can't bring back strong words that it doesn't grade.
 | 1 | `claim.untainted-command-asks-by-default` | built, **fails, false as written** while permissions.md can say yes to commands |
 | 1 | `claim.irreversible-step-asks` | built, **fails, false as written**: a yes in permissions.md shows no card |
 | 1 | `claim.outbound-guard-asks` | built, **fails, false as written**: after a page is read, a workspace write still goes ahead |
-| 1 | `claim.home-changes-ask-first` | pending: the stand-in Home Assistant in the fixture |
+| 1 | `claim.home-change-reported` (was `claim.home-changes-ask-first`; renamed 2026-11-09 by the owner ruling, `docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md`: a home change the person asks for is tier 1, act and report) | pending: the stand-in Home Assistant in the fixture |
 | 1 | `claim.outbound-guard-after-mail` | pending: the stand-in Google in the driver |
 | 1 | `claim.change-pipeline-before-live` | built, partial, **fails**: standing files are written without asking. The pipeline part needs its sandbox |
 | 2 | `claim.memory-recalled-next-conversation` | built, **passes**: told in one conversation, known in the next. Every call there carries it |

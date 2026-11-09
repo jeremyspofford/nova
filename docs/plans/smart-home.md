@@ -71,6 +71,16 @@ The owner decided this ADR's open questions the same day. These govern wherever 
 8. **The milestone is M11 — Home,** with phases S1–S3. The sequence stands: after the M10 chain and the QA harness milestone.
 9. **Still open, and proceeding on its proposed default:** the class of a home token. It is standard class, so reads run at standing consent and every command asks at its own tier.
 
+## Amendment: the owner's tier ruling (2026-11-09)
+
+Source: `docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md` (built in PR #430). It overrides this ADR wherever the two disagree. The text below is kept as written for the record; where it says Home Assistant commands ask first, or that a domain is tier 3 by default, read this section instead.
+- **A Home Assistant call the person asks for is tier 1, act and report.** It runs without an approval, and Nova's own read-back from Home Assistant is the evidence in the Work Ledger. The owner's words: "If I ask nova to unlock the door, it should just do it." This supersedes owner decision 2's "Unlocking stays tier 3" and the tier column of Commands and tiers per capability for commands the person asks for, from chat (`home_call`) or a tile.
+- **No domain is tier 3 by default.** The connector's `tier3_domains` (`DEFAULT_TIER3`) is now empty; locks and alarms are no longer on it. The list stays a setting, so the owner can put domains back.
+- **The service tier is a setting:** `service_tier`, 1 by default, 2 to ask first again (`GET`/`PUT /connectors/home-assistant/settings`).
+- **After outside content it still asks.** In a run that has read outside content (mail, web pages), a Home Assistant call is a guarded step and asks the person first, whatever its tier (`src/runner.js`; `tests/ingest/home-guard.test.js`).
+- **A failed read-back still holds the task** rather than calling again.
+- **Not ruled on:** the ruling speaks of calls the person asks for. The connector today runs every service call at `service_tier`, whoever starts it. Whether commands Nova starts on its own (automations, schedules, scenes it proposes) on the future Smart Home page should sit higher is for the owner when S1 is built.
+
 ## Decision
 
 Nova gets a **Smart Home** surface built on one **device model**.
@@ -97,7 +107,7 @@ Nova gets a **Smart Home** surface built on one **device model**.
 
 | Need | Built on | New |
 |---|---|---|
-| Talking to Home Assistant | `src/core/connectors/home-assistant.ts`: REST states (tier 0), service calls as ledger tasks (tier 2; tier 3 for `lock` and `alarm_control_panel`, `DEFAULT_TIER3`), read-back as evidence (`confirm`), `state_changed` over the WebSocket into event triggers, local-only egress checks (`addressEgress`, `resolved_local`), token revoked at Home Assistant on disconnect | Area, device and entity registry import; camera snapshots and streams through Home Assistant's own stream proxy; read-back that waits for a settled state |
+| Talking to Home Assistant | `src/core/connectors/home-assistant.ts`: REST states (tier 0), service calls as ledger tasks (tier 2; tier 3 for `lock` and `alarm_control_panel`, `DEFAULT_TIER3`; *since the 2026-11-09 ruling: `service_tier`, 1 by default, and `DEFAULT_TIER3` empty, see the Amendment*), read-back as evidence (`confirm`), `state_changed` over the WebSocket into event triggers, local-only egress checks (`addressEgress`, `resolved_local`), token revoked at Home Assistant on disconnect | Area, device and entity registry import; camera snapshots and streams through Home Assistant's own stream proxy; read-back that waits for a settled state |
 | Connectors in general | `src/core/connectors/index.ts`: the connector kind, `ctx.secrets`, `ctx.emit`, `ctx.delegate`, `ctx.permits`, removal that signs out | A `HomeAdapter` interface that a connector implements to feed the device model |
 | Approvals | The ledger's gate (`ledger.ts approve`: tier 2 waits for an OK, tier 3 needs `confirm`); `approvalSheet` in `ui/js/components.js` | A per-capability tier map, which can only raise a connector's tier |
 | Events | `src/core/triggers.ts`: rules by connector and topic, dedup, cooldown, triage, CONTRACTS §6 records | Device-model topics; probabilities on camera events; rule conditions on them (S2) |
@@ -166,7 +176,7 @@ type SensorType = 'motion' | 'contact' | 'occupancy' | 'temperature' | 'humidity
 ### Commands and tiers per capability
 
 The tier of a command is the **highest** of three things:
-1. the connector's own tier (Home Assistant: `tierOf`, by domain and every entity named; today tier 2, or tier 3 for `lock` and `alarm_control_panel`);
+1. the connector's own tier (Home Assistant: `tierOf`, by domain and every entity named; tier 2, or tier 3 for `lock` and `alarm_control_panel`, when this was written; since the 2026-11-09 ruling, `service_tier` (1 by default) or tier 3 for a domain in `tier3_domains`, empty by default, see the Amendment);
 2. the capability tier in this table;
 3. the person's own mark on a device. Any device can be raised to tier 3, for example a switch that powers a heater.
 
@@ -446,6 +456,7 @@ Through the Decision Service registry once it lands (DS1), never by an ad hoc ca
   - show camera live views;
   - change devices only after asking, at each device's tier, with unlocks and opening garage doors confirmed every time.
 - **What it never does:** change anything without the person's OK; send anything off the network (the egress shown is `local`).
+- *Amended 2026-11-09 (owner ruling, see the Amendment):* the two lines above no longer hold as written. The card must say that Nova changes devices when the person asks and reports what changed, asks first after reading outside content, and confirms every time only for the domains the person lists.
 - **What it needs next:** a token, with how to make one. A dedicated Home Assistant user for Nova is recommended.
 
 **Counts by room:** Home Assistant and Scrypted answer nothing about their devices without signing in, so counts by room can't be shown before a credential (Conflicts row 5). The proposed flow is therefore two steps, and nothing is imported or switched on until the second:
@@ -461,7 +472,7 @@ Once the broker's Phase 1 lands, every home credential is a broker ref and never
 
 | Credential | Ref (placeholder) | Bindings | Consent |
 |---|---|---|---|
-| Home Assistant token | `secret://home/<instance>/token` | `http` to the instance's origin, scoped to the paths Nova calls; `ws` to `/api/websocket` | Standing consent (tier 1) for state and registry reads, event subscription, snapshots and stream set-up. Service calls sit outside it, so each goes through the ledger at its tier (2 or 3), which matches the connector's rule today |
+| Home Assistant token | `secret://home/<instance>/token` | `http` to the instance's origin, scoped to the paths Nova calls; `ws` to `/api/websocket` | Standing consent (tier 1) for state and registry reads, event subscription, snapshots and stream set-up. Service calls sit outside it, so each goes through the ledger at its tier (2 or 3), which matched the connector's rule when this was written; since the 2026-11-09 ruling the connector's tier is `service_tier`, 1 by default (see the Amendment) |
 | Scrypted credential | `secret://home/<instance>/scrypted` | `http` and `ws` to the instance's origin, with a **pinned certificate** (Scrypted serves its own certificate on the LAN) | As above |
 | Vendor cloud (S3) | `secret://home/<vendor>/oauth` | `http` to the vendor's API origin; OAuth with the broker's PKCE verifier | Standing consent for reads only. Never bound in local-only |
 
@@ -645,7 +656,7 @@ Each place where the inputs pull against each other or the packet, with its reso
 1. **A tap is the approval** (Conflicts row 1). *Proposed:* yes for tier 2 on the page, never for tier 3 or for anything Nova starts itself. *Default until decided:* today's ask-first sheet.
 2. **Camera frames to Box in local-only** (row 2). *Proposed:* no; the camera rule wins.
 3. **The class of a home token.** A Home Assistant token can unlock doors. *Proposed:* standard class, so reads run at standing consent and every command asks at its own tier. *Alternative:* sensitive, so every use asks first, including reads, which would make the page unusable.
-4. **Locking a lock.** Today the whole `lock` domain is tier 3, so locking is too. *Proposed:* keep it, because the domain rule is unchanged. *Alternative:* `lock` at tier 2, since it makes the home safer, and `unlock` stays 3.
+4. **Locking a lock.** (Superseded by the 2026-11-09 ruling: no domain is tier 3 by default now; see the Amendment.) Today the whole `lock` domain is tier 3, so locking is too. *Proposed:* keep it, because the domain rule is unchanged. *Alternative:* `lock` at tier 2, since it makes the home safer, and `unlock` stays 3.
 5. **The two-step connect card** (row 5), and **plain `http` to a LAN Home Assistant** (row 6).
 6. **The camera view log.** *Proposed:* kept in Activity (who, which camera, when, from which device) for Activity's retention. *Alternative:* no log of views.
 7. **No face recognition.** *Proposed:* Nova classifies things (person, package, vehicle, animal), never identities, in this milestone. Any identity feature would need its own design and consent.

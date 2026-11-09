@@ -47,9 +47,11 @@ Engine-level guarantees: deduplication and cooldowns across all triggers (no rep
 ## 6. Autonomy and approval tiers
 - **Tier 0 — act silently**: reversible, low-stakes, in-policy (triage, filing, drafting, checking).
 - **Tier 1 — act and report**: visible in the Work Ledger and the "Nova is handling" surface; user can undo.
-- **Tier 2 — ask first**: sending messages, spending money, changing devices/home state, sharing data externally, installing extensions with broad permissions.
+- **Tier 2 — ask first**: sending messages, spending money, changing devices/home state (except as amended below), sharing data externally, installing extensions with broad permissions.
 - **Tier 3 — explicit confirmation every time**: core/security/permissions changes, self-modification deploys, data deletion, anything irreversible.
 Tiers are policy, configurable per user and per capability — the mechanism is core, the settings are profile.
+
+*Amended 2026-11-09 (owner ruling, `INPUT-2026-11-09-TIER-RULING.md`):* a Home Assistant call the person asks for directly is tier 1, not tier 2; in a run that has read outside content it still asks first. Using a saved browser sign-in, and typing, choosing and clicking on a browser task's declared sites, is tier 1. Checkout and account changes stay tier 3, and Nova never presses pay. Deleting a vault secret and starting a new vault are tier 3.
 
 ## 7. Long-term memory
 A core system, distinct from session context:
