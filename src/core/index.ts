@@ -21,7 +21,7 @@ import { backendFor } from './onboard/backend.ts';
 import { Extensions } from './extensions.ts';
 import { Design, type Scope } from './design.ts';
 import { Decisions, RulesProvider, Templates } from './decide.ts';
-import { TRIAGE, Triggers, triageRule, type Policy, type RuleInput } from './triggers.ts';
+import { PARTS, TRIAGE, Triggers, triageRule, type Policy, type RuleInput } from './triggers.ts';
 import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInput, type UserState } from './memory.ts';
 import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
@@ -441,7 +441,7 @@ export function createCore(o: CoreOptions) {
     meshHost: (h) => meshHosts().has(h),
     secret: (v) => { const n = secretName(v); return n ? providerSecret(n) : null; },
     // The person is told the way proactive messages go: triaged, quiet hours kept.
-    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'models', name: 'Local models', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('models', 'Nova couldn’t tell you about waiting work.', { error: (e as Error).message })); },
+    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'models', name: PARTS.models, payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('models', 'Nova couldn’t tell you about waiting work.', { error: (e as Error).message })); },
     // The device record's decision model (DS1 NOTE 4), and a newly pulled Tev1 seen without a restart.
     decisionModel: () => { const d = ds?.tev1(); return d ? { model: d.model, digest: d.digest, why: d.available ? d.size_why : d.why } : null; },
     refreshed: () => ds?.refresh() ?? Promise.resolve(),
@@ -563,7 +563,7 @@ export function createCore(o: CoreOptions) {
   const coding = new Coding({
     db, log, home: o.home, ledger, verifier, providers, now, privacy: () => profile.privacyDefault(),
     ...(o.coding ?? {}),
-    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'coding', name: 'Coding', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('coding', 'Nova couldn’t tell you about a coding run.', { error: (e as Error).message })); },
+    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'coding', name: PARTS.coding, payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('coding', 'Nova couldn’t tell you about a coding run.', { error: (e as Error).message })); },
   });
   ledger.workers.set(coding.worker.id, coding.worker);
   const enroll = new Enrollment({ db, log, devices, identity: meshIdentity, now, publicUrl });
@@ -603,7 +603,7 @@ export function createCore(o: CoreOptions) {
     db, log, home: o.home, ledger, verifier, vault, now, privacy: () => profile.privacyDefault(),
     checkpoint: (reason) => checkpoints.auto(reason),
     ...(o.infra ?? {}),
-    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'infra', name: 'Infrastructure', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('infra', 'Nova couldn’t tell you about an infrastructure run.', { error: (e as Error).message })); },
+    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'infra', name: PARTS.infra, payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('infra', 'Nova couldn’t tell you about an infrastructure run.', { error: (e as Error).message })); },
   });
   ledger.workers.set(infra.worker.id, infra.worker);
   // Networking through chat (M10d): snapshot and diff (tier 1), apply (tier 3) after a checkpoint,
@@ -615,7 +615,7 @@ export function createCore(o: CoreOptions) {
     windowS: () => { const v = profile.get<number>('mesh', 'contact_window_s'); return typeof v === 'number' ? v : 300; },
     contactKinds: () => profile.get<unknown>('mesh', 'contact_kinds'),
     ...(o.network ?? {}),
-    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'network', name: 'Network', payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('network', 'Nova couldn’t tell you about a network change.', { error: (e as Error).message })); },
+    notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'network', name: PARTS.network, payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('network', 'Nova couldn’t tell you about a network change.', { error: (e as Error).message })); },
   });
   ledger.workers.set(network.worker.id, network.worker);
   // Every forget reaches each checkpoint (and a restore that is staged).
