@@ -96,6 +96,7 @@ import { changelogView } from './changelog.ts';
 import { pipelineView } from './pipeline.ts';
 import { Caps, capsRoutes } from './caps/index.ts';
 import { buildDiagnostics, diagnosticsRoutes } from './diagnostics/index.ts';
+import { PROMOTION_IN_FLIGHT, integrityRoutes, runScrub } from './integrity/index.ts';
 import { CODE_ROOT } from './resilience/sandbox.ts';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -192,6 +193,8 @@ export { Caps, DEFAULT_LIMITS, LOOP, SPEND_DIR, signature, weightOf, capsRoutes 
 export type { Limits, Spend, Stop } from './caps/index.ts';
 // One-click diagnostics, redacted by construction (Amendment 2026-10-31-B Part 6).
 export { buildDiagnostics, diagnosticsRoutes, knownSecrets, Scrubber, formsOf, MARKER as DIAGNOSTICS_MARKER } from './diagnostics/index.ts';
+// The integrity scrub and disk-health signals: read-only, metadata only (Part 6; docs/plans/integrity-scrub.md).
+export { runScrub, integrityRoutes, homeBusy, TIME_MS as INTEGRITY_TIME_MS, IO_BYTES as INTEGRITY_IO_BYTES } from './integrity/index.ts';
 
 export interface CoreOptions {
   home: string;
@@ -1591,6 +1594,13 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     ...capsRoutes(caps),
     // The getter runs only when a person requests a download, after Core is constructed.
     ...diagnosticsRoutes(() => buildDiagnostics(core, { home: o.home, version: o.version, commit: self.build(), instance: o.instance, now, era2: o.diagnostics?.era2 }), now),
+    // The integrity scrub (Part 6): read-only, per request, at the same access as diagnostics. Never
+    // while a handover is in flight; the home's own guards (a staged restore or reset, a checkpoint
+    // being written) are the scrub's.
+    ...integrityRoutes(({ full }) => runScrub({
+      home: o.home, full,
+      busy: () => (PROMOTION_IN_FLIGHT.has(promotions.record()?.state ?? '') ? 'A handover between machines is in progress; Nova checks its data again when it has finished.' : null),
+    })),
     // ---- the Decision Service's settings (DS1 NOTE 4; owner decision 2) ----
     { method: 'GET', path: '/models/decisions', summary: 'The decision model: Tev1 and Jev as Nova sees them, the person’s choices (the Jev key only as set or not), what Nova recommends, a plain notice for each choice it doesn’t and for each opt-in that is on, each model’s eval scorecard, and what each opt-in means.', handle: () => decisionsView() },
     {

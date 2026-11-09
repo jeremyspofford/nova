@@ -22,7 +22,8 @@
     "test:ui": "sh scripts/tripwire.sh node --test --test-concurrency=1 --test-force-exit --test-timeout=900000 'tests/ui/*.test.ts'",
     "test:ui:shard": "f=$(node scripts/ui-shard.js \"${NOVA_UI_SHARD:?set NOVA_UI_SHARD, e.g. 1/4}\") && sh scripts/tripwire.sh node --test --test-concurrency=1 --test-force-exit --test-timeout=900000 $f",
     "ui-test": "scripts/ui-test.sh",
-    "ui:axe": "node tests/ui/axe-advisory.ts"
+    "ui:axe": "node tests/ui/axe-advisory.ts",
+    "ui:timings": "node scripts/ui-timings.js"
   },
   "devDependencies": {
     "@types/node": "26.6.6",

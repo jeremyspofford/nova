@@ -1,0 +1,16 @@
+**2026-11-08 · CI · UI shard timings are measured, not copied by hand**
+- What changed: #374's LPT sharder used a SECONDS table hand-copied from one run, and its ledger entry warned the times would drift.
+  - scripts/ui-timings.js (new; run with `npm run ui:timings`) reads the last 10 successful main runs' UI-gate logs from the GitHub API and writes scripts/ui-timings.json, which is committed. The sharder only reads that file, so a run's assignment never changes mid-run.
+  - Node's spec reporter prints no file names, so each top-level `✔ title (NNNms)` line is matched to the file whose test() title fits it (template parts match anything), at that run's commit, in file order. A file's time is the wall clock from the previous file's last result to its own, so startup, browser launch and hooks count.
+  - A run is used only if its shards cover every file exactly once and the totals match Node's own duration_ms. All 10 runs passed, with every title matched. Each file takes the median.
+  - The advisory step is measured too: 129 s, against the hand-copied 126.
+  - A stale, missing or broken timings file still shards every file exactly once and puts a ::warning:: on each shard job, rather than failing unrelated PRs on age. `npm test` fails if the JSON is missing or broken, or if more than 8 current UI files have no measured time.
+- What you can now do: CI's four UI shards balance on real recent timings. Projected 865–866 s per shard, against 817–910 s for the old split at measured times, so the slowest shard drops about 44 s.
+- Still unfinished: one thing.
+  - The JSON is refreshed by a command and a commit, not automatically. A CI job that refreshes it would need the owner's call on letting CI push.
+- Checked: `node --test tests/ui-shard.test.js` 9/9, and typecheck.
+  - The tests cover 1, 2, 3, 4 and 6 shards, with measured timings and without any.
+  - They check that slow files stay spread out and that 4 shards balance within 5%.
+  - They check that the JSON covers the current files, and how missing, broken and stale files are handled.
+  - They check a clean, repeatable CLI and the log parser.
+  - Biggest drifts from the hand table: orb-states 73→152 s, status-icon 10→50 s (it had been falling back to the default), m9-vitals 254→291 s.

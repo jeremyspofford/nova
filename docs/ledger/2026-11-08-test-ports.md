@@ -1,0 +1,22 @@
+**2026-11-08 · Tests · Absent-service ports are held, and an early failure cleans up**
+- What changed: Track 1's oldest open item (docs/plans/track1-follow-up-queue.md:18-24).
+  - Cause, shown rather than assumed:
+    - Forcing fresh-user to fail early with a preload, with the test file unchanged, made it never exit. It was killed after 64 s, leaving the fake runtime's HTTP port, the mDNS UDP port and the temp home behind. Its stand-ins were closed only on the restart path.
+    - A listener answering /health 200 that takes the port freePort() just released reproduces the exact line-95 failure, because every Nova server answers /health 200 (src/server.js:331).
+    - In the traced full-suite order on WSL2, whose ephemeral range is 4096 wide, every listener landed on an even port between 54176 and 56222. 160–175 other listeners, about 40 of them Nova servers, came up while each absent port sat free. In one run, mesh-spokes took onboard's absent port 54656 while onboard was still running.
+    - A natural failure was not caught in three full runs.
+  - Fix:
+    - absentService() holds the absent port for the whole test and resets every connection, so a claim attempt gets EADDRINUSE.
+    - discoveryStandIns() and blank(prefix, t) register cleanup with t.after as each thing is created.
+    - start() kills a server that never became ready.
+    - The 5 test files that reach ui/js/wait.js now install a stand-in for browser storage that keeps nothing, which removes the localStorage ExperimentalWarning without global suppression.
+  - DEP0187 didn't appear in two full runs or three provider-guard runs. Its likely source by elimination is provider-guard.test.ts:126 (existsSync on HOME), which is unproven, so it's left alone.
+- What you can now do: run the suite without absent-service ports being claimed by other tests, and without a failed test hanging the run.
+- Still unfinished: two things.
+  - tests/core/workloads.ts still uses the old free-port pattern.
+  - The suite has other intermittent failures unrelated to this change (provider-guard, workloads-rollout, releases).
+- Checked: tests/acceptance/fixture-cleanup.test.ts, which is new.
+  - The held port can't be taken and refuses connections.
+  - A fixture that fails early must exit by itself, with Nova and the temp home gone. Against the old cleanup it fails after 60 s.
+  - npm test before: 2161 passed and 4 failed. After: 2164 passed and 3 failed. The 3 are provider-guard, which failed before as well, plus workloads-rollout and releases, which don't use the changed helpers; the failing set varies between runs.
+  - localStorage warnings went from 5 to 0.

@@ -24,7 +24,8 @@ const local = new Map([['nova.session', 'x'], ['nova.draft.new', 'half a thought
 const session = new Map([['nova.notice', '1'], ['another.app', 'keep']]);
 globalThis.localStorage = store(local);
 globalThis.sessionStorage = store(session);
-const cached = new Map([['nova-shell-v8', ['/', '/api/v1/tasks']]]);
+// A hand-numbered cache from before the cache name was a hash, and a hash-named one (src/sw-version.js).
+const cached = new Map([['nova-shell-v8', ['/', '/api/v1/tasks']], ['nova-shell-0123456789ab', ['/', '/api/v1/tasks']]]);
 globalThis.caches = { keys: async () => [...cached.keys()], delete: async (k) => cached.delete(k) };
 
 const { forgetHere } = await import('../ui/js/forget-here.js');
@@ -42,6 +43,7 @@ test('a browser without IndexedDB still forgets its drafts and offline copies', 
   delete globalThis.indexedDB;
   local.set('nova.draft.c1', 'more');
   cached.set('nova-shell-v8', ['/']);
+  cached.set('nova-shell-0123456789ab', ['/']);
   try {
     await forgetHere();
     assert.equal(local.has('nova.draft.c1'), false);
