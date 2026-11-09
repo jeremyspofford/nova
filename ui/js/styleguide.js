@@ -19,6 +19,7 @@ import { UC_FRAMES, entryOf, ucEntry, ucFrame } from './sg-compositions.js';
 import { bindStatusIcons, statusIconEntry, statusIconSheet } from './sg-status-icons.js';
 import { bindJarvis, jarvisEntry } from './sg-jarvis.js';
 import { auEntry, auFrame, bindAutomations, isAuFrame } from './sg-automations.js';
+import { bindReceipts, isRcFrame, rcEntry, rcFrame } from './sg-receipts.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -29,6 +30,8 @@ const only = params.get('entry');
 const frame = UC_FRAMES.find(([k, s]) => `${k}-${s}` === params.get('frame') && entryOf(k) === only);
 // The same for the Automations rule editor's frames (?entry=automations-editor&frame=<state>).
 const automationsFrame = only === 'automations-editor' && isAuFrame(params.get('frame')) ? params.get('frame') : null;
+// And for the receipts viewer's frames (?entry=receipts&frame=<state>).
+const receiptsFrame = only === 'receipts' && isRcFrame(params.get('frame')) ? params.get('frame') : null;
 
 // ---- sample content: what Nova really shows, with neutral names ------------------------------
 
@@ -785,6 +788,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['ui-about', 'About, changelog and pipeline (proposed)', 'The running build said honestly, what changed in plain words, and where Nova stands, each item with its evidence. The dashboard’s data is sample data.', () => ucEntry(['about', 'changelog', 'pipeline'], (l, h) => state(l, h))],
       ['ui-orb', 'Nebula orb and theme (proposed)', 'The swirl from the owner’s icon, drawn at any size from the palette tokens; seven states by motion and light, still and distinct under reduced motion. Use the switch above for Nebula light and dark.', () => ucEntry(['orb'], (l, h) => state(l, h))],
       ['automations-editor', 'Automations rule editor (for the owner’s reaction)', 'Design first, nothing wired: the list, create, edit and turning off, Run now and what it led to, and the webhook token shown once. Drawn from the real rule model (src/core/triggers.ts): schedules, webhooks and connection events; a task or a message; no conditions. Rotating a token and its hint need the backend: today Nova keeps only the token’s hash and has no rotate route.', () => auEntry((l, h) => state(l, h))],
+      ['receipts', 'Receipts: what Nova sent out, to whom and why (for the owner’s reaction)', 'Design first, nothing wired, every receipt made up: the list by day with filters, one receipt with every field Nova keeps, the empty and Local-only states, and what receipts cover. Drawn from the real model (src/core/receipts.ts, GET /api/v1/receipts): references and hashes, never the text; no size, tokens or cost. Receipts cover model calls and tasks handed to workers, not every way Nova reaches out. The route filters only local or remote, task and conversation, so the destination and privacy-setting filters would work over what was fetched.', () => rcEntry((l, h) => state(l, h))],
       ['jarvis', 'Jarvis rings (proposed)', 'Compositions for the owner’s reaction, not a shipped theme: a HUD instrument of concentric segmented rings, arc sweeps and fine ticks in one cyan family on near-black, for the same ten states as the status icon. Told apart by structure and motion, also in greyscale and under reduced motion. Red only for stopped, amber only for needs-you.', jarvisEntry],
     ]],
     ['Views', [
@@ -817,6 +821,12 @@ function render() {
     bindAutomations(sg);
     return;
   }
+  if (receiptsFrame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => rcFrame(receiptsFrame));
+    bindReceipts(sg);
+    return;
+  }
   const one = ([id, name, about, body]) => `<article class="sg-entry" id="sg-${id}" aria-labelledby="sg-${id}-name"><header class="sg-entry-head"><h3 class="sg-entry-name" id="sg-${id}-name">${name}</h3><a class="sg-alone" href="?entry=${id}">Open alone</a></header><p class="sg-about">${about}</p>${draw(body)}</article>`;
   if (shown) {
     sg.innerHTML = shown.length ? `<p class="sg-back"><a class="link" href="/styleguide#sg-${only}">The whole styleguide</a></p>${shown.map(one).join('')}` : `<p class="sg-about">No entry is called “${only.replace(/[<>&"]/g, '')}”. <a class="link" href="/styleguide">The whole styleguide</a></p>`;
@@ -838,6 +848,7 @@ function render() {
   bindStatusIcons(sg);
   bindJarvis(sg);
   bindAutomations(sg);
+  bindReceipts(sg);
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }

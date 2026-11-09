@@ -279,3 +279,12 @@ body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { displ
   .au-detail { flex: 1 0 auto; padding: var(--space-4); }
   .au-panes[data-au-pane="list"] .au-open.is-on { background: transparent; font-weight: var(--type-weight-regular); }
 }
+
+/* The receipts viewer's compositions (sg-receipts.js): one pane at a time when narrow. */
+@container uc (max-width: 719px) {
+  .rc-panes { flex-direction: column; overflow: auto; }
+  .rc-list { flex: 1 0 auto; width: 100%; border-right: 0; }
+  .rc-panes[data-rc-pane="detail"] .rc-list, .rc-panes[data-rc-pane="list"] .rc-detail { display: none; }
+  .rc-detail { flex: 1 0 auto; padding: var(--space-4); }
+  .rc-panes[data-rc-pane="list"] .rc-open.is-on { background: transparent; font-weight: var(--type-weight-regular); }
+}
