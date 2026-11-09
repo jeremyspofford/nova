@@ -1,10 +1,10 @@
-// The agent status icon's state model and forms (ui/js/status-icon.js; owner spec 2026-11-08):
-// a change mid-morph starts from the form on screen and never jumps or restarts; success is a
-// flourish that settles to idle by itself; unknown states are refused; every form is the same
-// N points (so any form morphs into any other) and fits the canvas.
+// The agent status icon's state model and treatments (ui/js/status-icon.js; owner, 2026-11-08):
+// a change mid-transition starts from what is on screen and never jumps or restarts; success is a
+// flourish that settles to idle by itself; unknown states are refused; and every state is a
+// treatment of the one artwork (the state table), never a shape of its own.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MORPH_MS, STATUS_ICON_STATES, SUCCESS_MS, StatusModel, statePalettes, statusForm } from '../ui/js/status-icon.js';
+import { MORPH_MS, STATUS_ICON_STATES, SUCCESS_MS, StatusModel, stateTreatment } from '../ui/js/status-icon.js';
 
 // The same weights, a state at zero counting as absent.
 const close = (a, b, label) => {
@@ -19,7 +19,7 @@ test('the canonical states, and nothing else', () => {
   assert.throws(() => m.set('error', 10), /Unknown status: error/);
   assert.throws(() => m.set(undefined, 10), /Unknown status/);
   assert.equal(m.status(10), 'idle', 'a refused change changes nothing');
-  assert.throws(() => statusForm('warning'), /Unknown status/);
+  assert.throws(() => stateTreatment('warning'), /Unknown status/);
 });
 
 test('timing (owner, 2026-11-08): an 800 ms morph on a soft ease-in-out; success shows about a second', () => {
@@ -29,15 +29,6 @@ test('timing (owner, 2026-11-08): an 800 ms morph on a soft ease-in-out; success
   m.set('working', 0);
   assert.ok(Math.abs(m.weights(400).working - 0.5) < 1e-9, 'half way at half time');
   assert.ok(m.weights(80).working < 0.03 && m.weights(720).working > 0.97, 'eases in and out');
-});
-
-test('loops ease in and out over long periods: no linear spin', () => {
-  const gap = (s, a, b) => { const x = statusForm(s, a), y = statusForm(s, b); return Math.max(...x.map((v, i) => Math.abs(v - y[i]))); };
-  for (const [s, period] of [['thinking', 7], ['listening', 8]]) {
-    assert.ok(gap(s, 0, period) < 1e-5, `${s}: one period is a whole turn`);
-    assert.ok(gap(s, period, period + 0.01) * 20 < gap(s, period / 2, period / 2 + 0.01), `${s}: at rest at the period's end, moving at its middle`);
-  }
-  assert.ok(gap('idle', 10, 10.01) * 20 < gap('idle', 5, 5.01), 'idle: the same, over ten seconds');
 });
 
 test('a morph takes MORPH_MS and ends on the new form alone', () => {
@@ -99,28 +90,47 @@ test('reduced motion: every change is an instant swap, success included', () => 
   close(m.weights(200 + SUCCESS_MS), { idle: 1 }, 'and swaps to idle at once');
 });
 
-test('every form: the same N points, finite, inside the canvas; small sizes are broader', () => {
-  const N = statusForm('idle').length;
-  for (const s of STATUS_ICON_STATES) for (const small of [false, true]) for (const t of [0, 0.37, 5.2]) {
-    const f = statusForm(s, t, small);
-    assert.equal(f.length, N, `${s}: same point count`);
-    for (let i = 0; i < f.length; i += 5) {
-      assert.ok([...f.subarray(i, i + 5)].every(Number.isFinite), `${s}: finite`);
-      assert.ok(Math.abs(f[i]) + f[i + 2] <= 0.97 && Math.abs(f[i + 1]) + f[i + 2] <= 0.97, `${s}${small ? ' small' : ''}: point ${i / 5} fits`);
-      if (small) assert.ok(f[i + 2] >= 0.1, `${s} small: no hairlines`);
-    }
+// ---- the treatments (the owner's state table, nova-single-mark-n-direction-2026-11-08.md) --------
+
+const T = (s, t = 0) => stateTreatment(s, t);
+const moves = (s) => [0.3, 1.1, 2.9, 5.3].some((t) => JSON.stringify(T(s, t)) !== JSON.stringify(T(s, 0)));
+
+test('one mark: a state is a treatment (palette, brightness, motion), never a shape', () => {
+  for (const s of STATUS_ICON_STATES) {
+    const tr = T(s, 1.7);
+    assert.deepEqual(Object.keys(tr).sort(), ['bright', 'hue', 'pulse', 'sat', 'tint', 'tintAmt', 'twirl'], `${s}: only treatment fields`);
+    for (const k of ['bright', 'hue', 'pulse', 'sat', 'tintAmt', 'twirl']) assert.ok(Number.isFinite(tr[k]), `${s}.${k}`);
   }
-  // Paused and stopped hold still; the loops move.
-  for (const s of ['paused', 'stopped', 'offline']) assert.deepEqual(statusForm(s, 0), statusForm(s, 3), `${s} is still`);
-  for (const s of ['idle', 'thinking', 'working', 'listening', 'speaking']) assert.notDeepEqual(statusForm(s, 0), statusForm(s, 0.5), `${s} moves`);
+  assert.throws(() => stateTreatment('warning'), /Unknown status/);
 });
 
-test('colour: red only for stopped, amber leads needs-you, offline is dim', () => {
-  const tok = { core: [0.1, 0.5, 0.7], violet: [0.5, 0.2, 0.7], coral: [0.9, 0.6, 0.55], amber: [0.94, 0.55, 0.12], red: [1, 0.2, 0.2] };
-  const p = statePalettes(tok);
-  assert.deepEqual(Object.keys(p).sort(), [...STATUS_ICON_STATES].sort());
-  for (const [s, [stops]] of Object.entries(p)) assert.equal(stops.some((c) => c === tok.red), s === 'stopped', `${s}: red`);
-  for (const s of ['paused', 'success', 'listening', 'thinking']) assert.ok(!p[s][0].includes(tok.amber), `${s}: no amber`);
-  assert.ok(p['needs-you'][0].filter((c) => c === tok.amber).length >= 3, 'needs-you is amber');
-  assert.ok(p.offline[1] < Math.min(...Object.entries(p).filter(([s]) => s !== 'offline').map(([, [, b]]) => b)), 'offline is the dimmest');
+test('the state table: tints, brightness, and which states move', () => {
+  // Red only for stopped, amber only for needs-you, cyan leaning for listening; nothing else tints.
+  const tinted = Object.fromEntries(STATUS_ICON_STATES.map((s) => [s, T(s).tint]));
+  assert.deepEqual(tinted, { idle: null, listening: 'cyan', thinking: null, working: null, speaking: null, 'needs-you': 'amber', success: null, paused: null, stopped: 'red', offline: null });
+  assert.equal(T('offline').sat, 0, 'offline is greyscale');
+  assert.ok(T('paused').sat < 1 && T('paused').bright < 1, 'paused is dimmed');
+  const dimmest = Math.min(...STATUS_ICON_STATES.filter((s) => s !== 'offline').map((s) => T(s).bright));
+  assert.ok(T('offline').bright < dimmest, 'offline is the dimmest');
+  assert.ok(T('working').bright > T('idle').bright, 'working is brighter than idle');
+  // Frozen: paused, stopped, offline (and success, whose sweep runs on the model's clock).
+  for (const s of ['paused', 'stopped', 'offline', 'success']) assert.equal(moves(s), false, `${s} is still`);
+  for (const s of ['idle', 'listening', 'thinking', 'working', 'speaking', 'needs-you']) assert.equal(moves(s), true, `${s} moves`);
+  // Reduced motion draws t = 0: no twirl and no pulse, so the frame is the art itself, treated...
+  for (const s of STATUS_ICON_STATES) { const tr = T(s, 0); assert.equal(tr.twirl + tr.pulse, 0, `${s} at rest`); }
+  // ...and every state's still frame is its own: no two treatments are the same at rest.
+  const rest = STATUS_ICON_STATES.map((s) => JSON.stringify(T(s, 0)));
+  assert.equal(new Set(rest).size, rest.length, 'every state differs at rest');
+  // Listening pulses inward, speaking outward; thinking churns the palette.
+  assert.ok(T('listening', 2).pulse > 0 && T('speaking', 0.9).pulse < 0);
+  assert.ok(Math.abs(T('thinking', 1.5).hue) > 0.3);
+});
+
+test('motion eases in and out over long periods: no linear spin', () => {
+  // idle sways over 12 s: at rest at its turns, moving fastest through the middle.
+  const speed = (s, t) => Math.abs(T(s, t + 0.01).twirl - T(s, t).twirl);
+  assert.ok(speed('idle', 3) * 20 < speed('idle', 0), 'idle at rest at its turn, a quarter period in');
+  assert.ok(Math.abs(T('idle', 12).twirl - T('idle', 0).twirl) < 1e-9, 'one idle period is 12 s');
+  assert.ok(speed('working', 0) > speed('idle', 0) * 3, 'working moves faster than idle');
+  assert.ok(Math.abs(T('listening', 4).pulse - T('listening', 0).pulse) < 1e-9, 'one listening pulse is 4 s');
 });

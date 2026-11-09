@@ -1,29 +1,40 @@
 #!/usr/bin/env node
-// Draws Nova's app icon from the shipped status icon (ui/js/status-icon.js): the idle swirl, the
-// owner's supernova N, rendered by the same WebGL shader at production size and set on the
-// near-black tile of the state sheet (docs/builder-packet/ui-references/
-// nova-agent-state-system-sheet-2026-11-08.jpg). Colours are Nebula's dark tokens, read from
-// design-systems/nebula.json, so the icon and the status icon are one material.
-//   ui/icons/icon-192.png, icon-512.png   the tile, rounded, transparent corners (purpose any)
-//   ui/icons/maskable-512.png             full-bleed field, the swirl inside the 80% safe circle
-//   ui/icon.svg                           both renders as images: the full swirl, and the status
-//                                         icon's own small form at 24 px and under (the favicon)
-// Needs Chromium with WebGL; run it in the Playwright image as scripts/ui-test.sh runs the UI gate:
-//   CHROMIUM=… node scripts/app-icon.js            write the icons
+// Nova's mark is the owner's artwork, not code (docs/builder-packet/ui-references/
+// nova-mark-artwork-not-code-amendment-2026-11-08.md): the nebula vortex with a black core, in its
+// own dark rounded tile (nova-mark-owner-reference-regenerated-2026-11-08.webp, 1600×1600). This
+// script only crops and downscales that file; it draws nothing. It writes:
+//   ui/assets/nova-mark.webp              the source, as supplied
+//   ui/icons/mark-1024.webp               the tile, corners transparent: what the status icon
+//                                         samples (power of two, so WebGL can mipmap it)
+//   ui/icons/mark-vortex-512.webp         the vortex alone on transparency (the styleguide's crop
+//                                         comparison; the in-app mark uses the tile)
+//   ui/icons/icon-192.png, icon-512.png   the tile, corners transparent (purpose any)
+//   ui/icons/maskable-512.png             the tile's dark field full bleed, the vortex inside the
+//                                         80% safe circle
+//   ui/icon.svg                           the tile as images: 256 px, and a prefiltered 64 px for
+//                                         favicon sizes (24 px and under)
+//   ui/pair.html                          its <img data-nova-mark>, as a 256 px data: URI (the
+//                                         pre-pairing page has no public path for the image)
+// Every downscale halves step by step, so 16 px averages the artwork instead of aliasing it.
+// Needs Chromium (for WebP decode and encode); run it in the Playwright image as scripts/ui-test.sh
+// runs the UI gate:
+//   CHROMIUM=… node scripts/app-icon.js            write the assets
 //   NOVA_ICON_BEFORE=<dir> NOVA_ICON_SHOTS=<dir> CHROMIUM=… node scripts/app-icon.js --shots
 //                                                  also draw the comparison screenshots
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from 'node:fs';
 import { join, resolve, extname } from 'node:path';
 import { chromium } from 'playwright-core';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const ORIGIN = 'http://icon.test';
-const TYPES = { '.js': 'text/javascript', '.png': 'image/png', '.svg': 'image/svg+xml', '.html': 'text/html', '.webmanifest': 'application/manifest+json' };
-const dark = JSON.parse(readFileSync(join(ROOT, 'design-systems/nebula.json'), 'utf8')).modes.dark;
-const TOKENS = { '--orb-core': 'orb/core', '--accent-secondary': 'accent/secondary', '--orb-listening': 'orb/listening', '--orb-attention': 'orb/attention', '--status-error': 'status/error' };
-const vars = Object.entries(TOKENS).map(([v, t]) => `${v}:${dark[t]};`).join('');
-const FIELD = '#0b0b13'; // the sheet's field, beneath Nebula's bg/base (#0f0e11)
-const FINE = 576; // ribbon points for the large render (a multiple of 4, as the shader reads them)
+const TYPES = { '.js': 'text/javascript', '.png': 'image/png', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.html': 'text/html', '.webmanifest': 'application/manifest+json' };
+const SOURCE = 'docs/builder-packet/ui-references/nova-mark-owner-reference-regenerated-2026-11-08.webp';
+// Measured on the 1600 px source (the tile's outer edge, where its rim meets the backdrop, and the
+// corner radius from where the rim crosses each diagonal); the same numbers status-icon.js uses for
+// the core, as fractions of the tile.
+const TILE = { x: 156, y: 155, size: 1288, radius: 307 };
+const CORE = { x: (800 - 156) / 1288, y: (793 - 155) / 1288 }; // the vortex's centre
+const VORTEX_REACH = 674; // source px from the core to the vortex's farthest edge
 
 // The repo at /, a previous icon set (for the comparison) at /before/.
 async function serve(context, before) {
@@ -32,146 +43,114 @@ async function serve(context, before) {
     const path = decodeURIComponent(url.pathname);
     const file = path.startsWith('/before/') && before ? join(before, path.slice(8)) : join(ROOT, path);
     if (!existsSync(file)) return route.fulfill({ status: 404, body: 'missing' });
-    if (path === '/ui/js/status-icon.js' && url.search === '?fine') {
-      // The shipped module, its ribbon sampled at FINE points instead of 36: the same forms (every
-      // form is parametric in its point count) and the same shader, without the creases between
-      // straight segments that show once the icon is drawn hundreds of pixels wide.
-      const src = readFileSync(file, 'utf8');
-      if (!/^const N = 36;$/m.test(src)) throw new Error('status-icon.js no longer declares `const N = 36;`: update scripts/app-icon.js');
-      return route.fulfill({ status: 200, contentType: TYPES['.js'], body: src.replace(/^const N = 36;$/m, `const N = ${FINE};`) });
-    }
     return route.fulfill({ status: 200, contentType: TYPES[extname(file)] ?? 'application/octet-stream', body: readFileSync(file) });
   });
 }
 
-const blank = (body = '') => `<!doctype html><html><head><meta charset="utf-8"><style>:root{${vars}}html,body{margin:0;background:#000}</style></head><body>${body}</body></html>`;
-
-// In the page: render the idle swirl at `size` CSS px; return its canvas, the box its body fills,
-// and which renderer drew it.
-const RENDER = `
-window.renderIdle = async (size, fine = false) => {
-  const { statusIcon, setReducedMotion } = await import(fine ? '/ui/js/status-icon.js?fine' : '/ui/js/status-icon.js');
-  setReducedMotion(true); // the resting form, t = 0
-  const el = statusIcon({ status: 'idle', size });
-  document.body.append(el);
-  const c = el.querySelector('canvas');
-  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-  let x0 = c.width, y0 = c.height, x1 = 0, y1 = 0;
-  for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
-    if (d[(y * c.width + x) * 4 + 3] > 128) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+// In the page: crops of the source, each downscaled by halving.
+const CROP = `
+window.load = async (src) => { const i = new Image(); i.src = src; await i.decode(); return i; };
+// Draw a region of the image at \`size\`, halving until one last step is under 2x.
+window.scaled = (img, sx, sy, sw, size) => {
+  let c = document.createElement('canvas'); c.width = c.height = sw;
+  c.getContext('2d').drawImage(img, sx, sy, sw, sw, 0, 0, sw, sw);
+  while (c.width / 2 >= size) {
+    const h = document.createElement('canvas'); h.width = h.height = Math.round(c.width / 2);
+    const g = h.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(c, 0, 0, h.width, h.height);
+    c = h;
   }
-  // The farthest body pixel from the box's centre: what has to fit a maskable safe circle.
-  const cx = (x0 + x1 + 1) / 2, cy = (y0 + y1 + 1) / 2;
-  let reach = 0;
-  for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
-    if (d[(y * c.width + x) * 4 + 3] > 128) reach = Math.max(reach, Math.hypot(x + 0.5 - cx, y + 0.5 - cy));
-  }
-  el.remove();
-  return { c, box: { x0, y0, x1: x1 + 1, y1: y1 + 1, cx, cy, reach }, renderer: el.dataset.renderer };
-};
-// The tile: near-black, a breath lighter at the top, a faint rim; then the form, centred on its body.
-window.tile = (r, size, { fill, maskable = false, safe = 0.4, radius = 0.225 } = {}) => {
-  const out = document.createElement('canvas');
-  out.width = out.height = size;
-  const g = out.getContext('2d');
-  g.imageSmoothingEnabled = true;
-  g.imageSmoothingQuality = 'high';
-  const rr = maskable ? 0 : size * radius;
-  g.beginPath();
-  g.roundRect(0, 0, size, size, rr);
-  const bg = g.createLinearGradient(0, 0, 0, size);
-  bg.addColorStop(0, '#17161e');
-  bg.addColorStop(0.55, '${FIELD}');
-  bg.addColorStop(1, '#09090f');
-  g.fillStyle = bg;
-  g.fill();
-  if (!maskable && size >= 64) {
-    g.save();
-    g.clip();
-    g.lineWidth = size / 256;
-    const rim = g.createLinearGradient(0, 0, 0, size);
-    rim.addColorStop(0, 'rgba(255,255,255,0.10)');
-    rim.addColorStop(1, 'rgba(255,255,255,0.03)');
-    g.strokeStyle = rim;
-    g.beginPath();
-    g.roundRect(g.lineWidth / 2, g.lineWidth / 2, size - g.lineWidth, size - g.lineWidth, rr - g.lineWidth / 2);
-    g.stroke();
-    g.restore();
-  }
-  const { c, box } = r;
-  // Scale: the body's larger side fills \`fill\` of the tile, or its reach fits the safe circle.
-  const k = maskable ? (safe * size) / box.reach : (fill * size) / Math.max(box.x1 - box.x0, box.y1 - box.y0);
-  const w = c.width * k;
-  g.save();
-  g.beginPath();
-  g.roundRect(0, 0, size, size, rr);
-  g.clip();
-  // Downscale in halving steps so the swirl's fine edge and stars average rather than alias.
-  let src = c, sw = c.width;
-  while (sw / 2 >= w) {
-    const half = document.createElement('canvas');
-    half.width = half.height = Math.round(sw / 2);
-    const h = half.getContext('2d');
-    h.imageSmoothingQuality = 'high';
-    h.drawImage(src, 0, 0, half.width, half.height);
-    src = half; sw = half.width;
-  }
-  g.drawImage(src, size / 2 - box.cx * k, size / 2 - box.cy * k, w, w);
-  g.restore();
+  const out = document.createElement('canvas'); out.width = out.height = size;
+  const g = out.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(c, 0, 0, size, size);
   return out;
+};
+// The tile with its corners cut on the artwork's own rounded edge.
+window.tileAt = (img, t, size) => {
+  const c = window.scaled(img, t.x, t.y, t.size, size), g = c.getContext('2d');
+  g.globalCompositeOperation = 'destination-in';
+  g.beginPath(); g.roundRect(0, 0, size, size, (t.radius / t.size) * size); g.fill();
+  return c;
+};
+// Maskable: the tile's own dark interior, full bleed, the vortex scaled into the safe circle.
+window.maskable = (img, t, core, reach, size) => {
+  const k = (0.4 * size) / reach; // the safe circle's radius over the vortex's reach
+  const out = document.createElement('canvas'); out.width = out.height = size;
+  const g = out.getContext('2d');
+  const inset = 18; // inside the rim
+  const sw = t.size - 2 * inset, piece = window.scaled(img, t.x + inset, t.y + inset, sw, Math.round(sw * k));
+  // The field: the interior's own colour, sampled just inside the rim.
+  const d = piece.getContext('2d').getImageData(4, Math.round(piece.height / 2), 1, 1).data;
+  g.fillStyle = 'rgb(' + d[0] + ' ' + d[1] + ' ' + d[2] + ')';
+  g.fillRect(0, 0, size, size);
+  const cx = (core.x * t.size - inset) * k, cy = (core.y * t.size - inset) * k;
+  g.save(); g.beginPath(); g.roundRect(size / 2 - cx, size / 2 - cy, piece.width, piece.height, (t.radius - inset) * k); g.clip();
+  g.drawImage(piece, size / 2 - cx, size / 2 - cy); g.restore();
+  return out;
+};
+// The vortex alone: the tile's interior, its near-black keyed to transparency, the black core kept.
+window.vortexAt = (img, t, core, size) => {
+  const c = window.scaled(img, t.x, t.y, t.size, size), g = c.getContext('2d');
+  const px = g.getImageData(0, 0, size, size), d = px.data;
+  const r0 = 0.09 * size; // the core disc stays opaque black
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const i = (y * size + x) * 4, m = Math.max(d[i], d[i + 1], d[i + 2]);
+    const inCore = Math.hypot(x - core.x * size, y - core.y * size) < r0;
+    d[i + 3] = inCore ? 255 : Math.round(255 * Math.min(1, Math.max(0, (m - 14) / 36)));
+  }
+  g.putImageData(px, 0, 0);
+  return c;
 };
 `;
 
 async function icons(b) {
-  // The full swirl, large (dpr 1: a 1024 canvas, twice the largest icon).
-  const ctx = await b.newContext({ deviceScaleFactor: 1, reducedMotion: 'reduce' });
+  const ctx = await b.newContext({ deviceScaleFactor: 1 });
   await serve(ctx);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.route(`${ORIGIN}/`, (r) => r.fulfill({ contentType: 'text/html', body: blank() }));
+  await page.route(`${ORIGIN}/`, (r) => r.fulfill({ contentType: 'text/html', body: '<!doctype html><meta charset="utf-8"><body></body>' }));
   await page.goto(`${ORIGIN}/`);
-  await page.addScriptTag({ content: RENDER });
-  const out = await page.evaluate(async () => {
-    const big = await window.renderIdle(1024, true);
-    if (big.renderer !== 'webgl') throw new Error(`renderer is ${big.renderer}, not webgl`);
+  await page.addScriptTag({ content: CROP });
+  const out = await page.evaluate(async ({ src, t, core, reach }) => {
+    const img = await window.load(src);
+    if (img.naturalWidth !== 1600) throw new Error(`the source is ${img.naturalWidth} px wide, not 1600: re-measure TILE`);
     const png = (c) => c.toDataURL('image/png');
-    const any = { fill: 0.82 };
+    const webp = (c, q = 0.9) => c.toDataURL('image/webp', q);
     return {
-      box: big.box,
-      'ui/icons/icon-512.png': png(window.tile(big, 512, any)),
-      'ui/icons/icon-192.png': png(window.tile(big, 192, any)),
-      'ui/icons/maskable-512.png': png(window.tile(big, 512, { maskable: true, safe: 0.37 })),
-      large: window.tile(big, 512, any).toDataURL('image/webp', 0.9),
+      'ui/icons/mark-1024.webp': webp(window.tileAt(img, t, 1024), 0.9),
+      'ui/icons/mark-vortex-512.webp': webp(window.vortexAt(img, t, core, 512), 0.9),
+      'ui/icons/icon-512.png': png(window.tileAt(img, t, 512)),
+      'ui/icons/icon-192.png': png(window.tileAt(img, t, 192)),
+      'ui/icons/maskable-512.png': png(window.maskable(img, t, core, reach, 512)),
+      large: webp(window.tileAt(img, t, 256), 0.9),
+      small: png(window.tileAt(img, t, 64)),
+      pair: webp(window.tileAt(img, t, 256), 0.85),
     };
-  });
-  // The status icon's own small form (≤ 24 px), drawn at 3x: what the favicon shows.
-  const sctx = await b.newContext({ deviceScaleFactor: 3, reducedMotion: 'reduce' });
-  await serve(sctx);
-  const sp = await sctx.newPage();
-  await sp.route(`${ORIGIN}/`, (r) => r.fulfill({ contentType: 'text/html', body: blank() }));
-  await sp.goto(`${ORIGIN}/`);
-  await sp.addScriptTag({ content: RENDER });
-  const small = await sp.evaluate(async () => {
-    const s = await window.renderIdle(16); // small form, 48 px canvas
-    return window.tile(s, 48, { fill: 0.9, radius: 0.2 }).toDataURL('image/png');
-  });
+  }, { src: `/${SOURCE}`, t: TILE, core: CORE, reach: VORTEX_REACH });
   if (errors.length) throw new Error(errors.join('\n'));
   const bytes = (u) => Buffer.from(u.split(',')[1], 'base64');
-  for (const f of ['ui/icons/icon-512.png', 'ui/icons/icon-192.png', 'ui/icons/maskable-512.png']) writeFileSync(join(ROOT, f), bytes(out[f]));
+  mkdirSync(join(ROOT, 'ui/assets'), { recursive: true });
+  copyFileSync(join(ROOT, SOURCE), join(ROOT, 'ui/assets/nova-mark.webp'));
+  for (const f of ['ui/icons/mark-1024.webp', 'ui/icons/mark-vortex-512.webp', 'ui/icons/icon-512.png', 'ui/icons/icon-192.png', 'ui/icons/maskable-512.png']) writeFileSync(join(ROOT, f), bytes(out[f]));
   writeFileSync(join(ROOT, 'ui/icon.svg'), [
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">',
-    // Generated by scripts/app-icon.js from ui/js/status-icon.js. At favicon size the status icon's
-    // small form (fewer, broader arms) replaces the full swirl, which muddies under 24 px.
+    // Generated by scripts/app-icon.js from the owner's artwork (ui/assets/nova-mark.webp). At
+    // favicon size a 64 px downscale, prefiltered by halving, stands in for the 256 px one.
     '<style>.s{display:none}@media (max-width:24px){.l{display:none}.s{display:inline}}</style>',
     `<image class="l" width="512" height="512" href="${out.large}"/>`,
-    `<image class="s" width="512" height="512" href="${small}"/>`,
+    `<image class="s" width="512" height="512" href="${out.small}"/>`,
     '</svg>',
     '',
   ].join('\n'));
+  // /pair is served before pairing, and its allowlist holds status-icon.js and no image of the mark
+  // (owner, 2026-11-08). So its <img data-nova-mark> carries the mark inline: 256 px (power of two,
+  // so it mipmaps), enough for the 112 px pairing icon at 2x.
+  const pairPath = join(ROOT, 'ui/pair.html');
+  const pair = readFileSync(pairPath, 'utf8');
+  const tag = /<img data-nova-mark src="[^"]*"/;
+  if (!tag.test(pair)) throw new Error('ui/pair.html has no <img data-nova-mark src="…">');
+  writeFileSync(pairPath, pair.replace(tag, `<img data-nova-mark src="${out.pair}"`));
   await ctx.close();
-  await sctx.close();
-  console.log('icons written; body box at 1024:', JSON.stringify(out.box));
+  console.log('assets written from', SOURCE, `; /pair's inline mark is ${(out.pair.length / 1024).toFixed(1)} KB`);
 }
 
 // The comparison: before and after at 512, 192, 32 and 16 (the small ones also enlarged, pixel for
@@ -208,7 +187,7 @@ async function shots(b, before, dir) {
     await page.locator(el).first().screenshot({ path: join(dir, name) });
     await page.unroute(`${ORIGIN}/shot`);
   };
-  await shoot('before-after.png', `<div id="s" style="display:inline-block"><h2>Before: the teal disc</h2>${set('/before/icons', '/before/icon.svg')}<h2>After: the idle swirl, from ui/js/status-icon.js</h2>${set('/ui/icons', '/ui/icon.svg')}</div>${zoom}`, '#s');
+  await shoot('before-after.png', `<div id="s" style="display:inline-block"><h2>Before: the drawn ribbon swirl</h2>${set('/before/icons', '/before/icon.svg')}<h2>After: the owner’s artwork (ui/assets/nova-mark.webp), cropped and downscaled</h2>${set('/ui/icons', '/ui/icon.svg')}</div>${zoom}`, '#s');
 
   // Maskable: the 512 under its 80% safe circle, and as Android's common masks crop it.
   const masks = [['circle', '50%'], ['squircle', '30%'], ['rounded square', '18%']];

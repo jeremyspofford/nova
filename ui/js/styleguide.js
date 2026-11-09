@@ -672,7 +672,7 @@ function entries() {
     ['Foundations', [
       ['color', 'Colour', `The ${tokensOf((t) => t.group === 'color').length} colour tokens every design system defines. Components use nothing else.`,
         () => `<div class="sg-grid">${tokensOf((t) => t.group === 'color').map((n) => `<div class="sg-swatch"><div class="sg-chip" style="background: var(${n})"></div><span class="sg-name">${n}</span><span class="sg-value">${value(n)}</span></div>`).join('')}</div>`],
-      ['nebula-match', 'Nebula with the status icons', 'The acceptance page for the theme match (2026-11-08): Nebula’s neutral surfaces and real components beside the status icons, whose ribbon is drawn from the same five material tokens as the orb, sampled from the state sheet. Use the switch above for light and dark.',
+      ['nebula-match', 'Nebula with the status icons', 'The acceptance page for the theme match (2026-11-08): Nebula’s neutral surfaces and real components beside the status icons, whose mark is the owner’s artwork, its states tinted by the same material tokens as the orb. Use the switch above for light and dark.',
         () => {
           const chips = (names) => `<div class="sg-grid">${names.map((t) => `<div class="sg-swatch"><div class="sg-chip" style="background: var(${css(t)})"></div><span class="sg-name">${t}</span><span class="sg-value">${value(css(t))}</span></div>`).join('')}</div>`;
           return `${state('Surfaces, text and lines', chips(['bg/base', 'bg/raised', 'bg/overlay', 'surface/card', 'surface/card-hover', 'border/subtle', 'border/strong', 'text/primary', 'text/secondary', 'text/faint']))}
@@ -700,7 +700,7 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['topology', 'Topology', 'Machines, their services, and versions in three layers. The hub leads the diagram; on a phone the same machines form an ordered list.', topologyEntry],
       ['orb', 'Orb', 'Nova’s presence: abstract light, no face, once per view. Seven fixed states; the hero on Home, the rail size everywhere else.',
         () => `<div class="sg-grid">${ORB_STATES.map((s) => `<div class="sg-swatch">${orb({ state: s, size: 'rail' })}<span class="sg-name">${s}</span></div>`).join('')}</div>${state('Sizes', `<div class="sg-demo-row sg-orb-sizes">${ORB_SIZES.map((s) => `<div class="sg-swatch">${orb({ state: 'idle', size: s })}<span class="sg-name">${s}</span></div>`).join('')}</div>`)}`],
-      ['status-icon', 'Status icon', 'The agent’s state as one iridescent ribbon, reshaped per state and morphing between them; told apart by shape at every size, not by colour alone. Success is a one-second flourish that settles to idle. Red only for stopped, amber only for needs-you. Rail, header and task rows only, never per message.',
+      ['status-icon', 'Status icon', 'Nova’s one mark, the owner’s artwork, never redrawn: each state is a treatment of it (palette, brightness and motion), changing over 800 ms. Success is a one-second sweep that settles to idle. Red only for stopped, amber only for needs-you. Rail, header and task rows only, never per message.',
         statusIconEntry],
       ['status', 'Status','One vocabulary everywhere, each with a fixed colour. Verified always opens its evidence.',
         () => `<div class="sg-demo-row">${['quiet', 'working', 'waiting', 'needs-you', 'failed'].map((s) => status(s)).join('')}${status('verified', { task: 'v1' })}</div>`],
