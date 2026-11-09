@@ -18,7 +18,7 @@ import { claudeCode } from './claude-code.ts';
 import { codex } from './codex.ts';
 import { customCli, programOf } from './custom-cli.ts';
 import { CONFIRMATION_SYSTEM, Inbox, STATUSES, checkSignature, n8n, timeoutS as n8nTimeout, SIGNATURE_HEADER, type Callback } from './n8n.ts';
-import { openaiCompatible, roleOf } from './openai.ts';
+import { MODEL_MISSING, openaiCompatible, roleOf } from './openai.ts';
 import { relay } from './relay.ts';
 import { CONTRACT_SYSTEM, agentPrompt, contractPrompt, parseContract, summarize } from './prompt.ts';
 import { applyFiles, fileRefs, notCopied, outOfScope, treeHash, unifiedDiff, type Change, type Scope, type TaskSpace, type TestAsk } from './taskspace.ts';
@@ -298,7 +298,7 @@ export class Providers extends EventEmitter {
       const held = !impl.reportedWhere && this.where(id).coarse === 'remote' && !permits(this.#o.profile.privacyDefault(), 'remote');
       return { state: 'unchecked', words: held ? 'Not checked: it is off your devices, and your privacy setting keeps Nova from reaching it.' : 'Not checked yet.', checked_at: null };
     }
-    return p.problem ? { state: 'unreachable', words: impl.plainProbe ? p.problem : `Unreachable. ${p.problem}`, checked_at: p.at } : { state: 'ready', words: `Reachable${impl.url?.(c) ? ` at ${new URL(impl.url(c)!).host}` : ''}.`, checked_at: p.at };
+    return p.problem ? { state: 'unreachable', words: impl.plainProbe || p.problem.startsWith(MODEL_MISSING) ? p.problem : `Unreachable. ${p.problem}`, checked_at: p.at } : { state: 'ready', words: `Reachable${impl.url?.(c) ? ` at ${new URL(impl.url(c)!).host}` : ''}.`, checked_at: p.at };
   }
 
   // Asks an HTTP provider's address whether it answers, and keeps the answer.

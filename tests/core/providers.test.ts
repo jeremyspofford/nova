@@ -266,10 +266,18 @@ test('openai-compatible (stand-in server, SSE): the JSON files contract applied 
     assert.match(sent.messages[0].content, /Reply with one JSON object/);
     assert.match(sent.messages[1].content, /<file path="calc\/sum.mjs">\nexport const sum = \(a, b\) => a - b;/);
     assert.equal(core.receipts.list({ task_id: t.id })[0]!.egress, 'local');
-    // A wrong model name is unreachable in plain words.
+    // A wrong model name: the server was reached, so the words say the model is missing, not
+    // that it is unreachable (the state still says it can't be used).
     core.providers.configure('openai-compatible', { model: 'not-pulled' });
     await core.providers.check('openai-compatible');
-    assert.match(core.providers.health('openai-compatible').words, /^Unreachable\. .* has no model called not-pulled/);
+    const h = core.providers.health('openai-compatible');
+    assert.equal(h.state, 'unreachable');
+    assert.match(h.words, /^Model missing\. .* answers, but has no model called not-pulled \(it has example-coder\)\.$/);
+    assert.doesNotMatch(h.words, /Unreachable/);
+    // An address that doesn't answer is still unreachable, in those words.
+    core.providers.configure('openai-compatible', { base_url: 'http://127.0.0.1:1/v1', model: 'example-coder' }, { confirm: true });
+    await core.providers.check('openai-compatible');
+    assert.match(core.providers.health('openai-compatible').words, /^Unreachable\. Nova couldn’t reach 127\.0\.0\.1:1/);
   } finally {
     await core.close();
     await fake.close();
