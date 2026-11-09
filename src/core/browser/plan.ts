@@ -5,7 +5,8 @@
 import { CoreError } from '../errors.ts';
 import { CARD_FIELD, PAY_PATH, PAY_TOKENS, PAY_WORDS, looksLikeCard, parseMoney } from './copilot.ts';
 import type { Egress } from '../workers.ts';
-import { isObj } from '../envelope.ts';
+import { isObj, type Tier } from '../envelope.ts';
+import { DEFAULT_TIERS, type Tiers } from '../approvals/index.ts';
 
 // `commits`: this is the step that makes the task's outside effect happen (sends the form, places
 // the order). Nova writes it down before the step runs, so after a failure it knows whether that
@@ -220,8 +221,15 @@ export const hasCheckout = (p: Pick<Plan, 'steps'>): boolean => p.steps.some((s)
 // is tier 1, act and report (owner ruling 2026-11-09, docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md:
 // "If they have access to a credential, they should be able to use it freely."); it was tier 2.
 // A sign-in never lowers a checkout or an account change. Reading is 0.
+// Each is a setting now (approvals/index.ts: browser.send, browser.checkout, browser.account; these
+// are their defaults): a plan runs at the highest tier any of its parts is set to. Lowering checkout
+// never lets Nova press pay (PAY_REFUSAL holds whatever the tier).
 export const SEND_TIER = 1;
-export const minTierOf = (p: Pick<Plan, 'steps'> & { account?: unknown }): 0 | 1 | 3 => (hasCheckout(p) || isAccount(p) ? 3 : sends(p) ? SEND_TIER : 0);
+export const minTierOf = (p: Pick<Plan, 'steps'> & { account?: unknown }, tiers: Tiers = DEFAULT_TIERS): Tier => Math.max(
+  hasCheckout(p) ? tiers.effective('browser.checkout') : 0,
+  isAccount(p) ? tiers.effective('browser.account') : 0,
+  sends(p) ? tiers.effective('browser.send') : 0,
+) as Tier;
 
 export function planEgress(p: Plan): Egress {
   return p.allowed_hosts.some((h) => hostEgress(h) === 'remote') ? 'remote' : 'local';

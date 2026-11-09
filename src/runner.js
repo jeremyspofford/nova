@@ -44,6 +44,13 @@ export const GUARDED = {
   // it still asks (the integrator's constraint, docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md).
   home_call: 'change your home',
 };
+// What a tainted run asks before: a step named above, or a chat tool that acts on a capability in the
+// approvals registry (src/core/approvals, Registration.tools), whatever registered it. Null: neither.
+export function guardedWords(name, approvals) {
+  if (Object.hasOwn(GUARDED, name)) return GUARDED[name];
+  // Fails closed: if the registry can't be read, the step asks rather than going on its own.
+  try { return approvals?.guardWords(name) ?? null; } catch { return 'take this step'; }
+}
 // The person's own files: never screened when read (their writes are guarded instead).
 const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
 // Nova's own status tools can relay outside text (a coding agent's failure reason, a capture
@@ -130,6 +137,7 @@ export class Runner extends EventEmitter {
     this.coding = null; // set by the server: coding runs (the core's, M10c)
     this.ops = null; // set by the server: infrastructure, networking and accounts (the core's, M10d)
     this.homeControl = null; // set by the server: Home Assistant service calls (the core's, owner ruling 2026-11-09)
+    this.approvals = null; // set by the server: the core's approvals registry (tiers as settings; the tools' words and the guard follow it)
     // Cost caps (Amendment 2026-10-31-B Part 5), set by the server: the core's Caps. Each run of a
     // ledger task (the chat-run worker says which, in runTasks) is metered and capped; a person's
     // own conversation is metered only. Without it, nothing here changes.
@@ -380,7 +388,7 @@ export class Runner extends EventEmitter {
       let streamed = '';
       // MEMORY.md may have been edited by hand since Nova last wrote it: take that in first.
       if (this.memory.records) this.memory.sync();
-      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, briefing, ...(this.identity ? { identity: this.identity.persona() } : {}) });
+      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, briefing, approvals: this.approvals, ...(this.identity ? { identity: this.identity.persona() } : {}) });
       const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
       // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
       // hash, and where it went. Written before the call, so it exists even if the call fails.
@@ -454,7 +462,7 @@ export class Runner extends EventEmitter {
       const ctx = {
         home: this.config.home, signal, timeoutMs: this.config.execTimeoutMs, searchUrl: this.config.searchUrl,
         gmail: this.gmail, useSkill: (name) => this.useSkill(sessionId, tag, run, name),
-        schedules: this.schedules, sessionId, self: this.self, coding: this.coding, ops: this.ops, homeControl: this.homeControl,
+        schedules: this.schedules, sessionId, self: this.self, coding: this.coding, ops: this.ops, homeControl: this.homeControl, approvals: this.approvals,
         // A helper started from a run that read outside content starts with that taint.
         delegate: (args) => this.helpers.spawn({ ...args, parent: sessionId, turn, taint: run.taint }),
         seen: (p) => { page = p; },
@@ -813,7 +821,9 @@ export class Runner extends EventEmitter {
     const asks = tainted || (standing && !!run.toolOutput);
     // Any other step that needs an OK (a tool added later: sending, paying, sharing, pairing)
     // is guarded the same way: in a tainted run it never goes on its own.
-    let what = GUARDED[call.name] ?? (standing ? 'change your standing files' : tool.needsApproval ? 'take this step' : null);
+    // So is a chat tool that acts on any capability in the approvals registry, whoever registered it
+    // (an extension, a service Nova built): guardedWords.
+    let what = guardedWords(call.name, this.approvals) ?? (standing ? 'change your standing files' : tool.needsApproval ? 'take this step' : null);
     // An address the model put together, in a tainted run, asks, whatever it carries: matching
     // can't keep up with chunking, short encodings or reversal. A link it read is free.
     let follow = null;

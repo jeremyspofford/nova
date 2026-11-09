@@ -68,6 +68,8 @@ import { NovaComputer, type ComputerOptions } from './computer/index.ts';
 import { computerRoutes } from './computer/routes.ts';
 import { Coding, type CodingOptions } from './coding/index.ts';
 import { codingRoutes } from './coding/routes.ts';
+import { Approvals } from './approvals/index.ts';
+import { approvalRoutes } from './approvals/routes.ts';
 import { Infra, type InfraOptions } from './infra/index.ts';
 import { infraRoutes } from './infra/routes.ts';
 import { Network, type NetworkOptions } from './network/index.ts';
@@ -318,6 +320,9 @@ export function createCore(o: CoreOptions) {
   let meshRole: MeshRole | null = null;
   log.local = () => (meshRole ? meshRole.role() : place.role) !== 'hub';
   const profile = new Profile(db, now);
+  // Approval tiers as settings (NOVA-SPEC §6; owner ruling 2026-11-09, decision 8): each
+  // capability's default and floor, the person's overrides in the profile. Every worker below asks it.
+  const approvals = new Approvals({ profile, log });
   const caps = new Caps({
     home: o.home, profile, now,
     timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
@@ -337,7 +342,7 @@ export function createCore(o: CoreOptions) {
     ].filter(Boolean),
   });
   // Page reads are screened by the ingest gate, wired below with the rest.
-  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}) });
+  const browser = new Browser({ home: o.home, log, now, hub: hubAddress, tiers: approvals, ...(o.browserLaunch ? { launch: o.browserLaunch } : {}) });
   const browserChecks = browserCheckers(o.home);
   verifier.registerKind('screenshot', browserChecks.screenshot);
   verifier.registerKind('url', browserChecks.url);
@@ -372,6 +377,18 @@ export function createCore(o: CoreOptions) {
   };
   const setup = new Setup({ profile, ledger, now, onboarding, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
+  // Every extension's declared capabilities are in the approvals registry while it is installed:
+  // checked on install (no clash with Nova's own or another's), registered, and dropped on removal.
+  // The person's overrides stay by id, so a reinstall finds them.
+  extensions.addCheck((m) => approvals.check(m));
+  const registerExtension = (id: string) => {
+    try { approvals.registerExtension(extensions.get(id).manifest); } catch (e) { log.problem('approvals', `Nova couldn’t take in the approval tiers an extension declares (${id}).`, { detail: (e as Error)?.stack ?? String(e) }); }
+  };
+  for (const x of extensions.list()) registerExtension(x.id);
+  extensions.on('change', (c: { id: string; state: string; version?: string }) => {
+    if (c.state === 'removed') approvals.unregisterOwner({ kind: 'extension', id: c.id });
+    else if (c.state === 'installed' || c.version !== undefined) { approvals.unregisterOwner({ kind: 'extension', id: c.id }); registerExtension(c.id); }
+  });
   const design = new Design({ extensions, profile });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
   const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
@@ -408,7 +425,7 @@ export function createCore(o: CoreOptions) {
   // Made once the ledger's other parts exist (below); capture asks it whether retention may run.
   let resilience: Resilience | null = null;
   const providers = new Providers({
-    db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now,
+    db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now, tiers: approvals,
     custom: o.agent, secret: providerSecret, meshHost: (h) => meshHosts().has(h),
     fire: (input) => triggers.fire(input),
     models: { infer: (r) => models!.infer(r), probe: (role) => models!.probe(role), cloudName: () => models?.cloud()?.name ?? null },
@@ -553,7 +570,7 @@ export function createCore(o: CoreOptions) {
   // command's output is screened by the ingest gate as tool output.
   const computer = new NovaComputer({
     db, log, home: o.home, ledger, verifier, now, privacy: () => profile.privacyDefault(),
-    screen: (r) => ingest.screen({ text: r.text, source: { kind: 'tool', origin: r.origin, ref: r.ref } }),
+    screen: (r) => ingest.screen({ text: r.text, source: { kind: 'tool', origin: r.origin, ref: r.ref } }), tiers: approvals,
     ...(o.computer ?? {}),
   });
   ledger.workers.set(computer.worker.id, computer.worker);
@@ -561,7 +578,7 @@ export function createCore(o: CoreOptions) {
   // its agent through the provider registry, its worktree Nova's own, its merge tier 3. The person is
   // told as a proactive message, through the trigger engine.
   const coding = new Coding({
-    db, log, home: o.home, ledger, verifier, providers, now, privacy: () => profile.privacyDefault(),
+    db, log, home: o.home, ledger, verifier, providers, now, privacy: () => profile.privacyDefault(), tiers: approvals,
     ...(o.coding ?? {}),
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'coding', name: PARTS.coding, payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('coding', 'Nova couldn’t tell you about a coding run.', { error: (e as Error).message })); },
   });
@@ -600,7 +617,7 @@ export function createCore(o: CoreOptions) {
   // Infrastructure through chat (M10d): plan (tier 1), then apply (tier 3) of exactly the reviewed
   // plan, inside the project's budget, after a checkpoint. Alerts are problems and messages.
   const infra = new Infra({
-    db, log, home: o.home, ledger, verifier, vault, now, privacy: () => profile.privacyDefault(),
+    db, log, home: o.home, ledger, verifier, vault, now, privacy: () => profile.privacyDefault(), tiers: approvals,
     checkpoint: (reason) => checkpoints.auto(reason),
     ...(o.infra ?? {}),
     notify: (key, text) => { void triggers.fire({ class: 'proactive', source: 'infra', name: PARTS.infra, payload: { key }, dedup_key: key, action: { kind: 'message', text } }).catch((e) => log.warn('infra', 'Nova couldn’t tell you about an infrastructure run.', { error: (e as Error).message })); },
@@ -610,7 +627,7 @@ export function createCore(o: CoreOptions) {
   // then the dead-man's switch on the device mesh: no contact from the person's devices within the
   // window (mesh.contact_window_s), and Nova puts the snapshot back by itself.
   const network = new Network({
-    db, log, home: o.home, ledger, verifier, vault, devices, now, privacy: () => profile.privacyDefault(),
+    db, log, home: o.home, ledger, verifier, vault, devices, now, privacy: () => profile.privacyDefault(), tiers: approvals,
     checkpoint: (reason) => checkpoints.auto(reason),
     windowS: () => { const v = profile.get<number>('mesh', 'contact_window_s'); return typeof v === 'number' ? v : 300; },
     contactKinds: () => profile.get<unknown>('mesh', 'contact_kinds'),
@@ -802,7 +819,10 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     },
     addWorker: (w) => { ledger.workers.set(w.id, w); },
     addConfirmation: (system, check) => verifier.registerConfirmation(system, check),
+    // A connector's manifest declares its capabilities that act; they go into the approvals registry.
+    approvals,
   });
+  // Home Assistant's service tier is the registry's home-assistant.service, declared in its manifest.
   const homeConnector = connectors.register(homeAssistant(o.homeAssistant)) as HomeAssistantConnector;
   // Home Assistant through chat (home_call, src/tools.js): a service call the person asks for, as
   // the connector's own task at the tier its domain needs (owner ruling 2026-11-09: 1 by default).
@@ -1178,6 +1198,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
           if (to > PRIVACY_MODES.indexOf(profile.privacyDefault()) && body.confirm !== true) throw new CoreError('validation', 'Letting more of your work leave your devices loosens a gate (tier 3): confirm it every time (confirm: true).');
         }
         if (section === 'providers' || (section === 'policy' && params.key === 'task_tests')) throw new CoreError('validation', 'Providers are set through /api/v1/providers, so their settings are checked.');
+        if (section === 'policy' && params.key === 'approvals') throw new CoreError('validation', 'Approval tiers are set through PUT /api/v1/approvals/{capability}, so floors and confirmations are checked.');
         if (section === 'capture') throw new CoreError('validation', 'Capture settings are set through PUT /api/v1/capture/settings, so they are checked.');
         if (section === 'models') throw new CoreError('validation', 'Models are set through /api/v1/models, so their settings are checked.');
         if (section === 'backups') throw new CoreError('validation', 'Backups are set through PUT /api/v1/backups/settings, so the folders are checked.');
@@ -1586,13 +1607,15 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     // to approve.
     {
       method: 'POST', path: '/vault/reset', access: 'approver', summary: 'Start a new, empty vault (tier 3: needs {confirm: true}, every time), for one that can’t be opened: the old file is kept aside in vault/ as secrets.json.unopenable-<time>. Every connection and key must be set again.', body: '{confirm: true}',
-      handle: ({ body }) => vault.reset(body.confirm === true),
+      // Its tier is the registry's (vault.reset): floor 3, so it always needs the confirmation.
+      handle: ({ body }) => vault.reset(body.confirm === true || approvals.effective('vault.reset') < 3),
     },
     {
       method: 'DELETE', path: '/vault/{name}', access: 'approver', summary: 'Delete a provider’s secret from the vault (tier 3: needs {confirm: true}, every time). It can’t be brought back.', body: '{confirm: true}',
       handle: ({ params, body }) => {
         if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(params.name!)) throw new CoreError('validation', 'A secret’s name is capital letters, digits and underscores, like API_KEY.');
-        if (body?.confirm !== true) throw new CoreError('validation', 'Deleting a secret from the vault is tier 3: it needs {confirm: true}, every time.');
+        // Its tier is the registry's (vault.delete): floor 3, so it always needs the confirmation.
+        if (body?.confirm !== true && approvals.effective('vault.delete') >= 3) throw new CoreError('validation', 'Deleting a secret from the vault is tier 3: it needs {confirm: true}, every time.');
         return { name: params.name, deleted: vault.delete(`provider/${params.name}`) };
       },
     },
@@ -1602,6 +1625,8 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     { method: 'POST', path: '/connectors/{id}/disconnect', summary: 'Disconnect: sign Nova out at the service where it can, then delete its secrets, the rules listening to it and its settings.', handle: ({ params }) => connectors.disconnect(params.id!) },
     ...connectors.routes(),
     ...providers.routes(),
+    // Approval tiers as settings (owner ruling 2026-11-09, decision 8): any paired person.
+    ...approvalRoutes(approvals),
     // ---- capture (M6 plan §1) ----
     ...captureRoutes(capture),
     ...models.routes(),
@@ -1780,7 +1805,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
 
   const core = {
     self,
-    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network,
+    db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network, approvals,
     ingest, vault, broker: o.broker ?? null, connectors, homeControl, capture, models, changes, caps, passkeys,
     // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
     // asking for a template. Never a seat: nothing reaches a decision model except through it.

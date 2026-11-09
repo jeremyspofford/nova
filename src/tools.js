@@ -82,6 +82,12 @@ export function homeTarget(home, path) {
   return { abs, rel: rel.split(sep).join('/') };
 }
 
+// The tier a capability runs at now, from the core's approvals registry (src/core/approvals), or its
+// default where there is none (tests, or a capability not registered). Nova's words follow it: a
+// tool never says it asks when it is set not to.
+export const tierIn = (approvals, id, def) => { try { return approvals?.effective(id) ?? def; } catch { return def; } };
+const byTierJs = (tier, w) => (tier >= 3 ? w.confirm : tier === 2 ? w.ok : w.free);
+
 export const TOOLS = {
   read_file: {
     signature: '{"path": "USER.md"}',
@@ -270,15 +276,30 @@ export const TOOLS = {
   code_change: {
     signature: '{"repo": "/full/path/to/the/repository", "goal": "What the change should do, in plain words", "test_command": "npm test", "preview_command": "npm start", "branch": "main"}',
     doc: 'Have a coding agent make a change in one of the person’s git repositories. Nova makes it on a branch of its own copy, so nothing in their repository changes; then it asks the person before it runs test_command and the optional preview_command (which gets HOST and PORT) on it, and asks again, every time, before it merges into the branch (the checked-out one unless you name one). Nothing is ever pushed. Give "agent" only if the person named one. Tell the person what you started and that they follow it in Tasks; don\'t wait for it.',
+    // The words follow the check's and the merge's tiers (src/core/approvals); at the defaults, `doc`.
+    docFor(approvals) {
+      const c = tierIn(approvals, 'coding.check', 2);
+      const m = tierIn(approvals, 'coding.merge', 3);
+      const test = c >= 2 ? 'then it asks the person before it runs test_command and the optional preview_command (which gets HOST and PORT) on it' : 'then it runs test_command and the optional preview_command (which gets HOST and PORT) on it without asking (the person set that)';
+      const merge = m >= 3 ? ', and asks again, every time, before it merges into the branch' : m === 2 ? ', and asks again before it merges into the branch' : ', and merges into the branch without asking (the person set that), telling them';
+      return this.doc.replace('then it asks the person before it runs test_command and the optional preview_command (which gets HOST and PORT) on it, and asks again, every time, before it merges into the branch', test + merge);
+    },
     needsApproval: false,
     available: (ctx) => ctx.coding,
-    async run(args, { coding, sessionId }) {
+    async run(args, { coding, sessionId, approvals = null }) {
       // What the agent may change is the person's to widen, never the model's: a chat request gets
       // the default rule (the review of PR #239, item 3).
       if (args && Object.hasOwn(args, 'editable')) throw new Error('Only you can widen what the agent may change, through Nova’s API (POST /api/v1/coding with editable); a chat request can’t. Ask again without it, and the agent may change source files but not the tests or their settings.');
       const { run } = await coding.start(args ?? {}, { session: sessionId, origin: { kind: 'user', ref: `session:${sessionId}` } });
+      const c = tierIn(approvals, 'coding.check', 2);
+      const m = tierIn(approvals, 'coding.merge', 3);
+      const tests = `\`${run.test_command}\`${run.preview_command ? ' and the preview' : ''}`;
+      const first = m >= 3 ? 'Nothing in the repository changes until the person confirms the merge.' : m === 2 ? 'Nothing in the repository changes until the person OKs the merge.' : 'Nova merges it into the repository without asking once its check passes (the person set that), and tells them.';
+      const then = c >= 2
+        ? `Nova asks them before it runs ${tests}${m >= 2 ? ', and again before it merges' : ''}`
+        : `Nova runs ${tests} without asking${m >= 2 ? ', and asks them before it merges' : ''}`;
       return {
-        output: `Started coding run ${run.id}: ${run.agent_name} writes “${run.title}” on Nova’s branch ${run.nova_branch}, from ${run.branch} in ${run.repo}. Nothing in the repository changes until the person confirms the merge. Nova asks them before it runs \`${run.test_command}\`${run.preview_command ? ' and the preview' : ''}, and again before it merges; they follow it in Tasks.`,
+        output: `Started coding run ${run.id}: ${run.agent_name} writes “${run.title}” on Nova’s branch ${run.nova_branch}, from ${run.branch} in ${run.repo}. ${first} ${then}; they follow it in Tasks.`,
         summary: run.title,
         link: '/tasks',
       };
@@ -305,12 +326,22 @@ export const TOOLS = {
   infra_plan: {
     signature: '{"project": "<project name>", "destroy": false}',
     doc: 'Plan an infrastructure project the person registered (OpenTofu configuration in a folder of theirs). Nova runs the plan by itself; it changes nothing. Nova prices it against the project’s monthly budget: a plan inside it is shown to the person in full, and applied only when they confirm, every time, in Tasks, after a checkpoint. A plan over budget, or with a resource Nova can’t price, is never applied: Nova alerts the person instead. "destroy": true plans removing everything in the project. You can’t change a project, its budget or its prices: the person does, outside chat. Tell the person what you started; don’t wait for it.',
+    // The words follow the apply's tier (src/core/approvals); at the default, `doc`.
+    docFor(approvals) {
+      const a = tierIn(approvals, 'infra.apply', 3);
+      return this.doc.replace('and applied only when they confirm, every time, in Tasks, after a checkpoint.', byTierJs(a, { confirm: 'and applied only when they confirm, every time, in Tasks, after a checkpoint.', ok: 'and applied only after their OK, in Tasks, after a checkpoint.', free: 'and applied without asking (the person set that), after a checkpoint; Nova tells them.' }));
+    },
     needsApproval: false,
     available: (ctx) => ctx.ops,
-    async run(args, { ops, sessionId }) {
+    async run(args, { ops, sessionId, approvals = null }) {
       const { run } = await ops.infra.start({ project: args?.project, destroy: args?.destroy === true }, { session: sessionId, origin: { kind: 'user', ref: `session:${sessionId}` } });
+      const after = byTierJs(tierIn(approvals, 'infra.apply', 3), {
+        confirm: 'the person sees the plan in full and confirms any apply in Tasks. Nothing is applied before that, and nothing over budget ever is.',
+        ok: 'the person sees the plan in full and OKs any apply in Tasks. Nothing is applied before that, and nothing over budget ever is.',
+        free: 'the person set applies to not ask, so a plan inside the budget is applied after a checkpoint, and they are told. Nothing over budget ever is.',
+      });
       return {
-        output: `Started infrastructure run ${run.id} on “${run.project.name}”${run.destroy ? ', planning to destroy everything in it' : ''}. Nova runs the plan now (it changes nothing) and prices it against the project’s budget; the person sees the plan in full and confirms any apply in Tasks. Nothing is applied before that, and nothing over budget ever is.`,
+        output: `Started infrastructure run ${run.id} on “${run.project.name}”${run.destroy ? ', planning to destroy everything in it' : ''}. Nova runs the plan now (it changes nothing) and prices it against the project’s budget; ${after}`,
         summary: run.title,
         link: '/tasks',
       };
@@ -334,12 +365,18 @@ export const TOOLS = {
   network_change: {
     signature: '{"target": "<target name>", "patch": {"firewall": {"allow_ssh": false}}, "title": "Close SSH from outside"}',
     doc: 'Change a network target the person registered (a router, DNS, a firewall, a tailnet’s policy) with a JSON merge patch of its configuration (an object of what changes; null removes a key). Nova takes a snapshot and works out the diff; the person confirms the change in Tasks, every time; after it, if Nova can’t hear from one of their devices within a few minutes, it puts the snapshot back by itself. Never put a password, key or token in a patch: secrets aren’t changed from chat. network_status lists the targets and changes.',
+    // The words follow the apply's tier (src/core/approvals); at the default, `doc`.
+    docFor(approvals) {
+      const a = tierIn(approvals, 'network.apply', 3);
+      return this.doc.replace('the person confirms the change in Tasks, every time;', byTierJs(a, { confirm: 'the person confirms the change in Tasks, every time;', ok: 'the person OKs the change in Tasks first;', free: 'Nova applies it without asking (the person set that);' }));
+    },
     needsApproval: false,
     available: (ctx) => ctx.ops,
-    run(args, { ops, sessionId }) {
+    run(args, { ops, sessionId, approvals = null }) {
       const { change } = ops.network.start({ target: args?.target, patch: args?.patch, ...(args?.title ? { title: args.title } : {}) }, { session: sessionId, origin: { kind: 'user', ref: `session:${sessionId}` } });
+      const until = byTierJs(tierIn(approvals, 'network.apply', 3), { confirm: 'nothing changes until the person confirms it in Tasks.', ok: 'nothing changes until the person OKs it in Tasks.', free: 'then it applies the change without asking (the person set that), and tells them.' });
       return {
-        output: `Started network change ${change.id} on ${change.target.name}: “${change.title}”. Nova takes a snapshot and works out the diff now; nothing changes until the person confirms it in Tasks. After the change, if Nova can’t hear from one of their devices within ${Math.round(change.window_s / 60)} minutes, it puts the snapshot back by itself.`,
+        output: `Started network change ${change.id} on ${change.target.name}: “${change.title}”. Nova takes a snapshot and works out the diff now; ${until} After the change, if Nova can’t hear from one of their devices within ${Math.round(change.window_s / 60)} minutes, it puts the snapshot back by itself.`,
         summary: change.title,
         link: '/tasks',
       };
@@ -363,12 +400,16 @@ export const TOOLS = {
   account_change: {
     signature: '{"change": "password", "site": "accounts.example.com", "steps": [{"do": "navigate", "url": "https://accounts.example.com/security"}, {"do": "new_password", "current": "#current", "password": "#new", "confirm": "#again", "submit": "#save", "done_when": ".saved"}], "verify": {"url": "https://accounts.example.com/security", "expect": ["Password updated"]}}',
     doc: 'Change an account in Nova’s own browser, on one site: "change" is "password" (a new_password step: Nova makes the new password itself and keeps it in the vault), "create" (a create_account step with "name", the account’s email address or user name) or "mfa" (two-step sign-in, with a "code" step where the person types the code themselves). "steps" is a browser plan on that site (navigate, click, wait, read, login with the saved sign-in, and the account step), naming fields by CSS selector; "verify" names the page that shows it worked. Never ask the person for a password or a code in chat, and never put one in a plan: Nova types saved sign-ins and new passwords itself, and the person types codes. They confirm it in Tasks, every time, and must be there while it runs.',
+    // Its tier is 2 or 3 (its floor is 2: it needs the person there). At the default, `doc`.
+    docFor(approvals) {
+      return tierIn(approvals, 'browser.account', 3) >= 3 ? this.doc : this.doc.replace('They confirm it in Tasks, every time,', 'They OK it in Tasks, every time,');
+    },
     needsApproval: false,
     available: (ctx) => ctx.ops,
-    run(args, { ops, sessionId }) {
+    run(args, { ops, sessionId, approvals = null }) {
       const t = ops.browser.account({ change: args?.change, site: args?.site, steps: args?.steps, verify: args?.verify, ...(args?.title ? { title: args.title } : {}) }, { origin: { kind: 'user', ref: `session:${sessionId}` } });
       return {
-        output: `Asked the person in Tasks: “${t.title}”. It runs only when they confirm it, and only while they’re there: Nova types the saved sign-in and the new password it makes itself, and keeps it in the vault; any code is theirs to type. No password goes through this conversation.`,
+        output: `Asked the person in Tasks: “${t.title}”. It runs only ${tierIn(approvals, 'browser.account', 3) >= 3 ? 'when they confirm it' : 'after their OK'}, and only while they’re there: Nova types the saved sign-in and the new password it makes itself, and keeps it in the vault; any code is theirs to type. No password goes through this conversation.`,
         summary: t.title,
         link: '/tasks',
       };
@@ -382,6 +423,10 @@ export const TOOLS = {
   home_call: {
     signature: '{"domain": "light", "service": "turn_on", "entity_id": "light.kitchen", "data": {"brightness": 120}}',
     doc: 'Change something in the person’s home through their Home Assistant, when they ask: a service by its domain and name (light turn_on, lock unlock, cover open_cover), the entity it acts on, and any settings in "data" (plain values only). Nova makes the call and reads the device back from Home Assistant itself as the evidence; the person sees it in Tasks. A domain they marked to confirm every time waits for them in Tasks instead. Only for a change they asked for, never on your own initiative.',
+    // The words follow the service tier (src/core/approvals, home-assistant.service); at 1, `doc`.
+    docFor(approvals) {
+      return tierIn(approvals, 'home-assistant.service', 1) >= 2 ? this.doc.replace('Nova makes the call and reads', 'After the person’s OK in Tasks (their setting), Nova makes the call and reads') : this.doc;
+    },
     needsApproval: false,
     available: (ctx) => ctx.homeControl,
     async run(args, { homeControl: home, signal }) {
@@ -522,9 +567,12 @@ export function parseSearch(html, limit = 8) {
   return out;
 }
 
-export function toolProtocol(names = availableTools()) {
+// approvals: the core's approvals registry, so a tool's words follow the tiers set now (docFor);
+// without it, each tool's words at the defaults.
+/** @param {string[]} [names] @param {{ effective(id: string): number } | null} [approvals] */
+export function toolProtocol(names = availableTools(), approvals = null) {
   const list = names
-    .map((name) => `- ${name} ${TOOLS[name].signature}\n  ${TOOLS[name].doc}`)
+    .map((name) => `- ${name} ${TOOLS[name].signature}\n  ${TOOLS[name].docFor ? TOOLS[name].docFor(approvals) : TOOLS[name].doc}`)
     .join('\n');
   return `# Tools
 

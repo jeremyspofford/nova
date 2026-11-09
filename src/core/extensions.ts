@@ -8,6 +8,7 @@ import { join, resolve, sep } from 'node:path';
 import { CoreError } from './errors.ts';
 import type { Db } from './db.ts';
 import { isObj } from './envelope.ts';
+import { EFFECT_NAMES, type ManifestApproval } from './approvals/index.ts';
 
 export const KINDS = ['connector', 'mcp-server', 'plugin', 'skill-pack', 'agent-adapter', 'automation-adapter', 'design-system'] as const;
 export type Kind = (typeof KINDS)[number];
@@ -29,6 +30,10 @@ export interface Manifest {
   health_check: Record<string, unknown>;
   nova_compat: string;
   on_remove: OnRemove;
+  // Optional: the capabilities that act, each with its effect class, for the approvals registry
+  // (approvals/index.ts). Nova derives each one's floor and starting default from its class; the
+  // manifest may only ask for stricter. Registered on install, dropped on removal.
+  approvals?: ManifestApproval[];
 }
 
 // What a kind of extension adds to the host: extra install checks (plain-words problems), and a
@@ -97,6 +102,17 @@ export function validateManifest(input: unknown): Manifest {
   const r = m.on_remove;
   need(isObj(r) && strings(r.delete) && strings(r.keep) && strings(r.export), 'on_remove must say what is deleted, kept and exported: {delete: [], keep: [], export: []}');
   if (isObj(r)) need([r.delete, r.keep, r.export].every((l) => !Array.isArray(l) || (l as string[]).every(relPath)), 'on_remove paths must stay inside the extension’s own data folder');
+  if (m.approvals !== undefined) {
+    const tier = (t: unknown) => t === 0 || t === 1 || t === 2 || t === 3;
+    const ok = Array.isArray(m.approvals) && m.approvals.every((a) => isObj(a)
+      && typeof a.id === 'string' && /^[a-z0-9][a-z0-9_-]*$/.test(a.id)
+      && typeof a.name === 'string' && a.name.trim().length > 0
+      && EFFECT_NAMES.includes(a.effect as never)
+      && (a.default === undefined || tier(a.default)) && (a.floor === undefined || tier(a.floor))
+      && (a.tiers === undefined || (Array.isArray(a.tiers) && a.tiers.every(tier)))
+      && (a.tools === undefined || strings(a.tools)) && (a.guard === undefined || typeof a.guard === 'string') && (a.targets === undefined || typeof a.targets === 'string'));
+    need(ok, `approvals must be a list of {id, name, effect, default?, floor?, tiers?, tools?, guard?, targets?}; effect is one of ${EFFECT_NAMES.join(', ')}, and a tier is 0 to 3`);
+  }
   if (e.length) throw new CoreError('validation', 'This extension manifest isn’t valid.', e);
   return m as unknown as Manifest;
 }
@@ -133,6 +149,13 @@ export class Extensions extends EventEmitter {
   // Lets the module that owns a kind (design.ts for design systems) add its rules after the host exists.
   defineKind(kind: Kind, rules: KindRules): void {
     this.#kinds[kind] = rules;
+  }
+
+  // An install check for every kind (the approvals registry: a declared capability may not take
+  // an id that is Nova's own or another extension's).
+  #checks: ((m: Manifest) => string[])[] = [];
+  addCheck(check: (m: Manifest) => string[]): void {
+    this.#checks.push(check);
   }
 
   list(): Installed[] {
@@ -233,7 +256,7 @@ export class Extensions extends EventEmitter {
 
   #validate(input: unknown): Manifest {
     const m = validateManifest(input);
-    const problems = this.#kinds[m.kind]?.check?.(m) ?? [];
+    const problems = [...(this.#kinds[m.kind]?.check?.(m) ?? []), ...this.#checks.flatMap((c) => c(m))];
     if (problems.length) throw new CoreError('validation', 'This extension manifest isn’t valid.', problems);
     return m;
   }

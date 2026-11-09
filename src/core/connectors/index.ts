@@ -18,7 +18,8 @@ import type { Log } from '../log.ts';
 import type { Egress, Worker } from '../workers.ts';
 import type { Checker } from '../verify.ts';
 import type { Route } from '../api.ts';
-import type { PrivacyMode } from '../envelope.ts';
+import type { PrivacyMode, Tier } from '../envelope.ts';
+import type { Approvals } from '../approvals/index.ts';
 import type { Task, TaskInput } from '../ledger.ts';
 import { permits } from '../workers.ts';
 
@@ -58,6 +59,9 @@ export interface Connector {
   recheck?(): void;
   // What an event rule may listen for: null when the topic is fine, else why not.
   topic?(topic: string): string | null;
+  // For a capability its manifest declares with `targets`: the ones marked "confirm every time" now
+  // (Home Assistant's domains).
+  marked?(capability: string): readonly string[];
   // The host name it connects to, so a repair playbook can tell a name that won't resolve (M7b).
   host?(): string | null;
   worker?: Worker;
@@ -83,6 +87,12 @@ export interface ConnectorContext {
   problem(message: string, detail?: string): void;
   changed(): void;
   now(): Date;
+  // Its own capabilities' approval tiers (the approvals registry, by the local name its manifest's
+  // `approvals` gives): the tier in effect, setting one (null for the default), and taking in one
+  // kept somewhere older. Absent where there is no registry (some tests).
+  tier?(name: string): Tier;
+  setTier?(name: string, tier: Tier | null, o: { confirm?: boolean; by?: string }): Tier;
+  adoptTier?(name: string, tier: Tier): void;
 }
 
 export type ConnectorFactory = (ctx: ConnectorContext) => Connector;
@@ -115,6 +125,8 @@ export interface ConnectorsOptions {
   addWorker: (w: Worker) => void;
   addConfirmation: (system: string, check: Checker) => void;
   now: () => Date;
+  // The approvals registry: a connector built into Nova registers its manifest's capabilities.
+  approvals?: Approvals;
 }
 
 export class Connectors extends EventEmitter {
@@ -159,6 +171,9 @@ export class Connectors extends EventEmitter {
     if (m.kind !== 'connector') throw new Error(`${m.name} isn’t a connector.`);
     if (this.#all.has(m.id)) throw new Error(`A connector called ${m.id} is already registered.`);
     this.#all.set(m.id, c);
+    // Its capabilities that act, with their tiers (approvals/index.ts): Nova's own code, so core,
+    // from the manifest it ships with.
+    this.#o.approvals?.registerManifest(m, { kind: 'core', manifest: m.id }, (local) => c.marked?.(local) ?? []);
     // A built-in connector is in the extension host once the person connects it (and leaves it
     // when they disconnect), so the host lists what they chose, not everything Nova could do.
     // Records change on the hub only (start(), below): a standby's come from the hub.
@@ -363,6 +378,11 @@ export class Connectors extends EventEmitter {
       problem: (message, detail) => { o.log.problem('connectors', message, detail ? { detail } : {}); },
       changed: () => this.emit('change', { id: id(), connected: c ? safeStatus(c).connected : false }),
       now: () => o.now(),
+      ...(o.approvals ? {
+        tier: (n: string) => o.approvals!.effective(`${id()}.${n}`),
+        setTier: (n: string, t: Tier | null, so: { confirm?: boolean; by?: string }) => o.approvals!.set(`${id()}.${n}`, t, so).effective,
+        adoptTier: (n: string, t: Tier) => o.approvals!.adopt(`${id()}.${n}`, t),
+      } : {}),
     };
     return { ctx, bind: (x) => { c = x; } };
   }
