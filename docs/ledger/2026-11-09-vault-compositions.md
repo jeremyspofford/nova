@@ -1,0 +1,5 @@
+**2026-11-09 · UI rebuild · The vault: compositions for the owner's reaction**
+- What changed: the design-first step of the wiring item "vault names / delete / reset". /styleguide?entry=vault, marked for the owner's reaction, has 14 frames built from the real model (src/core/vault.ts and the /vault routes): names only, never values, the part of Nova that uses each secret, delete, reset with everything it breaks, keychain and lost-key states, and phone and Duo cover layouts. Nothing is wired into the app.
+- What you can now do: react to how the vault looks and what reset says before it is built.
+- Still unfinished: the wiring waits for the owner. Four security questions are open: delete is not tier 3, a paired device can reset without the approver scope, the name list leaks which sites have saved logins, and reset keeps the old key.
+- Checked: tests/ui/vault-styleguide.test.ts 2/2 in Chromium and WebKit, styleguide-coverage, evals, ui-review and lint-scales 33/33, lint:tokens, typecheck. Screenshots are in docs/screenshots/vault-compositions-2026-11-09/.
