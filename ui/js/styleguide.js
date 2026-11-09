@@ -18,6 +18,7 @@ import * as fitEngine from './fit-engine.js';
 import { UC_FRAMES, entryOf, ucEntry, ucFrame } from './sg-compositions.js';
 import { bindStatusIcons, statusIconEntry, statusIconSheet } from './sg-status-icons.js';
 import { bindJarvis, jarvisEntry } from './sg-jarvis.js';
+import { auEntry, auFrame, bindAutomations, isAuFrame } from './sg-automations.js';
 
 const sg = document.getElementById('sg');
 const value = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -26,6 +27,8 @@ const params = new URLSearchParams(location.search);
 const only = params.get('entry');
 // One composition frame at the size of the window (?entry=ui-…&frame=<kind>-<state>), for the owner's screenshots.
 const frame = UC_FRAMES.find(([k, s]) => `${k}-${s}` === params.get('frame') && entryOf(k) === only);
+// The same for the Automations rule editor's frames (?entry=automations-editor&frame=<state>).
+const automationsFrame = only === 'automations-editor' && isAuFrame(params.get('frame')) ? params.get('frame') : null;
 
 // ---- sample content: what Nova really shows, with neutral names ------------------------------
 
@@ -781,6 +784,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['ui-settings', 'Settings (proposed)', 'Raycast’s clarity: search first, a category list and a detail pane, no decoration. Top level, and Privacy with a search active.', () => ucEntry(['settings'], (l, h) => state(l, h))],
       ['ui-about', 'About, changelog and pipeline (proposed)', 'The running build said honestly, what changed in plain words, and where Nova stands, each item with its evidence. The dashboard’s data is sample data.', () => ucEntry(['about', 'changelog', 'pipeline'], (l, h) => state(l, h))],
       ['ui-orb', 'Nebula orb and theme (proposed)', 'The swirl from the owner’s icon, drawn at any size from the palette tokens; seven states by motion and light, still and distinct under reduced motion. Use the switch above for Nebula light and dark.', () => ucEntry(['orb'], (l, h) => state(l, h))],
+      ['automations-editor', 'Automations rule editor (for the owner’s reaction)', 'Design first, nothing wired: the list, create, edit and turning off, Run now and what it led to, and the webhook token shown once. Drawn from the real rule model (src/core/triggers.ts): schedules, webhooks and connection events; a task or a message; no conditions. Rotating a token and its hint need the backend: today Nova keeps only the token’s hash and has no rotate route.', () => auEntry((l, h) => state(l, h))],
       ['jarvis', 'Jarvis rings (proposed)', 'Compositions for the owner’s reaction, not a shipped theme: a HUD instrument of concentric segmented rings, arc sweeps and fine ticks in one cyan family on near-black, for the same ten states as the status icon. Told apart by structure and motion, also in greyscale and under reduced motion. Red only for stopped, amber only for needs-you.', jarvisEntry],
     ]],
     ['Views', [
@@ -807,6 +811,12 @@ function render() {
     sg.innerHTML = draw(() => ucFrame(frame[0], frame[1]));
     return;
   }
+  if (automationsFrame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => auFrame(automationsFrame));
+    bindAutomations(sg);
+    return;
+  }
   const one = ([id, name, about, body]) => `<article class="sg-entry" id="sg-${id}" aria-labelledby="sg-${id}-name"><header class="sg-entry-head"><h3 class="sg-entry-name" id="sg-${id}-name">${name}</h3><a class="sg-alone" href="?entry=${id}">Open alone</a></header><p class="sg-about">${about}</p>${draw(body)}</article>`;
   if (shown) {
     sg.innerHTML = shown.length ? `<p class="sg-back"><a class="link" href="/styleguide#sg-${only}">The whole styleguide</a></p>${shown.map(one).join('')}` : `<p class="sg-about">No entry is called “${only.replace(/[<>&"]/g, '')}”. <a class="link" href="/styleguide">The whole styleguide</a></p>`;
@@ -827,6 +837,7 @@ function render() {
   bindHealthSpecimens();
   bindStatusIcons(sg);
   bindJarvis(sg);
+  bindAutomations(sg);
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
 }
