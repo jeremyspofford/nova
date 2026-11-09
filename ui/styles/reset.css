@@ -1,8 +1,8 @@
 /* Settings › Danger zone and the factory reset's sheet (M7 amendment §2), and its result on the
-   first-run screen. Set apart: more space above, an alert-coloured edge. Its one standout, the
+   first-run screen. Set apart: more space above, an alert-coloured hairline. Its one standout, the
    erase button, is in the alert colour. Tokens only. */
 .settings-part:has(> .danger-zone) { margin-top: var(--space-8); }
-.settings-part > .memory-section.danger-zone { border-color: var(--status-error); border-left-width: var(--space-1); }
+.settings-part > .memory-section.danger-zone { padding-top: var(--space-5); border-top: 1px solid var(--status-error); }
 .danger-zone .memory-heading { color: var(--status-error); }
 .danger-zone .sheet-actions { margin-top: var(--space-4); }
 .btn.primary.danger { border-color: var(--status-error); background: color-mix(in srgb, var(--status-error) 24%, var(--bg-raised)); }

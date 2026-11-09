@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { reduce } from '../ui/js/reduce.js';
 import { renderBlocks, GROUP_MS, GAP_MS } from '../ui/js/view.js';
-import { CATEGORIES, GROUPS, ENTRIES, searchSettings, categoryOf } from '../ui/js/settings-ia.js';
+import { CATEGORIES, GROUPS, ENTRIES, searchSettings, categoryOf, filterSettings } from '../ui/js/settings-ia.js';
 import { liveCheck as clientCheck, parseColor as clientParse, recommend } from '../ui/js/contrast.js';
 import { BUILTIN_DIR, LIVE_CHECKS, liveCheck, looks } from '../src/core/index.ts';
 import { Design } from '../src/core/design.ts';
@@ -114,6 +114,20 @@ test('settings search knows people’s words, not just labels, and shows the pat
   assert.equal(top('thme').path, 'Appearance › Theme', 'one slip of the keyboard is forgiven');
   assert.deepEqual(searchSettings(''), []);
   for (const r of searchSettings('a')) assert.ok(r.target && r.path.includes(' › '));
+});
+
+test('settings search filters the category list: only categories with a match, in the list’s order, each with its count', () => {
+  const order = CATEGORIES.map((c) => c.id);
+  for (const q of ['cloud', 'backup', 'dark mode', 'phone', 'a']) {
+    const { found, cats } = filterSettings(q);
+    assert.deepEqual(found, searchSettings(q), `${q}: the same matches, best first`);
+    assert.deepEqual(cats.map((c) => c.id), order.filter((id) => found.some((r) => r.cat === id)), `${q}: in the list's order, none without a match`);
+    for (const c of cats) assert.equal(c.count, found.filter((r) => r.cat === c.id).length, `${q}: ${c.id}'s count`);
+    assert.equal(cats.reduce((n, c) => n + c.count, 0), found.length);
+  }
+  assert.deepEqual(filterSettings('cloud').cats.map((c) => c.id), ['privacy', 'models']);
+  assert.deepEqual(filterSettings(''), { found: [], cats: [] });
+  assert.deepEqual(filterSettings('zzqx').cats, []);
 });
 
 // ---- the live contrast check and the recommendation -----------------------------------------------

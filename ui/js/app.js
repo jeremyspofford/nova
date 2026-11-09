@@ -13,7 +13,7 @@ import { bindConfig, bindConfigForm, loadConfigForm, renderConfig, renderConfigF
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { destination, routeOf } from './nav.js';
 import { greeting, problemTone, stoppingProblems } from './status.js';
-import { CATEGORIES, GROUPS, categoryOf, searchSettings } from './settings-ia.js';
+import { CATEGORIES, GROUPS, categoryOf, filterSettings } from './settings-ia.js';
 import { closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, setRecent, signal, toast as notify, toggleAside, liveIcon } from './shell.js';
 import * as core from './surfaces.js';
 import { bindConnections, loadConnections, renderConnections } from './connections.js';
@@ -1543,14 +1543,16 @@ function loadPermissions() {
     });
 }
 
-// Settings is one structure (settings-ia.js) in two layouts: from the expanded width (840px,
-// layout.css) on a flat screen, a sidebar of categories beside the open one; below it, the
-// grouped list, and a category's page in its place with a way back. The hash says what is open: a
-// category (#models), opened at its top as a click does, or a setting in one (#appearance-mode),
-// which opens its category and is brought into view.
+// Settings is one structure (settings-ia.js) in two layouts, as the approved composition draws it
+// (docs/plans/ui-rebuild-compositions-2026-11-06.md §2): from the expanded width (840px,
+// layout.css) on a flat screen, the category list with its search at the head, beside the open
+// category; below it, two screens: the list, then a category with a back row. The hash says what is
+// open: a category (#models), opened at its top as a click does, or a setting in one
+// (#appearance-mode), which opens its category and is brought into view.
 // `touched`: the person has typed in search or opened something since Settings opened, so data
 // arriving late must not move their focus or scroll.
-const settingsUi = { cat: null, touched: false, active: -1 };
+// `query` and `found`: the search in force. It filters the list and marks matches in the detail.
+const settingsUi = { cat: null, touched: false, query: '', found: [] };
 const settingsList = () => {
   const wide = getComputedStyle(document.documentElement).getPropertyValue('--settings-layout').trim() === 'sidebar';
   return !wide || layout.layout === 'phone' || (layout.layout === 'tablet' && layout.posture !== 'continuous');
@@ -1581,8 +1583,6 @@ function selectSettings(cat) {
   }
   const back = $('settings-back');
   if (back) back.hidden = !(list && open);
-  const title = $('settings-title');
-  if (title) title.textContent = list && open ? categoryOf(open).label : 'Settings';
 }
 
 // From the list or the sidebar to a category, as its own step in the history.
@@ -1605,9 +1605,10 @@ function openSettingsCat(cat, { push = true } = {}) {
   if (push) { core.hideBackupsKey(); history.pushState(null, '', `/settings#${cat}`); }
   selectSettings(cat);
   el.scroller.scrollTop = 0;
-  const heading = el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(cat)}"] h2`);
-  heading?.setAttribute('tabindex', '-1');
-  heading?.focus({ preventScroll: true });
+  const pane = el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(cat)}"]`);
+  pane?.querySelector('.settings-pane-title')?.focus({ preventScroll: true });
+  // While searching, the first match in it is brought into view.
+  if (settingsUi.query) pane?.querySelector('[data-match]')?.scrollIntoView({ block: 'nearest' });
 }
 
 // Bring one setting into view, mark it, and put focus on its control.
@@ -1622,45 +1623,104 @@ function goToSetting(target) {
   flash(target);
 }
 
-// Search is a combobox over a listbox of results. Only the count is announced (#settings-count, a
-// live region that stays put); the list itself is read as the person moves through it.
-function renderSettingsResults(query) {
-  const box = $('settings-results');
-  const input = $('settings-search');
-  const count = $('settings-count');
-  if (!box) return;
+// Search filters the category list: only categories with a match stay, each with its count, and
+// the matches are marked in the detail. Only the summary is announced (#settings-count, a live
+// region that stays put). On a sidebar, an open category without a match gives way to the best one.
+function searchSettingsView(query) {
   const q = query.trim();
-  const found = q ? searchSettings(q).slice(0, 8) : [];
-  settingsUi.active = -1;
-  box.hidden = !q;
-  input.setAttribute('aria-expanded', String(found.length > 0));
-  input.removeAttribute('aria-activedescendant');
-  const said = !q ? '' : found.length ? `${found.length} setting${found.length === 1 ? '' : 's'} found` : 'No settings found';
+  const { found, cats } = q ? filterSettings(q) : { found: [], cats: [] };
+  settingsUi.query = q;
+  settingsUi.found = found;
+  const counts = new Map(cats.map((c) => [c.id, c.count]));
+  const nav = $('settings-nav');
+  if (!nav) return;
+  for (const li of nav.querySelectorAll('.settings-cats > li')) {
+    const n = counts.get(li.dataset.cat) ?? 0;
+    li.hidden = !!q && !n;
+    const c = li.querySelector('.cat-count');
+    c.hidden = !q || !n;
+    c.innerHTML = n ? `${n}<span class="sr-only"> ${n === 1 ? 'match' : 'matches'}</span>` : '';
+  }
+  for (const g of nav.querySelectorAll('.settings-group')) g.hidden = !!q && ![...g.querySelectorAll('.settings-cats > li')].some((li) => !li.hidden);
+  el.settings.dataset.searching = q ? 'yes' : 'no';
+  $('settings-clear').hidden = !q;
+  const count = $('settings-count');
+  const said = !q ? ''
+    : found.length ? `${found.length} setting${found.length === 1 ? '' : 's'} match “${q}”, in ${cats.length} categor${cats.length === 1 ? 'y' : 'ies'}. Only categories with a match are listed.`
+      : `Nothing matches “${q}”. Try another word, like “theme”, “phone” or “backup”.`;
   if (count.textContent !== said) count.textContent = said;
-  box.innerHTML = !q ? '' : found.length
-    ? found.map((r, i) => `<li class="settings-result" role="option" id="set-opt-${i}" aria-selected="false" data-target="${escapeHtml(r.target)}" data-cat="${escapeHtml(r.cat)}"><span class="result-label">${escapeHtml(r.label)}</span><span class="result-path">${escapeHtml(r.path)}</span></li>`).join('')
-    : `<li class="settings-noresult" role="presentation">Nothing matches “${escapeHtml(q)}”. Try another word, like “theme”, “phone” or “backup”.</li>`;
+  markSettings();
+  if (q && cats.length && !settingsList() && !counts.has(settingsUi.cat ?? CATEGORIES[0].id)) selectSettings(found[0].cat);
 }
 
-// Arrow keys move through the results; the input keeps focus.
-function moveSettingsResult(dir) {
-  const options = [...el.settings.querySelectorAll('#settings-results [role="option"]')];
-  if (!options.length) return;
-  settingsUi.active = (settingsUi.active + dir + options.length) % options.length;
-  options.forEach((o, i) => o.setAttribute('aria-selected', String(i === settingsUi.active)));
-  const now = options[settingsUi.active];
-  $('settings-search').setAttribute('aria-activedescendant', now.id);
-  now.scrollIntoView({ block: 'nearest' });
+// The marks: the words searched for, where they appear in a matching setting; where they don't (it
+// matched a word people use for it), its name. Live regions and form fields are left alone.
+const SKIP_MARK = 'script, style, textarea, select, option, [role="status"], [aria-live], mark.settings-mark';
+function unmarkSettings() {
+  for (const m of el.settings.querySelectorAll('mark.settings-mark')) { const p = m.parentNode; m.replaceWith(...m.childNodes); p.normalize(); }
+  for (const n of el.settings.querySelectorAll('[data-match]')) n.removeAttribute('data-match');
+}
+function markText(root, terms) {
+  const re = new RegExp(terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi');
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest(SKIP_MARK) || !n.data.trim() ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  const nodes = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n);
+  let marked = 0;
+  for (const node of nodes) {
+    const parts = [];
+    let last = 0;
+    for (const m of node.data.matchAll(re)) {
+      if (!m[0]) continue;
+      parts.push(document.createTextNode(node.data.slice(last, m.index)));
+      const mark = document.createElement('mark');
+      mark.className = 'settings-mark';
+      mark.textContent = m[0];
+      parts.push(mark);
+      last = m.index + m[0].length;
+      marked++;
+    }
+    if (parts.length) { parts.push(document.createTextNode(node.data.slice(last))); node.replaceWith(...parts); }
+  }
+  return marked;
+}
+function markSettings() {
+  unmarkSettings();
+  const q = settingsUi.query.toLowerCase();
+  if (!q) return;
+  const words = q.split(/\s+/).filter((w) => w.length >= 2);
+  for (const r of settingsUi.found) {
+    const target = $(r.target);
+    if (!target || !el.settings.contains(target) || target.hasAttribute('data-match')) continue;
+    target.setAttribute('data-match', '');
+    if (markText(target, [q]) || (words.length && markText(target, words))) continue;
+    const name = target.matches('.settings-label, legend, h2, h3') ? target : target.querySelector('.settings-label, .perm-label, h2, h3, legend:not(.sr-only)');
+    // Only its name's own words: a note beside them (a legend's “· all devices”) stays as it is.
+    const text = name && !name.closest(SKIP_MARK) ? [...name.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.data.trim()) : null;
+    if (text) { const mark = document.createElement('mark'); mark.className = 'settings-mark'; text.replaceWith(mark); mark.append(text); }
+  }
 }
 
-function chooseSettingsResult(option) {
+// Enter in the search: the best match, opened, in view, with focus on its control. The search
+// stays, so the other matches stay marked.
+function openBestMatch() {
+  const best = settingsUi.found[0];
+  if (!best) return;
   core.hideBackupsKey();
   leaveDeviceModels();
-  const target = $(option.dataset.target) ?? el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(option.dataset.cat)}"]`);
-  $('settings-search').value = '';
-  renderSettingsResults('');
-  history.pushState(null, '', `/settings#${option.dataset.target}`);
+  const target = $(best.target) ?? el.settings.querySelector(`.settings-pane[data-cat="${CSS.escape(best.cat)}"]`);
+  history.pushState(null, '', `/settings#${best.target}`);
   if (target) goToSetting(target);
+}
+
+// "/" puts focus in the search from anywhere in Settings; on a phone's category screen it goes
+// back to the list first, where the search is.
+function focusSettingsSearch() {
+  const input = $('settings-search');
+  if (!input) return;
+  if (!input.checkVisibility()) { leaveDeviceModels(); history.pushState(null, '', '/settings'); selectSettings(null); el.scroller.scrollTop = 0; }
+  settingsUi.touched = true;
+  input.focus();
+  input.select();
 }
 
 function showSettings() {
@@ -1671,6 +1731,9 @@ function showSettings() {
   setScreenDevice(dm ? decodeURIComponent(dm[1]) : null);
   renderSettingsView({ enter: true });
   settingsUi.touched = false;
+  // Settings opens without a search in force.
+  $('settings-search').value = '';
+  searchSettingsView('');
   selectSettings(settingsTarget(location.hash).cat);
   const opened = location.hash;
   Promise.all([core.loadBackups(), loadPermissions(), refreshCore(['profile', 'version']), loadConnections(), loadSites(), core.loadProviders(), loadCapture(), loadModels(), loadChanges(), loadCheckpoints(), loadServices(), loadReset(), loadSecurity(api), loadConfigForm()]).then(() => {
@@ -1717,22 +1780,44 @@ const PARTS = {
 
 // A category's pane is a plain section, not a named region: its parts are named regions of their own,
 // and a pane named like its part (You and Nova) would be a second landmark with that name (UX review 1, F5).
+// The composition's two columns: the category list with the search at its head, and the detail.
+// A category's page opens with its name and one line of what it holds, then its settings: a name,
+// a line of what it does, and the control on the right (components.js settingsRow).
 function settingsShell() {
   const groups = GROUPS.map((g) => `<section class="settings-group"><h3 class="settings-group-title">${escapeHtml(g.title)}</h3><ul class="settings-cats">${g.cats.map((id) => {
     const c = categoryOf(id);
-    return `<li><a class="settings-cat" href="/settings#${id}" data-cat="${id}"><span class="cat-label">${escapeHtml(c.label)}</span><span class="cat-summary">${escapeHtml(c.summary)}</span></a></li>`;
+    return `<li data-cat="${id}"><a class="settings-cat" href="/settings#${id}" data-cat="${id}"><span class="cat-label">${escapeHtml(c.label)}</span><span class="cat-count" hidden></span><span class="cat-chevron" aria-hidden="true">${ICONS.chevron}</span></a></li>`;
   }).join('')}</ul></section>`).join('');
-  return `<header class="view-head settings-head">
-  <button type="button" class="btn small quiet settings-back" id="settings-back" hidden>${ICONS.back}<span>Settings</span></button>
-  <h2 class="view-title" id="settings-title">Settings</h2>
-  <div class="settings-search"><label class="sr-only" for="settings-search">Search settings</label><input type="search" class="input settings-search-input" id="settings-search" placeholder="Search settings" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="settings-results"></div>
-  <p class="settings-count" id="settings-count" role="status"></p>
-  <ul class="settings-results" id="settings-results" role="listbox" aria-label="Settings found" hidden></ul>
-</header>
-<div class="settings-layout">
-  <nav class="settings-nav" id="settings-nav" aria-label="Settings">${groups}</nav>
-  <div class="settings-detail">${CATEGORIES.map((c) => `<section class="settings-pane" data-cat="${c.id}" hidden>${c.parts.map((k) => `<div class="settings-part" id="settings-${k}"></div>`).join('')}</section>`).join('')}</div>
+  return `<div class="settings-layout">
+  <div class="settings-side">
+    <header class="view-head settings-head">
+      <h2 class="view-title" id="settings-title">Settings</h2>
+      <div class="settings-search" role="search">
+        <span class="settings-search-icon" aria-hidden="true">${ICONS.search}</span>
+        <label class="sr-only" for="settings-search">Search settings</label>
+        <input type="search" class="settings-search-input" id="settings-search" placeholder="Search settings" autocomplete="off" spellcheck="false" aria-keyshortcuts="/" aria-describedby="settings-count">
+        <kbd class="settings-key" aria-hidden="true">/</kbd>
+        <button type="button" class="settings-clear" id="settings-clear" aria-label="Clear search" hidden>${ICONS.close}</button>
+      </div>
+      <p class="settings-count" id="settings-count" role="status"></p>
+    </header>
+    <nav class="settings-nav" id="settings-nav" aria-label="Settings">${groups}</nav>
+  </div>
+  <div class="settings-detail">
+    <button type="button" class="settings-back" id="settings-back" hidden>${ICONS.back}<span>Settings</span></button>
+    ${CATEGORIES.map((c) => `<section class="settings-pane" data-cat="${c.id}" hidden><header class="settings-pane-head"><h2 class="settings-pane-title" id="settings-pane-${c.id}" tabindex="-1">${escapeHtml(c.label)}</h2><p class="settings-pane-lede">${escapeHtml(c.summary)}</p></header>${c.parts.map((k) => `<div class="settings-part" id="settings-${k}"></div>`).join('')}</section>`).join('')}
+  </div>
 </div>`;
+}
+
+// A part whose own heading only repeats its category's name keeps it for screen readers alone:
+// the page's heading already says it (one title per page, caption headings over groups).
+function quietRepeatHeading(box) {
+  const pane = box.closest('.settings-pane');
+  const own = box.querySelector(':scope > section > h2:first-child, :scope > section > h3:first-child');
+  if (!pane || !own) return;
+  const same = own.textContent.trim().toLowerCase() === pane.querySelector('.settings-pane-title').textContent.trim().toLowerCase();
+  own.classList.toggle('settings-repeat', same);
 }
 
 // What the person has typed or picked in a part's forms, and which of its details are open, carried
@@ -1771,8 +1856,11 @@ function renderSettingsView({ enter: entering = false, only = null } = {}) {
     const part = PARTS[k];
     if (typeof part === 'function') box.innerHTML = part(); else part.draw(box);
     restore();
+    quietRepeatHeading(box);
     if (focus) box.querySelector(focus)?.focus({ preventScroll: true });
   }
+  // A part drawn again under a search in force gets its marks again.
+  if (settingsUi.query) markSettings();
   if (entering) enter(el.settings);
 }
 
@@ -1791,9 +1879,15 @@ async function togglePermission(button) {
 el.settings.addEventListener('click', (e) => {
   const cat = e.target.closest('a.settings-cat');
   if (cat && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); settingsUi.touched = true; openSettingsCat(cat.dataset.cat); return; }
-  if (e.target.closest('#settings-back')) { settingsUi.touched = true; leaveDeviceModels(); history.pushState(null, '', '/settings'); selectSettings(null); el.scroller.scrollTop = 0; el.settings.querySelector('.settings-cat')?.focus({ preventScroll: true }); return; }
-  const found = e.target.closest('.settings-result');
-  if (found) { settingsUi.touched = true; chooseSettingsResult(found); return; }
+  if (e.target.closest('#settings-back')) {
+    settingsUi.touched = true;
+    const was = settingsUi.cat;
+    leaveDeviceModels(); history.pushState(null, '', '/settings'); selectSettings(null); el.scroller.scrollTop = 0;
+    const cats = [...el.settings.querySelectorAll('#settings-nav .settings-cats > li:not([hidden]) .settings-cat')];
+    (cats.find((a) => a.dataset.cat === was) ?? cats[0])?.focus({ preventScroll: true });
+    return;
+  }
+  if (e.target.closest('#settings-clear')) { settingsUi.touched = true; const input = $('settings-search'); input.value = ''; searchSettingsView(''); input.focus(); return; }
   if (followLink(e)) return;
   const b = e.target.closest('[data-action]');
   const action = b?.dataset.action;
@@ -1832,17 +1926,20 @@ el.settings.addEventListener('change', (e) => {
   else if (t.dataset.action === 'set-profile') core.saveProfile(t.dataset.section, t.dataset.key, t.value);
 });
 // Anything the person types in Settings is theirs: data arriving late leaves their focus alone (M9).
-el.settings.addEventListener('input', (e) => { settingsUi.touched = true; if (e.target.id === 'settings-search') renderSettingsResults(e.target.value); });
+el.settings.addEventListener('input', (e) => { settingsUi.touched = true; if (e.target.id === 'settings-search') searchSettingsView(e.target.value); });
 el.settings.addEventListener('keydown', (e) => {
-  if (e.target.id === 'settings-search' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); moveSettingsResult(e.key === 'ArrowDown' ? 1 : -1); return; }
-  if (e.target.id === 'settings-search' && e.key === 'Enter') {
+  // The arrow keys go from the search into the list (only what is listed) and along it.
+  const listed = () => [...el.settings.querySelectorAll('#settings-nav .settings-cats > li:not([hidden]) .settings-cat')];
+  if (e.target.id === 'settings-search' && e.key === 'ArrowDown') { e.preventDefault(); listed()[0]?.focus(); return; }
+  if (e.target.matches?.('#settings-nav .settings-cat') && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
     e.preventDefault();
-    const options = el.settings.querySelectorAll('#settings-results [role="option"]');
-    const option = options[Math.max(0, settingsUi.active)];
-    if (option) { settingsUi.touched = true; chooseSettingsResult(option); }
+    const cats = listed();
+    const i = cats.indexOf(e.target) + (e.key === 'ArrowDown' ? 1 : -1);
+    if (i < 0) $('settings-search').focus(); else cats[Math.min(i, cats.length - 1)].focus();
     return;
   }
-  if (e.target.id === 'settings-search' && e.key === 'Escape' && e.target.value) { e.preventDefault(); e.target.value = ''; renderSettingsResults(''); return; }
+  if (e.target.id === 'settings-search' && e.key === 'Enter') { e.preventDefault(); settingsUi.touched = true; openBestMatch(); return; }
+  if (e.target.id === 'settings-search' && e.key === 'Escape' && e.target.value) { e.preventDefault(); e.target.value = ''; searchSettingsView(''); return; }
   if (e.key === 'Enter' && e.target.matches('#you-name, #nova-name')) { e.preventDefault(); e.target.nextElementSibling?.click(); }
 });
 window.addEventListener('nova:appearance', () => { if (state.view === 'settings') renderSettingsView({ only: 'look' }); });
@@ -2132,6 +2229,7 @@ document.addEventListener('keydown', (e) => {
   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); step(e.key === 'ArrowUp' ? -1 : 1); return; }
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && !inField && state.view !== 'chat' && state.undo) { e.preventDefault(); runToastAction() || runUndo(); return; }
   if (e.key === '/' && !inField && state.view === 'chat') { e.preventDefault(); el.input.focus(); return; }
+  if (e.key === '/' && !mod && !inField && state.view === 'settings') { e.preventDefault(); focusSettingsSearch(); return; }
   if (e.key === 'Escape') {
     if (el.app.classList.contains('drawer-open')) { closeDrawer(); drawerDoor().focus(); return; }
     const card = e.target.closest?.('.approval');

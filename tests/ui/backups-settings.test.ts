@@ -145,8 +145,8 @@ async function noKey(page: Page) { assert.equal(await page.locator('#settings-ba
 // Would fail if same-category search only changes the hash without clearing transient state.
 test('Backups search within the same category clears a shown key', async () => appCase(async ({ page, target, encrypted }) => {
   await openBackups(page); await configure(page, target, encrypted);
-  await page.getByRole('combobox', { name: 'Search settings' }).fill('backups');
-  await page.locator('#settings-results [role="option"]').first().click();
+  await page.getByRole('searchbox', { name: 'Search settings' }).fill('backups');
+  await page.getByRole('searchbox', { name: 'Search settings' }).press('Enter');
   assert.equal(new URL(page.url()).hash, '#settings-backups');
   await noKey(page);
 }));
