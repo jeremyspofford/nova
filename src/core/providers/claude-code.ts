@@ -3,7 +3,7 @@
 // and reads its event stream: `system` (init: the model), `assistant` (text and tool use),
 // `user` (tool results) and the final `result` (success or an error subtype, cost, usage).
 // Its own claim of success is only a claim: Nova checks the work afterwards.
-import { childEnv, runLines, tail, which, words } from './cli.ts';
+import { childEnv, runLines, tail, whichKnown, words } from './cli.ts';
 import { summarize } from './prompt.ts';
 import { num, str, type Config, type Impl, type WorkInput, type WorkOutcome } from './types.ts';
 
@@ -22,7 +22,8 @@ export const claudeCode: Impl = {
   unconfigured: (c) => (str(c.command) ? null : 'It needs the claude program’s name or path.'),
   uninstalled(c) {
     const program = words(str(c.command))[0] ?? '';
-    return which(program) ? null : `Nova can’t find \`${program || 'claude'}\` on this computer.`;
+    const at = whichKnown(program);
+    return at === undefined ? undefined : at ? null : `Nova can’t find \`${program || 'claude'}\` on this computer.`;
   },
   model: (c) => str(c.model) || 'claude-code',
   async work(i: WorkInput): Promise<WorkOutcome> {

@@ -30,7 +30,7 @@ for (const [name, what, step] of [
       assert.deepEqual(asked.map((t) => [t.name, t.guard?.what]), [[name, what]]);
       assert.equal(asked[0].guard.sources.length, 1, 'the request names the outside source');
       assert.equal(h.nova.core.ledger.list().length, tasks, 'declined: no task was made');
-      assert.deepEqual(h.nova.core.infra.list().runs, []);
+      assert.deepEqual((await h.nova.core.infra.list()).runs, []);
       assert.deepEqual(h.nova.core.network.list().changes, []);
     } finally { await h.close(); }
   });

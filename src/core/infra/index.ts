@@ -208,13 +208,15 @@ export class Infra {
 
   // ---- runs -------------------------------------------------------------------------------------------
 
-  // A run on a project and its first task, the plan (tier 1). Throws in plain words.
-  start(input: Record<string, unknown>, o: { session?: string | null; origin?: TaskInput['origin'] } = {}) {
+  // A run on a project and its first task, the plan (tier 1). Throws in plain words. The PATH lookup
+  // is the only wait: from the open-run check to the insert nothing awaits, so two starts on one
+  // project can't both get through.
+  async start(input: Record<string, unknown>, o: { session?: string | null; origin?: TaskInput['origin'] } = {}) {
     const ref = typeof input.project === 'string' ? input.project.trim() : '';
     const p = this.#o.db.get<ProjectRow>('SELECT * FROM infra_project WHERE id = ? OR name = ? ORDER BY created_at LIMIT 1', ref, ref);
     if (!p) throw new CoreError('validation', `There is no infrastructure project “${ref}”. ${this.#projectNames()}`);
-    if (!this.tool.where()) throw new CoreError('conflict', `${this.tool.name} isn’t on this computer (no tofu on PATH). Nova doesn’t install it.`);
-    const open = this.#o.db.get<RunRow>(`SELECT * FROM infra_run WHERE project_id = ? AND state IN (${OPEN.map(() => '?').join(', ')})`, p.id, ...OPEN);
+    if (!(await this.tool.where())) throw new CoreError('conflict', `${this.tool.name} isn’t on this computer (no tofu on PATH). Nova doesn’t install it.`);
+    const open =this.#o.db.get<RunRow>(`SELECT * FROM infra_run WHERE project_id = ? AND state IN (${OPEN.map(() => '?').join(', ')})`, p.id, ...OPEN);
     if (open) throw new CoreError('conflict', `Run ${open.id} on “${p.name}” is still open (${open.state}); one run at a time on a project.`);
     const destroy = input.destroy === true;
     const privacy = input.privacy_mode === undefined ? this.#o.privacy() : input.privacy_mode;
@@ -570,9 +572,10 @@ export class Infra {
 
   // ---- what callers see ----------------------------------------------------------------------------
 
-  list() {
+  async list() {
+    const installed = !!(await this.tool.where());
     return {
-      tool: { id: this.tool.id, name: this.tool.name, installed: !!this.tool.where() },
+      tool: { id: this.tool.id, name: this.tool.name, installed },
       projects: this.#o.db.all<ProjectRow>('SELECT * FROM infra_project ORDER BY created_at').map((p) => this.project(p.id)),
       runs: this.#o.db.all<RunRow>('SELECT * FROM infra_run ORDER BY created_at DESC LIMIT 100').map((r) => this.#summary(r)),
     };

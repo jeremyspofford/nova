@@ -307,8 +307,8 @@ export const TOOLS = {
     doc: 'Plan an infrastructure project the person registered (OpenTofu configuration in a folder of theirs). Nova runs the plan by itself; it changes nothing. Nova prices it against the project’s monthly budget: a plan inside it is shown to the person in full, and applied only when they confirm, every time, in Tasks, after a checkpoint. A plan over budget, or with a resource Nova can’t price, is never applied: Nova alerts the person instead. "destroy": true plans removing everything in the project. You can’t change a project, its budget or its prices: the person does, outside chat. Tell the person what you started; don’t wait for it.',
     needsApproval: false,
     available: (ctx) => ctx.ops,
-    run(args, { ops, sessionId }) {
-      const { run } = ops.infra.start({ project: args?.project, destroy: args?.destroy === true }, { session: sessionId, origin: { kind: 'user', ref: `session:${sessionId}` } });
+    async run(args, { ops, sessionId }) {
+      const { run } = await ops.infra.start({ project: args?.project, destroy: args?.destroy === true }, { session: sessionId, origin: { kind: 'user', ref: `session:${sessionId}` } });
       return {
         output: `Started infrastructure run ${run.id} on “${run.project.name}”${run.destroy ? ', planning to destroy everything in it' : ''}. Nova runs the plan now (it changes nothing) and prices it against the project’s budget; the person sees the plan in full and confirms any apply in Tasks. Nothing is applied before that, and nothing over budget ever is.`,
         summary: run.title,
@@ -321,8 +321,8 @@ export const TOOLS = {
     doc: 'Infrastructure: whether OpenTofu is on this computer, each project with its budget and what it costs a month, and each run’s state (planning, waiting for the person to apply, applied, over budget, declined, failed) with the reason.',
     needsApproval: false,
     available: (ctx) => ctx.ops,
-    run(_args, { ops }) {
-      const x = ops.infra.list();
+    async run(_args, { ops }) {
+      const x = await ops.infra.list();
       const projects = x.projects.map((p) => `${p.name} · ${p.words} · ${p.resources.length} ${p.resources.length === 1 ? 'resource' : 'resources'}`);
       const runs = x.runs.slice(0, 20).map((r) => `${r.id} · ${r.title} · ${r.state}${r.reason ? `\n  ${r.reason}` : ''}`);
       return {

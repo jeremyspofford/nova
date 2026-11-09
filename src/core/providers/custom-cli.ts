@@ -5,7 +5,7 @@
 // JSON files contract, so Nova applies the changes itself.
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { childEnv, runLines, tail, which, words } from './cli.ts';
+import { childEnv, runLines, tail, whichKnown, words } from './cli.ts';
 import { num, str, type Config, type Impl, type WorkInput, type WorkOutcome } from './types.ts';
 
 // The program a command line runs, skipping VAR=value settings in front of it.
@@ -24,7 +24,9 @@ export const customCli: Impl = {
     const program = programOf(str(c.command));
     // A shell built-in or a path relative to where Nova runs can't be judged without running it.
     if (!program || (!program.startsWith('/') && program.includes('/'))) return null;
-    return ['node', 'sh', 'bash', 'env'].includes(program) || which(program) ? null : `Nova can’t find \`${program}\` on this computer.`;
+    if (['node', 'sh', 'bash', 'env'].includes(program)) return null;
+    const at = whichKnown(program);
+    return at === undefined ? undefined : at ? null : `Nova can’t find \`${program}\` on this computer.`;
   },
   model: (c) => {
     const p = programOf(str(c.command)).split('/').pop() ?? '';

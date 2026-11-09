@@ -7,7 +7,7 @@
 // provider that prints its token leaves it nowhere.
 import { mkdirSync } from 'node:fs';
 import { CoreError } from '../errors.ts';
-import { runLines, tail, which, whichAsync } from '../providers/cli.ts';
+import { runLines, tail, whichAsync } from '../providers/cli.ts';
 import type { Redactor } from '../browser/logins.ts';
 
 export type Action = 'create' | 'update' | 'delete' | 'replace' | 'read' | 'no-op';
@@ -106,23 +106,30 @@ export function toolEnv(o: { path: string; home: string; secrets: Record<string,
 export type OpenTofu = ReturnType<typeof openTofu>;
 export function openTofu(o: { path: () => string }) {
   const command = 'tofu';
-  // Where its command is, or null: Nova never installs one.
-  const where = (): string | null => which(command, o.path());
+  // Where its command is, or null: Nova never installs one. Never a blocking lookup: on a long WSL
+  // PATH (slow /mnt/c folders) a synchronous one held the event loop for up to a second and a half,
+  // and this runs on the infra page, on a run's start and before every tool call. Each answer is
+  // also what installed() says next.
+  let seen: { found: boolean; at: number } | null = null;
+  const where = async (): Promise<string | null> => {
+    const p = await whichAsync(command, o.path());
+    seen = { found: !!p, at: Date.now() };
+    return p;
+  };
   // Whether it is installed, for the health check: the last lookup's answer (null before the
   // first), looked up again off the request path when it is a minute old. A blocking lookup on
-  // every health check held the event loop for up to a second and a half on a long WSL PATH, so a
-  // health probe timed out and a release's canary rolled back a healthy release.
-  let seen: { found: boolean; at: number } | null = null;
+  // every health check held the event loop that long, so a health probe timed out and a release's
+  // canary rolled back a healthy release.
   let looking = false;
   const installed = (): boolean | null => {
     if (!looking && (!seen || Date.now() - seen.at > 60_000)) {
       looking = true;
-      void whichAsync(command, o.path()).then((p) => { seen = { found: !!p, at: Date.now() }; }, () => {}).finally(() => { looking = false; });
+      void where().catch(() => {}).finally(() => { looking = false; });
     }
     return seen?.found ?? null;
   };
   const run = async (c: ToolContext, args: string[]): Promise<ToolRun> => {
-    const bin = where();
+    const bin = await where();
     if (!bin) throw new CoreError('conflict', `OpenTofu isn’t on this computer (no ${command} on PATH). Nova doesn’t install it; once it is installed, plan again.`);
     let out = '';
     const ran = await runLines({ argv: [bin, ...args], cwd: c.dir, env: c.env, ...(c.signal ? { signal: c.signal } : {}), timeoutMs: c.timeoutMs ?? 15 * 60_000, onLine: (l) => { out += `${l}\n`; } });
