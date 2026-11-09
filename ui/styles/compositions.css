@@ -380,6 +380,45 @@
 .au-preview .au-sentence { margin-bottom: var(--space-2); }
 .au-form .au-actions { margin-top: 0; }
 
+/* ---- Receipts, the egress viewer (2026-11-09; ui/js/sg-receipts.js) ----
+   The day's receipts on hairlines, the chosen one beside it, like the Automations editor; one pane
+   at a time in a narrow frame (layout.css). Filters are fields on the list, never a popover. No
+   colour: a receipt isn't a status. What left the devices is said in words, and set in strong. */
+.rc-panes { display: flex; flex: 1; overflow: hidden; border-top: 1px solid var(--border-subtle); }
+.rc-list { display: flex; flex-direction: column; flex: none; width: calc(var(--space-8) * 7); padding: var(--space-3) var(--space-2) var(--space-4); border-right: 1px solid var(--border-subtle); overflow: auto; }
+.rc-detail { flex: 1; padding: var(--space-5) var(--space-6) var(--space-7); overflow: auto; }
+.rc-detail > * { max-width: var(--layout-content-max); }
+.rc [hidden] { display: none; }
+.rc-intro, .rc-count, .rc-none { margin: 0 0 var(--space-2); padding: 0 var(--space-3); color: var(--text-secondary); font-size: var(--type-small); }
+.rc-none { color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.rc-filters { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); margin: var(--space-2) 0 var(--space-3); padding: 0 var(--space-3); }
+.rc-filters-head { flex: 1 0 100%; margin: 0; color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.rc-field { display: flex; flex-direction: column; flex: 1 1 calc(var(--space-8) * 2); gap: var(--space-1); }
+.rc-label { font: var(--type-weight-strong) var(--type-small)/var(--type-line-tight) var(--font-body); color: var(--text-primary); }
+.rc-items, .rc-told, .rc-cov { margin: 0; padding: 0; list-style: none; }
+.rc-item + .rc-item { border-top: 1px solid var(--border-subtle); }
+.rc-open { align-items: flex-start; padding-block: var(--space-3); }
+.rc-text { display: flex; flex-direction: column; gap: var(--space-1); flex: 1; }
+.rc-name { font: var(--type-weight-strong) var(--type-body)/var(--type-line-tight) var(--font-body); color: var(--text-primary); overflow-wrap: anywhere; }
+.rc-meta { color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.rc-meta.rc-left { color: var(--text-primary); }
+.rc-time { flex: none; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-body); font-variant-numeric: tabular-nums; }
+/* The separator sits on the wrapper: border/subtle is for separators, never a control’s outline. */
+.rc-cover { margin-top: var(--space-5); border-top: 1px solid var(--border-subtle); }
+.rc-icon { display: inline-grid; place-items: center; flex: none; }
+
+.rc-sentence { margin: var(--space-2) 0 var(--space-4); font: var(--type-weight-regular) var(--type-h3)/var(--type-line-tight) var(--font-display); color: var(--text-primary); overflow-wrap: anywhere; }
+.rc-sentence.rc-left { font-weight: var(--type-weight-strong); }
+.rc-note { margin: var(--space-2) 0 0; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.rc-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-4); }
+.rc-head { margin: var(--space-6) 0 var(--space-2); padding: 0; }
+.rc-facts { margin: 0; }
+.rc-told-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); padding: var(--space-2) 0; border-top: 1px solid var(--border-subtle); font-size: var(--type-small); }
+.rc-kind { flex: 0 0 calc(var(--space-8) * 2); color: var(--text-secondary); }
+.rc-told-item > .uc-mono { flex: 1 1 calc(var(--space-8) * 2); }
+.rc-hash { flex: none; color: var(--text-secondary); }
+.rc-cov > li { padding: var(--space-2) 0; border-top: 1px solid var(--border-subtle); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); }
+
 /* ---- Messages and quiet hours (2026-11-09; ui/js/sg-inbox.js) ----
    The Automations panes (.au-*) again: messages on hairlines, the opened one beside them. An unread
    message has a dot and a strong line; the status icon is the top bar's alone, never per message. */

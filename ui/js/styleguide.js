@@ -19,6 +19,7 @@ import { UC_FRAMES, entryOf, ucEntry, ucFrame } from './sg-compositions.js';
 import { bindStatusIcons, statusIconEntry, statusIconSheet } from './sg-status-icons.js';
 import { bindJarvis, jarvisEntry } from './sg-jarvis.js';
 import { auEntry, auFrame, bindAutomations, isAuFrame } from './sg-automations.js';
+import { bindReceipts, isRcFrame, rcEntry, rcFrame } from './sg-receipts.js';
 import { bindInbox, ibEntry, ibFrame, isIbFrame } from './sg-inbox.js';
 
 const sg = document.getElementById('sg');
@@ -30,6 +31,8 @@ const only = params.get('entry');
 const frame = UC_FRAMES.find(([k, s]) => `${k}-${s}` === params.get('frame') && entryOf(k) === only);
 // The same for the Automations rule editor's frames (?entry=automations-editor&frame=<state>).
 const automationsFrame = only === 'automations-editor' && isAuFrame(params.get('frame')) ? params.get('frame') : null;
+// And for the receipts viewer's frames (?entry=receipts&frame=<state>).
+const receiptsFrame = only === 'receipts' && isRcFrame(params.get('frame')) ? params.get('frame') : null;
 // And for messages and quiet hours (?entry=inbox&frame=<state>).
 const inboxFrame = only === 'inbox' && isIbFrame(params.get('frame')) ? params.get('frame') : null;
 
@@ -788,6 +791,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['ui-about', 'About, changelog and pipeline (proposed)', 'The running build said honestly, what changed in plain words, and where Nova stands, each item with its evidence. The dashboard’s data is sample data.', () => ucEntry(['about', 'changelog', 'pipeline'], (l, h) => state(l, h))],
       ['ui-orb', 'Nebula orb and theme (proposed)', 'The swirl from the owner’s icon, drawn at any size from the palette tokens; seven states by motion and light, still and distinct under reduced motion. Use the switch above for Nebula light and dark.', () => ucEntry(['orb'], (l, h) => state(l, h))],
       ['automations-editor', 'Automations rule editor (for the owner’s reaction)', 'Design first, nothing wired: the list, create, edit and turning off, Run now and what it led to, and the webhook token shown once. Drawn from the real rule model (src/core/triggers.ts): schedules, webhooks and connection events; a task or a message; no conditions. Rotating a token and its hint need the backend: today Nova keeps only the token’s hash and has no rotate route.', () => auEntry((l, h) => state(l, h))],
+      ['receipts', 'Receipts: what Nova sent out, to whom and why (for the owner’s reaction)', 'Design first, nothing wired, every receipt made up: the list by day with filters, one receipt with every field Nova keeps, the empty and Local-only states, and what receipts cover. Drawn from the real model (src/core/receipts.ts, GET /api/v1/receipts): references and hashes, never the text; no size, tokens or cost. Receipts cover model calls and tasks handed to workers, not every way Nova reaches out. The route filters only local or remote, task and conversation, so the destination and privacy-setting filters would work over what was fetched.', () => rcEntry((l, h) => state(l, h))],
       ['inbox', 'Messages and quiet hours (for the owner’s reaction)', 'Design first, nothing wired: what Nova tells you on its own, unread and read, each with where it came from; one opened; what quiet hours hold and what happens when they end; and editing them. Drawn from the real model (src/core/triggers.ts): a message traces to a trigger, from an automation or one of Nova’s own parts; read and Let it through are the only actions; held messages go out one by one after quiet hours end, with no digest. A held message no automation sent is withdrawn today, not sent: flagged for the owner.', () => ibEntry((l, h) => state(l, h))],
       ['jarvis', 'Jarvis rings (proposed)', 'Compositions for the owner’s reaction, not a shipped theme: a HUD instrument of concentric segmented rings, arc sweeps and fine ticks in one cyan family on near-black, for the same ten states as the status icon. Told apart by structure and motion, also in greyscale and under reduced motion. Red only for stopped, amber only for needs-you.', jarvisEntry],
     ]],
@@ -821,6 +825,12 @@ function render() {
     bindAutomations(sg);
     return;
   }
+  if (receiptsFrame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => rcFrame(receiptsFrame));
+    bindReceipts(sg);
+    return;
+  }
   if (inboxFrame) {
     document.body.classList.add('sg-full');
     sg.innerHTML = draw(() => ibFrame(inboxFrame));
@@ -848,6 +858,7 @@ function render() {
   bindStatusIcons(sg);
   bindJarvis(sg);
   bindAutomations(sg);
+  bindReceipts(sg);
   bindInbox(sg);
   sg.querySelector('.sg-motion')?.addEventListener('click', () => sg.querySelectorAll('.sg-dot').forEach((d) => d.classList.toggle('is-moved')));
   if (!only && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
