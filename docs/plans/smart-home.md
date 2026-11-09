@@ -79,7 +79,7 @@ Source: `docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md` (built in PR #430)
 - **The service tier is a setting:** `service_tier`, 1 by default, 2 to ask first again (`GET`/`PUT /connectors/home-assistant/settings`).
 - **After outside content it still asks.** In a run that has read outside content (mail, web pages), a Home Assistant call is a guarded step and asks the person first, whatever its tier (`src/runner.js`; `tests/ingest/home-guard.test.js`).
 - **A failed read-back still holds the task** rather than calling again.
-- **Not ruled on:** the ruling speaks of calls the person asks for. The connector today runs every service call at `service_tier`, whoever starts it. Whether commands Nova starts on its own (automations, schedules, scenes it proposes) on the future Smart Home page should sit higher is for the owner when S1 is built.
+- **Automations and schedules run freely too** (owner, 2026-11-09 follow-up: "yes run freely"). A Home Assistant call an automation or schedule starts is tier 1, act and report, as the connector already does: every call runs at `service_tier`, whoever starts it. Where this ADR says a command Nova starts by itself always asks (Through chat and automations; the camera-event rule that unlock, disarm and open keep tier 3), read this instead. Scenes and changes Nova only *proposes* are still proposals the person accepts.
 
 ## Decision
 
