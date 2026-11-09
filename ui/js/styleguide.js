@@ -860,7 +860,9 @@ window.addEventListener('nova:appearance', () => {
   const cur = current();
   if (!shown) { shown = cur.theme; shownMode = cur.mode; }
   renderSwitch();
-  requestAnimationFrame(render);
+  // The catalogue is drawn again for the appearance that arrived; once that redraw is done the page
+  // says which appearance it shows, so nothing that reads the page races the redraw.
+  requestAnimationFrame(() => { render(); document.documentElement.dataset.sgAppearance = `${cur.theme}-${cur.mode}`; });
 });
 
 // Specimen forms send nothing (the page's Content-Security-Policy allows no inline onsubmit).
