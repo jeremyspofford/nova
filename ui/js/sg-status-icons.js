@@ -29,6 +29,15 @@ export function bindStatusIcons(root) {
     const [, s, px] = /^(.+)-(\d+)$/.exec(cell.dataset.siCell);
     cell.append(statusIcon({ status: s, size: Number(px) }));
   }
+  // Task rows (components.js taskRow) leave a slot for their own state; the app fills it (shell.js),
+  // here a still sample does. A finished task's flourish is the app's, so the sample shows none.
+  for (const slot of root.querySelectorAll('[data-task-icon]')) {
+    const s = slot.dataset.taskIcon;
+    if (s === 'success') { slot.remove(); continue; }
+    const el = statusIcon({ status: s, size: 16, decorative: true });
+    el.classList.add('task-icon');
+    slot.replaceWith(el);
+  }
   // Success never rests: the sheet replays its flourish so it can be seen. wait: clock: the replay
   const flourish = [...root.querySelectorAll('[data-si-cell^="success-"] .status-icon')];
   if (flourish.length) { const replay = setInterval(() => (flourish[0].isConnected ? flourish.forEach((el) => el.setStatus('success')) : clearInterval(replay)), 3400); }

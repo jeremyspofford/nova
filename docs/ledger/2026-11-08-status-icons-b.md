@@ -1,0 +1,35 @@
+**2026-11-08 · Design system · Status icons part B: placed in the app**
+- What changed: the status icon (#381, #385) replaces the old orb() in every app placement allowed by the owner's rules (rail, app header, agent/task rows; never per message; one hero per view).
+  - Live state:
+    - One source. `iconState` in status.js maps the existing `orbState` one to one, plus thinking while the chat in view is working with no words yet. Thinking never overrides a more urgent state. ICON_WORDS gives "Nova is thinking".
+    - The rail home, the phone top bar, the empty-chat hero and phone Home's hero are filled in place by liveIcon() slots in shell.js. A rail redraw reuses the same icon, so a morph never restarts. #383's one-orb-per-view rule on an empty chat still holds.
+  - Task rows (`taskIconState`), at 16 px:
+    - active or verifying → working
+    - needs your OK, or flagged → needs-you
+    - queued or waiting → idle
+    - failed → stopped
+    - done → success then idle, only when the row saw it finish
+    - cancelled → no icon
+    - paused is never used: the ledger has no paused state
+  - status-icon.js:
+    - adds `label` and `decorative` options
+    - re-attaches on setStatus
+    - an IntersectionObserver stops off-screen or hidden icons from looping
+  - The icon's live marker is `data-presence`, not `data-live`, which already marks the streaming reply.
+  - orb() remains in two places:
+    - the styleguide orb section, where design systems still define orb_states{}
+    - /pair, which may load only public files. Switching it means adding status-icon.js to the unauthenticated allowlist in src/core/mesh/access.ts, an owner security decision.
+  - The service worker caches status-icon.js and status-icon.css in the shell and moves to v62.
+- What you can now do: see Nova's live state as the ribbon icon in the rail, the title bar and an empty chat, and each task's own state on its row.
+- Still unfinished: three things.
+  - /pair keeps the old orb until the owner decides on the allowlist.
+  - With 60 running 16 px rows, p95 frame time was 17–33 ms with one shared WebGL context, so long task lists drop some frames. The new test's limit is 50 ms.
+  - Not checked on a real device.
+- Checked: locally, before CI.
+  - typecheck and lint:tokens.
+  - Unit tests: ui-logic, ui-components, ui-fixes and status-icon (53).
+  - UI: chat-empty, navigation-drawn, navigation-reachability, m9-vitals, m9-motion, m9-skeleton, orb-states, status-icon, ios-status-bar, health-caps-diagnostics, ui-fixes, posture-sweep, offline, and the new status-icons-b (twice).
+  - fold-postures: 20 baselines redrawn, then confirmed without the flag.
+  - m9-vitals p75: desktop LCP 188–244 ms, INP 32–56 ms; phone at 4× CPU, LCP 404–696 ms, INP 80–112 ms; CLS 0.
+  - The shots walkthrough passed 133/133.
+  - Screenshots are in docs/screenshots/status-icons-b-2026-11-08/.

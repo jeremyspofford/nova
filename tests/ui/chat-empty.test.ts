@@ -27,8 +27,9 @@ const LOG = [
   { ts: at('09:00:07'), type: 'done', turn: 't1', attempt: 0 },
 ];
 
-// Every orb a person can see, and where it is.
-const orbs = (page: Page) => page.$$eval('.orb', (els) => els.filter((e) => (e as HTMLElement).checkVisibility({ visibilityProperty: true } as any) && e.getBoundingClientRect().width > 0)
+// Every orb a person can see, and where it is. Since status icons part B (owner, 2026-11-08) the
+// live state is drawn as the status icon: the rail's Home, the top bar and the hero.
+const orbs = (page: Page) => page.$$eval('.orb, .status-icon[data-presence]', (els) => els.filter((e) => (e as HTMLElement).checkVisibility({ visibilityProperty: true } as any) && e.getBoundingClientRect().width > 0)
   .map((e) => (e.closest('.chat-hero') ? 'hero' : e.closest('.rail-home') ? 'rail' : e.closest('#topbar-orb') ? 'topbar' : 'other')));
 
 test('an empty chat: one orb, a greeting, the composer centred, suggestions that fill it; a thread docks it and groups its steps', async (t) => {
@@ -77,8 +78,17 @@ test('an empty chat: one orb, a greeting, the composer centred, suggestions that
         // The empty chat.
         await d.page.goto(`${m.base}/new`);
         await ready(d.page);
-        await d.page.locator('#thread .empty.chat-empty .chat-hero .orb').waitFor();
+        await d.page.locator('#thread .empty.chat-empty .chat-hero .status-icon[data-presence]').waitFor();
         assert.deepEqual(await orbs(d.page), ['hero'], `${where}: an empty chat shows the hero orb and no other`);
+        // The hero is the status icon at hero size, saying the live state; the only hero in the view.
+        const hero = d.page.locator('#thread .chat-hero .status-icon[data-presence]');
+        assert.equal(await hero.getAttribute('data-size'), 'hero', `${where}: the hero is hero size`);
+        assert.equal(await hero.getAttribute('role'), 'img', `${where}: the hero is an image`);
+        assert.equal(await hero.getAttribute('aria-label'), 'Nova is quiet', `${where}: and says the live state`);
+        assert.equal(await hero.getAttribute('data-state'), 'idle', `${where}: from the one live state`);
+        const heroBox = (await hero.boundingBox())!;
+        assert.ok(heroBox.width >= 96 && heroBox.width <= 128, `${where}: the hero is 96–128 px (${heroBox.width})`);
+        assert.equal(await d.page.locator('.status-icon[data-size="hero"]').evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility()).length), 1, `${where}: one hero in the view`);
         assert.equal(await d.page.locator('#thread .empty h2.greeting').count(), 1, `${where}: the greeting is a heading under the page’s h1`);
         assert.equal((await d.page.textContent('#title'))?.trim(), 'New chat', `${where}: a fresh conversation is a new chat`);
         if (size === '1440x900') {
@@ -119,6 +129,21 @@ test('an empty chat: one orb, a greeting, the composer centred, suggestions that
         await d.page.locator('#thread .turn').first().waitFor();
         assert.equal(await d.page.locator('body[data-empty]').count(), 0, `${where}: a thread is not an empty chat`);
         assert.deepEqual(await orbs(d.page), [size === '1440x900' ? 'rail' : 'topbar'], `${where}: a thread gets its one orb back`);
+        assert.equal(await d.page.locator('#thread .status-icon, #thread .orb, #thread .msg-avatar').count(), 0, `${where}: never an icon on a message`);
+        assert.equal(await d.page.locator('.status-icon[data-size="hero"]').evaluateAll((els) => els.filter((e) => (e as HTMLElement).checkVisibility()).length), 0, `${where}: no hero beside a thread`);
+        if (size === '1440x900') {
+          const home = d.page.locator('#rail .rail-home');
+          assert.equal(await home.getAttribute('aria-label'), 'Home. Nova is quiet', `${where}: the rail’s Home says the live state`);
+          const icon = home.locator('.status-icon[data-presence]');
+          assert.ok(await icon.isVisible(), `${where}: drawn as the status icon`);
+          assert.equal(await icon.getAttribute('aria-hidden'), 'true', `${where}: which the link’s name already says`);
+          assert.equal(await icon.getAttribute('data-status'), 'idle');
+        } else {
+          const icon = d.page.locator('#topbar-orb .status-icon[data-presence]');
+          assert.equal(await icon.getAttribute('data-size'), 'mini', `${where}: the top bar’s is the small icon`);
+          assert.equal(Math.round((await icon.boundingBox())!.width), 24, `${where}: 24 px`);
+          assert.equal(await icon.getAttribute('aria-label'), 'Nova is quiet', `${where}: saying the live state`);
+        }
         assert.equal(await input.getAttribute('placeholder'), 'Reply to Nova…');
         assert.equal((await d.page.textContent('#title'))?.trim(), 'Friday plan');
         assert.ok(!(await d.page.locator('#dock .chips').isVisible()), `${where}: no suggestions in a thread`);

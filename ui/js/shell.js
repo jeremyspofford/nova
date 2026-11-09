@@ -1,10 +1,11 @@
 // The shell around every view: the layout and posture on <body>, the navigation each layout
-// shows (rail, its drawer on a phone), the live orb, toasts and the sheet. The rules themselves are pure
+// shows (rail, its drawer on a phone), the live state's status icon, toasts and the sheet. The rules themselves are pure
 // and tested (layout.js, nav.js, status.js); this module applies them to the page.
 import { resolve, viewportOf } from './layout.js';
 import { DESTINATIONS, destination, placement } from './nav.js';
-import { ICONS, orb, versionStamp } from './components.js';
-import { ORB_WORDS, orbState } from './status.js';
+import { ICONS, versionStamp } from './components.js';
+import { ICON_WORDS, iconState, orbState } from './status.js';
+import { statusIcon } from './status-icon.js';
 import { escapeHtml as esc } from './markdown.js';
 
 const body = document.body;
@@ -121,13 +122,14 @@ export function renderNav() {
   const p = placement(layout.layout);
   // A phone's drawer: the same rail, Home a row (the orb is the top bar's), and a close button.
   const drawer = layout.layout === 'phone';
-  const home = p.home === 'orb' ? `<a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(ORB_WORDS[orbNow])}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${orb({ state: orbNow, size: 'rail', live: true, decorative: true })}${ICONS.home}</a>` : '';
+  const home = p.home === 'orb' ? `<a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(ICON_WORDS[iconNow])}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${liveIcon('rail', { decorative: true })}${ICONS.home}</a>` : '';
   $('rail').innerHTML = `<div class="rail-head">${home}
 <button type="button" class="icon-btn rail-search" id="rail-search" aria-label="Search or go to" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Search or go to (Ctrl K)">${ICONS.search}</button>${drawer ? `<button type="button" class="icon-btn rail-new" id="nav-new" aria-label="New conversation" title="New conversation (Ctrl Shift O)">${ICONS.plus}</button><button type="button" class="icon-btn" id="nav-close" aria-label="Close navigation">${ICONS.close}</button>` : ''}</div>
 <div class="rail-scroll"><p class="rail-group" id="rail-places">Places</p>
 <ul class="rail-list" aria-labelledby="rail-places">${p.primary.map((id) => navItem(id)).join('')}</ul>
 ${drawer && recent.list.length ? recentGroup() : ''}</div>
 <div class="rail-foot"><ul class="rail-list">${p.foot.map((id) => navItem(id)).join('')}</ul>${stamp()}</div>`;
+  hydrate($('rail'));
   // The menu button carries the most urgent place's dot, as the tabs did.
   const b = DESTINATIONS.map((d) => badges.get(d.id)).find(Boolean);
   $('nav-menu').innerHTML = `${ICONS.panel}${b ? `<span class="nav-badge" data-tone="${esc(b.tone)}" aria-hidden="true"></span>` : ''}`;
@@ -211,25 +213,97 @@ document.addEventListener('keydown', (e) => {
   if (document.activeElement === edge || !$('rail').contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? items.at(-1) : items[0]).focus(); }
 });
 
-// ---- the live orb ------------------------------------------------------------------------------
+// ---- the live state, drawn as the status icon --------------------------------------------------
 
-const signals = { reachable: true, listening: false, stopped: 0, needsYou: 0, speaking: false, working: 0 };
-let orbNow = 'idle';
+const signals = { reachable: true, listening: false, stopped: 0, needsYou: 0, speaking: false, working: 0, thinking: false };
+let orbNow = 'idle'; // the one live state (status.js orbState)
+let iconNow = 'idle'; // the same, as the status icon draws it (status.js iconState)
 
-// Real signals in: the orb (every live one on the page) shows the most urgent.
+// Real signals in: every live icon on the page shows the most urgent state.
 export function signal(patch) {
   Object.assign(signals, patch);
   const next = orbState(signals);
-  if (next === orbNow) return;
+  const icon = iconState(next, signals);
+  if (next === orbNow && icon === iconNow) return;
+  const changed = next !== orbNow;
   orbNow = next;
-  for (const el of document.querySelectorAll('.orb[data-orb-live]')) {
-    el.dataset.state = next;
-    if (el.getAttribute('role') === 'img') el.setAttribute('aria-label', ORB_WORDS[next]);
+  iconNow = icon;
+  for (const el of presences) {
+    if (!el.isConnected && !pooled.has(el)) { presences.delete(el); continue; }
+    showLive(el);
   }
-  document.querySelector('.rail-home')?.setAttribute('aria-label', `Home. ${ORB_WORDS[next]}`);
-  window.dispatchEvent(new CustomEvent('nova:orb', { detail: next }));
+  document.querySelector('.rail-home')?.setAttribute('aria-label', `Home. ${ICON_WORDS[icon]}`);
+  if (changed) window.dispatchEvent(new CustomEvent('nova:orb', { detail: next }));
 }
-export const liveOrb = (size, opts = {}) => orb({ state: orbNow, size, live: true, ...opts });
+
+// The places that show the live state (owner, 2026-11-08): the rail's Home, the phone's top bar, the
+// hero of Home and of an empty chat, and setup's header. One per view (layout.css hides the rest),
+// at most one hero, never on a message. A builder writes a slot, `liveIcon(size)`, and the slot is
+// swapped for the icon as it reaches the page: the same icon each time a region is redrawn, so the
+// rail redrawing never restarts a morph.
+export const LIVE_PX = Object.freeze({ hero: 112, rail: 32, mini: 24 });
+export const liveIcon = (size, { decorative = false } = {}) => `<span class="live-icon-slot" data-live-icon="${esc(size)}"${decorative ? ' data-decorative' : ''}></span>`;
+const presences = new Set();
+const pool = new Map(); // slot kind → its icon, kept while off the page
+const pooled = new Set();
+function showLive(el) {
+  el.dataset.state = orbNow;
+  el.setStatus(iconNow); // also wakes an icon put back on the page
+}
+function live(size, decorative) {
+  const key = `${size}${decorative ? ':decorative' : ''}`;
+  let el = pool.get(key);
+  if (!el || el.isConnected) {
+    // Two of a kind on the page at once (Home and a chat both drawn): the second is its own.
+    el = statusIcon({ status: iconNow, size: LIVE_PX[size] ?? LIVE_PX.rail, decorative, label: (s) => ICON_WORDS[s] ?? s });
+    el.dataset.presence = '';
+    el.dataset.size = size;
+    presences.add(el);
+    if (!pool.get(key)?.isConnected) { pooled.delete(pool.get(key)); pool.set(key, el); pooled.add(el); }
+  }
+  showLive(el);
+  return el;
+}
+
+// A task row's icon: each task keeps its own, so a row redrawn keeps its morph, and a task that
+// finishes while its row is on the page shows the success flourish, settling to idle. A task first
+// seen finished shows its Verified status alone.
+const taskIcons = new Map(); // task id → { el, last }
+function taskIcon(id, want) {
+  const had = taskIcons.get(id);
+  if (!had) {
+    if (want === 'success') return null;
+    const el = statusIcon({ status: want, size: 16, decorative: true });
+    el.classList.add('task-icon');
+    taskIcons.set(id, { el, last: want });
+    return el;
+  }
+  if (had.el.isConnected) {
+    // The same task in a second list (Home and the right column): a still copy of where it is.
+    const el = statusIcon({ status: want === 'success' ? 'idle' : want, size: 16, decorative: true });
+    el.classList.add('task-icon');
+    return el;
+  }
+  had.el.setStatus(want === had.last ? had.el.status : want);
+  had.last = want;
+  return had.el;
+}
+
+const SLOTS = '[data-live-icon], [data-task-icon]';
+export function hydrate(root = document) {
+  for (const slot of root.querySelectorAll(SLOTS)) {
+    const el = slot.dataset.liveIcon ? live(slot.dataset.liveIcon, slot.hasAttribute('data-decorative')) : taskIcon(slot.dataset.task, slot.dataset.taskIcon);
+    if (el) slot.replaceWith(el); else slot.remove();
+  }
+}
+// Slots reach the page from many builders; each is swapped before the frame that would show it.
+new MutationObserver((records) => {
+  for (const r of records) {
+    for (const n of r.addedNodes) {
+      if (n.nodeType === 1 && (n.matches(SLOTS) || n.querySelector(SLOTS))) { hydrate(); return; }
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true });
 
 // ---- toasts ------------------------------------------------------------------------------------
 

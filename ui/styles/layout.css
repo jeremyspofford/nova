@@ -137,9 +137,8 @@ body[data-layout="desktop"][data-room="yes"] .aside-toggle { display: inline-gri
 /* The orb appears once per view (DESIGN-SYSTEM §1). On a phone it is Home's hero, and the top
    bar's small orb everywhere else; beside a rail (tablet, desktop) it is the rail's, so Home
    shows no second one. */
-body:not([data-layout="phone"]) .home-hero .orb { display: none; }
+body:not([data-layout="phone"]) .home-hero .status-icon { display: none; }
 body[data-layout="desktop"] .home-hero { align-items: flex-start; text-align: left; padding-top: var(--space-6); }
-body[data-layout="phone"] .home-hero .orb { --orb-size: calc(var(--space-8) * 2.6); }
 
 /* Cards the right column already shows aren't repeated on Home; without one, Home has them. */
 body[data-aside="on"] .home [data-asideable] { display: none; }

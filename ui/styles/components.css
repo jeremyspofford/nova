@@ -100,7 +100,10 @@
   overflow-x: hidden;
 }
 .rail-head { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
-.rail-home { display: grid; place-items: center; min-width: var(--hit); min-height: var(--hit); border-radius: 50%; text-decoration: none; }
+/* The link is its whole square box to a pointer or finger (M9 hit areas); the round tile it shows when
+   current is drawn behind its content, not its edge, so its corners still take the tap. */
+.rail-home { position: relative; isolation: isolate; display: grid; place-items: center; min-width: var(--hit); min-height: var(--hit); text-decoration: none; }
+.rail-home::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: 50%; pointer-events: none; }
 .rail-search { width: var(--hit); height: var(--hit); border-radius: var(--radius-input); }
 .rail-group { display: none; }
 .rail-list { list-style: none; margin: 0; padding: 0; display: flex; }
@@ -150,7 +153,9 @@
 .nav-badge[data-tone="working"] { background: var(--status-working); animation: orb-pulse var(--motion-pulse) var(--motion-ease) infinite; }
 /* The rail's current place: the composition's tinted row and strong label, no accent line. */
 .rail .nav-item { min-height: var(--hit); }
-.rail .nav-item[aria-current="page"], .rail .rail-home[aria-current="page"] { background: var(--surface-card-hover); color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.rail .nav-item[aria-current="page"] { background: var(--surface-card-hover); color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.rail .rail-home[aria-current="page"] { color: var(--text-primary); font-weight: var(--type-weight-strong); }
+.rail .rail-home[aria-current="page"]::before { background: var(--surface-card-hover); }
 .rail .nav-item[aria-current="page"]::before { content: none; }
 
 /* The open rail. */
@@ -465,7 +470,7 @@ body[data-empty] .dock { flex: 1 0 auto; }
 body[data-dock-wait] .dock { opacity: 0; }
 .chat-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); margin: 0; padding-bottom: 0; }
 .chat-hero { position: relative; display: grid; place-items: center; width: 100%; padding-block: var(--space-5); }
-.chat-hero > .orb { position: relative; }
+.chat-hero > .status-icon { position: relative; }
 /* The sky: very low contrast, screen-blended so it is gone on a light theme, never behind text. */
 .chat-sky { position: absolute; inset: 0; width: 100%; height: 100%; fill: color-mix(in srgb, var(--orb-listening) 35%, var(--accent-primary)); opacity: 0.45; mix-blend-mode: screen; pointer-events: none; }
 @media (prefers-reduced-transparency: reduce) { .chat-sky { display: none; } }
@@ -474,7 +479,7 @@ body[data-dock-wait] .dock { opacity: 0; }
 body[data-empty] .chips { display: flex; }
 /* One orb per view at every width (owner, 2026-11-08): while the hero shows, the rail's Home link
    keeps its name and target but draws the plain Home icon instead of its orb. */
-.rail-home > .icon, body[data-empty] .rail-home > .orb { display: none; }
+.rail-home > .icon, body[data-empty] .rail-home > .status-icon { display: none; }
 body[data-empty] .rail-home > .icon { display: block; }
 .chip { min-height: var(--hit); padding: 0 var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius-input); background: transparent; color: var(--text-secondary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-body); cursor: pointer; }
 .chip:hover { color: var(--text-primary); background: var(--surface-card-hover); }
@@ -483,7 +488,7 @@ body[data-empty] .rail-home > .icon { display: block; }
 
 .home { gap: var(--space-5); }
 .home-hero { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); padding-top: var(--space-4); text-align: center; }
-.home-hero .orb { --orb-size: calc(var(--space-8) * 2.25); margin: var(--space-5) 0 var(--space-3); }
+.home-hero .status-icon { margin: var(--space-5) 0 var(--space-3); }
 .greeting { font: var(--type-weight-strong) var(--type-h1)/var(--type-line-tight) var(--font-display); text-wrap: balance; }
 .greeting-sub { color: var(--text-secondary); }
 .home-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--layout-card-gap); }

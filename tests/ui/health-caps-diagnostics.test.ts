@@ -174,7 +174,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         await drawn(p);
         assert.equal(await p.evaluate(() => navigator.onLine), false, 'browser network hint is deliberately false while the actual local Core answers');
         assert.equal(await p.locator('#banner').isVisible(), false, 'live Core responses override the browser network hint');
-        assert.notEqual(await p.locator('.orb[data-orb-live]').first().getAttribute('data-state'), 'offline', 'live Core is not shown as an offline orb');
+        assert.notEqual(await p.locator('.status-icon[data-presence]').first().getAttribute('data-state'), 'offline', 'live Core is not shown as an offline orb');
         await healthFromHome(p, touch);
         await p.addScriptTag({ content: axe });
         await healthLandmarks(p, `${engine}/${posture}/Home-entry`);
@@ -460,7 +460,7 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
         assert.equal(liveStream.status(), 200);
         assert.match(liveStream.headers()['content-type']!, /text\/event-stream/);
         assert.equal(await unloaded.page.locator('#banner').isVisible(), false, 'Caps-only failure does not claim the live Core is unreachable');
-        assert.notEqual(await unloaded.page.locator('.orb[data-orb-live]').first().getAttribute('data-state'), 'offline');
+        assert.notEqual(await unloaded.page.locator('.status-icon[data-presence]').first().getAttribute('data-state'), 'offline');
         const partialDiagnostics = unloaded.page.locator('[data-download-diagnostics]');
         assert.equal(await partialDiagnostics.getAttribute('href'), '/api/v1/diagnostics');
         assert.equal(await partialDiagnostics.getAttribute('download'), '');

@@ -103,6 +103,34 @@ export const ORB_WORDS = Object.freeze({
   offline: 'Nova isn’t reachable',
 });
 
+// The status icon (status-icon.js) draws the live state above in the app (owner, 2026-11-08: the
+// rail, the header and task rows; never per message). It is the same state, drawn one step finer
+// where the app knows more: working while the conversation in view is thinking (no words yet; the
+// thread says "Thinking" then too) is drawn as thinking. Nothing else is added.
+export function iconState(orb, { thinking = false } = {}) {
+  return orb === 'working' && thinking ? 'thinking' : orb;
+}
+export const ICON_WORDS = Object.freeze({ ...ORB_WORDS, thinking: 'Nova is thinking' });
+
+// A ledger task's own state, for its row's icon (statusOf above, then):
+//   working                  → working
+//   needs you                → needs-you
+//   waiting (queued, a lane) → idle: Nova isn't on it yet; nothing in the ledger is paused
+//   failed                   → stopped
+//   verified                 → success, shown only when the row saw the task finish (shell.js);
+//                              it settles to idle by itself
+//   cancelled                → none: nothing more will happen, and the row says why
+export function taskIconState(task) {
+  switch (statusOf(task)) {
+    case 'working': return 'working';
+    case 'needs-you': return 'needs-you';
+    case 'waiting': return 'idle';
+    case 'failed': return 'stopped';
+    case 'verified': return 'success';
+    default: return null;
+  }
+}
+
 // The greeting under the orb, by the hour.
 export function greeting(date = new Date(), name = '') {
   const h = date.getHours();
