@@ -1,0 +1,5 @@
+**2026-11-09 · Models · A value typed in Settings › Models survives a refresh, and Save sends it**
+- What changed: Models held its redraw while a field had focus, but redrew from the saved data as soon as focus left, so a typed value was replaced by the saved one; tabbing to Save and pressing it sent the old value. The redraw also replaced the Save button and dropped its focus, so Enter did nothing. Models now keeps typed edits across redraws with the same keepEdits Capture uses, resets each form after a successful save (so a saved key doesn't come back into its field), and the redraw keeps focus on a form's Save button, for every settings part.
+- What you can now do: change a Models setting while Nova refreshes the page, and have your value be the one saved.
+- Still unfinished: nothing known.
+- Checked: tests/ui/models-keep-edits.test.ts fails on main ("'50' !== '7'": Save would have sent the other value) and passes with the fix; without the focus case it fails "Save keeps the focus across the redraw". m6b-models 3 of 3, the capture form tests, models-screen-app 9/9, gate-decision-model, ui-review, m9-wait, evals 30/30, lint:tokens, typecheck.

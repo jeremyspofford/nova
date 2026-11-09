@@ -1857,9 +1857,9 @@ function renderSettingsView({ enter: entering = false, only = null } = {}) {
     // Don't redraw a part under the person's typing.
     if (k !== 'backups' && box.contains(active) && active.matches('input[type="text"], input[type="number"], input[type="password"], input[type="url"], input[type="search"], input:not([type]), textarea')) continue;
     // A device's Models screen keeps focus on its control by id (its selects and slider have no other name).
-    const focus = box.contains(active) ? (active.closest('[data-device-models]') && active.id ? `#${CSS.escape(active.id)}` : active.dataset.id ? `[data-id="${CSS.escape(active.dataset.id)}"]` : active.name ? `input[name="${CSS.escape(active.name)}"]:checked` : active.dataset.action ? `[data-action="${CSS.escape(active.dataset.action)}"]${active.dataset.ds ? `[data-ds="${CSS.escape(active.dataset.ds)}"]` : ''}${active.dataset.scope ? `[data-scope="${CSS.escape(active.dataset.scope)}"]` : ''}` : null) : null;
-    // Capture's forms sit under a status that changes by itself; what is typed there is kept.
-    const restore = k === 'capture' ? keepEdits(box) : () => {};
+    const focus = box.contains(active) ? (active.closest('[data-device-models]') && active.id ? `#${CSS.escape(active.id)}` : active.dataset.id ? `[data-id="${CSS.escape(active.dataset.id)}"]` : active.name ? `input[name="${CSS.escape(active.name)}"]:checked` : active.dataset.action ? `[data-action="${CSS.escape(active.dataset.action)}"]${active.dataset.ds ? `[data-ds="${CSS.escape(active.dataset.ds)}"]` : ''}${active.dataset.scope ? `[data-scope="${CSS.escape(active.dataset.scope)}"]` : ''}` : active.type === 'submit' && active.form?.dataset.form ? `form[data-form="${CSS.escape(active.form.dataset.form)}"] [type="submit"]` : null) : null;
+    // Capture's and Models' forms sit under a status that changes by itself; what is typed there is kept.
+    const restore = k === 'capture' || k === 'models' ? keepEdits(box) : () => {};
     const part = PARTS[k];
     if (typeof part === 'function') box.innerHTML = part(); else part.draw(box);
     restore();
