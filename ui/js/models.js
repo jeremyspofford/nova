@@ -204,9 +204,11 @@ function decisionChoices(form) {
   };
 }
 
-async function saveDecisions(body) {
+// `form` is reset once saved, as act() does: the key typed into it doesn't stay in the field.
+async function saveDecisions(body, form) {
   try {
     decisions = await api('PUT', '/models/decisions', body);
+    form?.reset();
     pending = null;
     toast('Decision-model choices saved.');
   } catch (e) {
@@ -261,9 +263,12 @@ ${decisionSection()}
 </section>`;
 }
 
-async function act(fn, done) {
+// `form`, when given, is reset once the change is saved (as Capture's are): a redraw keeps what is
+// typed (keepEdits, app.js), so a saved form shows what Nova has, and a refused one stays as typed.
+async function act(fn, done, form = null) {
   try {
     const r = await fn();
+    form?.reset();
     if (done) toast(typeof done === 'function' ? done(r) : done);
   } catch (e) { toast(e.message); }
   await loadModels();
@@ -272,7 +277,7 @@ async function act(fn, done) {
 // Wires the part into Settings: `render` redraws it when the data changes.
 export function bindModels(root, render) {
   // A redraw never wipes what the person is typing into one of this part's fields: it waits until
-  // they leave the field.
+  // they leave the field, and then Settings carries what they typed over it (keepEdits, app.js).
   let held = false;
   const typing = () => { const a = document.activeElement; return !!a?.closest?.('#models .model-form') && a.matches('input'); };
   part.rerender = () => { if (typing()) { held = true; return; } held = false; render(); };
@@ -300,7 +305,7 @@ export function bindModels(root, render) {
     if (a === 'models-remove') act(() => api('POST', '/models/remove', { model: b.dataset.model }), 'Nova asks before it removes it: see Downloads.');
     if (a === 'models-approve') act(() => api('POST', `/tasks/${encodeURIComponent(b.dataset.task)}/approve`, {}), null);
     if (a === 'models-cancel') act(() => api('POST', `/tasks/${encodeURIComponent(b.dataset.task)}/cancel`, { reason: 'Not now.' }), null);
-    if (a === 'models-decisions-confirm' && pending) saveDecisions({ ...pending.body, confirm: true });
+    if (a === 'models-decisions-confirm' && pending) saveDecisions({ ...pending.body, confirm: true }, b.closest('form'));
     if (a === 'models-decisions-cancel') { pending = null; rerender(); }
   });
   root.addEventListener('submit', (e) => {
@@ -309,9 +314,9 @@ export function bindModels(root, render) {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(form));
     const n = (v) => (v === '' || v === undefined ? null : Number(v));
-    if (form.dataset.form === 'disk') act(() => api('PUT', '/models/disk-budget', { gb: n(f.gb) }), 'Disk budget saved.');
-    if (form.dataset.form === 'budget') act(() => api('PUT', '/models/budget', { per_task_usd: n(f.per_task_usd), per_period_usd: n(f.per_period_usd), period: data?.cloud?.budget?.period ?? 'month' }), 'Cloud budget saved.');
-    if (form.dataset.form === 'pull' && f.model) act(() => api('POST', '/models/pull', { model: String(f.model).trim() }), 'Nova asks before it downloads anything: see Downloads.');
-    if (form.dataset.form === 'decisions' && decisions) saveDecisions(decisionChoices(form));
+    if (form.dataset.form === 'disk') act(() => api('PUT', '/models/disk-budget', { gb: n(f.gb) }), 'Disk budget saved.', form);
+    if (form.dataset.form === 'budget') act(() => api('PUT', '/models/budget', { per_task_usd: n(f.per_task_usd), per_period_usd: n(f.per_period_usd), period: data?.cloud?.budget?.period ?? 'month' }), 'Cloud budget saved.', form);
+    if (form.dataset.form === 'pull' && f.model) act(() => api('POST', '/models/pull', { model: String(f.model).trim() }), 'Nova asks before it downloads anything: see Downloads.', form);
+    if (form.dataset.form === 'decisions' && decisions) saveDecisions(decisionChoices(form), form);
   });
 }
