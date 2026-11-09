@@ -96,6 +96,11 @@ const CONNECTOR_ID = /^[a-z0-9][a-z0-9.-]{0,62}$/;
 const TOPIC = /^[A-Za-z0-9_.:-]{1,128}$/;
 // An event rule that listens to a connector has the source connector:<id>/<topic>.
 export const connectorSource = (connector: string, topic: string) => `connector:${connector}/${topic}`;
+// Nova's own parts that tell the person things without a rule (core/index.ts): source → name. The
+// name is what `proactive_off` turns off, as a rule's is; a held message looks it up by its
+// trigger's source when quiet hours end, since the trigger keeps the source but not the name.
+export const PARTS = { coding: 'Coding', infra: 'Infrastructure', network: 'Network', models: 'Local models' } as const;
+export type PartSource = keyof typeof PARTS;
 const CATCH_UP_MS = 6 * 3_600_000;
 const UNSURE = 'Not sure this should happen on its own, so it waits for you.';
 const DEFAULT_DEDUP_S = 600;
@@ -426,10 +431,7 @@ export class Triggers extends EventEmitter {
     const out: TriggerRecord[] = [];
     if (!this.#quiet(now)) {
       for (const m of this.#db.all<Message>(`SELECT * FROM message WHERE delivered_at IS NULL AND hold = 'quiet' ORDER BY at`)) {
-        // Only if what sent it still stands: the rule exists, isn't paused, isn't turned off.
-        const rule = this.#db.get<{ id: string; name: string; class: string; paused: number }>('SELECT r.id, r.name, r.class, r.paused FROM trigger t JOIN trigger_rule r ON r.id = t.rule_id WHERE t.trigger_id = ?', m.trigger_id);
-        const off = this.#off();
-        if (!rule || rule.paused || off.includes(rule.class.toLowerCase()) || off.includes(rule.name.toLowerCase())) {
+        if (!this.#stillStands(m)) {
           this.#db.run(`UPDATE message SET hold = 'withdrawn' WHERE id = ?`, m.id);
           continue;
         }
@@ -519,6 +521,22 @@ export class Triggers extends EventEmitter {
     );
     if (!this.#db.get('SELECT 1 FROM trigger WHERE trigger_id = ?', trigger_id)) return null;
     return this.#settle(trigger_id, { decision: 'drop', reason: 'Missed while Nova was off.', model: null });
+  }
+
+  // Whether what sent a held message still stands when quiet hours end, so it may go out. A rule's
+  // message: the rule exists, isn't paused, and neither its class nor its name is turned off (the
+  // person removed or paused it on purpose). A message from one of Nova's own parts has no rule:
+  // it stands unless its class or the part's name is turned off, the same check fire() made.
+  #stillStands(m: Message): boolean {
+    const t = this.#db.get<{ rule_id: string | null; class: string; source: string }>('SELECT rule_id, class, source FROM trigger WHERE trigger_id = ?', m.trigger_id);
+    if (!t) return false;
+    const off = this.#off();
+    if (t.rule_id === null) {
+      const name = Object.hasOwn(PARTS, t.source) ? PARTS[t.source as PartSource] : null;
+      return !off.includes(t.class.toLowerCase()) && !(name && off.includes(name.toLowerCase()));
+    }
+    const rule = this.#db.get<{ name: string; class: string; paused: number }>('SELECT name, class, paused FROM trigger_rule WHERE id = ?', t.rule_id);
+    return !!rule && !rule.paused && !off.includes(rule.class.toLowerCase()) && !off.includes(rule.name.toLowerCase());
   }
 
   #settle(trigger_id: string, triage: Triage): TriggerRecord {
