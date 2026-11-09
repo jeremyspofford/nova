@@ -270,3 +270,12 @@ body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { displ
   .uc-greet { font-size: var(--type-h2); }
   .uc-orb-hero { gap: var(--space-5); }
 }
+
+/* The Automations rule editor's compositions (sg-automations.js): one pane at a time when narrow. */
+@container uc (max-width: 719px) {
+  .au-panes { flex-direction: column; overflow: auto; }
+  .au-list { flex: 1 0 auto; width: 100%; border-right: 0; }
+  .au-panes[data-au-pane="detail"] .au-list, .au-panes[data-au-pane="list"] .au-detail { display: none; }
+  .au-detail { flex: 1 0 auto; padding: var(--space-4); }
+  .au-panes[data-au-pane="list"] .au-open.is-on { background: transparent; font-weight: var(--type-weight-regular); }
+}
