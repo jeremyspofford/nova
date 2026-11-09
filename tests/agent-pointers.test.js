@@ -4,12 +4,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT, TARGETS, generate } from '../scripts/agent-pointers.js';
+import { ROOT, TARGETS, copiedContent, generate, packetWindows } from '../scripts/agent-pointers.js';
 
 const SCRIPT = join(ROOT, 'scripts', 'agent-pointers.js');
-const PACKET = join(ROOT, 'docs', 'builder-packet');
 const read = (f) => readFileSync(join(ROOT, f), 'utf8');
 
 test('the committed CLAUDE.md and AGENTS.md are what the generator makes (--check passes)', () => {
@@ -27,21 +26,29 @@ test('every link in them points at a file that exists', () => {
 });
 
 test('they point at the packet rather than copying it: no long lines, no three packet lines in a row', () => {
-  const windows = new Set();
-  for (const name of readdirSync(PACKET, { recursive: true })) {
-    if (!String(name).endsWith('.md')) continue;
-    const lines = readFileSync(join(PACKET, String(name)), 'utf8').split('\n').map((l) => l.trim()).filter(Boolean);
-    for (let i = 0; i + 3 <= lines.length; i++) windows.add(lines.slice(i, i + 3).join('\n'));
-  }
+  const windows = packetWindows();
   assert.ok(windows.size > 0, 'the packet was read');
-  for (const f of TARGETS) {
-    const all = read(f).split('\n');
-    for (const l of all) assert.ok(l.length <= 200, `${f}: a line of ${l.length} chars: ${l.slice(0, 60)}…`);
-    assert.ok(all.length <= 40, `${f}: ${all.length} lines; it should stay a short list of pointers`);
-    const lines = all.map((l) => l.trim()).filter(Boolean);
-    for (let i = 0; i + 3 <= lines.length; i++) {
-      const w = lines.slice(i, i + 3).join('\n');
-      assert.ok(!windows.has(w), `${f}: copies three packet lines verbatim:\n${w}`);
-    }
-  }
+  for (const f of TARGETS) assert.deepEqual(copiedContent(read(f), windows), [], f);
+});
+
+test('the copy check catches three packet lines copied verbatim, and lets two through', () => {
+  const windows = packetWindows();
+  // Three consecutive non-empty lines from a real packet file, as they stand in it.
+  const raw = read('docs/builder-packet/OPERATING-RULES.md').split('\n');
+  const ok = (l) => l.trim() && l.length <= 200;
+  const i = raw.findIndex((_, j) => j + 3 <= raw.length && raw.slice(j, j + 3).every(ok));
+  assert.ok(i >= 0, 'OPERATING-RULES.md has three short non-empty lines in a row');
+  const copied = raw.slice(i, i + 3);
+  const body = (extra) => `${generate()}\n${extra.join('\n')}\n`;
+
+  const three = copiedContent(body(copied), windows);
+  assert.equal(three.length, 1, three.join('\n---\n'));
+  assert.match(three[0], /^copies three packet lines verbatim:\n/);
+  assert.ok(three[0].endsWith(copied.map((l) => l.trim()).join('\n')), three[0]);
+
+  assert.deepEqual(copiedContent(body(copied.slice(0, 2)), windows), []);
+
+  // The other two limits fail too.
+  assert.match(copiedContent(`${generate()}\n${'x'.repeat(201)}\n`, windows).join(), /a line of 201 chars/);
+  assert.match(copiedContent('- a pointer\n'.repeat(41), windows).join(), /42 lines/);
 });

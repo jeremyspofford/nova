@@ -26,7 +26,12 @@ const flag = (name) => flags.includes(name);
 const value = (name) => flags.find((f) => f.startsWith(`${name}=`))?.slice(name.length + 1) ?? null;
 const files = flags.filter((f) => !f.startsWith('-'));
 const out = (s) => process.stdout.write(`${s}\n`);
-const fail = (s, code = 1) => { process.stderr.write(`\nError: ${s}\n`); process.exit(code); };
+// Exit codes are set, never forced: stdout and stderr into a pipe are written asynchronously past the
+// pipe's buffer, and process.exit() would drop whatever the reader hasn't taken yet (as #425 found in
+// fake-claude and fake-codex). A failure stops the command by throwing Failed, which the switch below
+// catches; the process then ends on its own, once everything it said is written out.
+class Failed extends Error {}
+const fail = (s, code = 1) => { process.stderr.write(`\nError: ${s}\n`); process.exitCode = code; throw new Failed(s); };
 
 appendFileSync(join(cwd, '.fake-tofu-calls.jsonl'), `${JSON.stringify({ args, env: Object.keys(process.env).sort() })}\n`);
 
@@ -74,86 +79,90 @@ const show = (changes) => {
   return lines.join('\n');
 };
 
-switch (cmd) {
-  case 'version':
-    out('OpenTofu v1.8.0-standin');
-    break;
-  case 'init':
-    mkdirSync(join(cwd, '.terraform'), { recursive: true });
-    out('OpenTofu has been successfully initialized!');
-    break;
-  case 'plan': {
-    if (!flag('-input=false')) fail('the stand-in wants -input=false, as automation does.');
-    credential();
-    const planFile = value('-out');
-    if (!planFile) fail('the stand-in wants -out=FILE.');
-    const s = state();
-    const have = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, r]));
-    const changes = [];
-    if (flag('-destroy')) {
-      for (const r of s.resources) changes.push({ address: `${r.type}.${r.name}`, mode: 'managed', type: r.type, name: r.name, change: { actions: ['delete'], before: r.instances[0].attributes, after: null } });
-    } else {
-      const want = config();
-      for (const w of want) {
-        const r = have.get(w.address);
-        if (!r) changes.push({ address: w.address, mode: 'managed', type: w.type, name: w.name, change: { actions: ['create'], before: null, after: w.attrs } });
-        else if (!same(r.instances[0].attributes, w.attrs)) changes.push({ address: w.address, mode: 'managed', type: w.type, name: w.name, change: { actions: ['update'], before: r.instances[0].attributes, after: w.attrs } });
-      }
-      const names = new Set(want.map((w) => w.address));
-      for (const r of s.resources) if (!names.has(`${r.type}.${r.name}`)) changes.push({ address: `${r.type}.${r.name}`, mode: 'managed', type: r.type, name: r.name, change: { actions: ['delete'], before: r.instances[0].attributes, after: null } });
-    }
-    for (const c of changes) { c.change.before_sensitive = sensitiveOf(c.change.before); c.change.after_sensitive = sensitiveOf(c.change.after); }
-    // What exists after the apply, every resource (OpenTofu's planned_values), and before it (prior_state).
-    const after = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, { type: r.type, name: r.name, values: r.instances[0].attributes }]));
-    for (const c of changes) {
-      if (c.change.actions[0] === 'delete') after.delete(c.address);
-      else after.set(c.address, { type: c.type, name: c.name, values: c.change.after });
-    }
-    const mod = (list) => ({ root_module: { resources: [...list].map(([address, r]) => ({ address, mode: 'managed', type: r.type, name: r.name, values: r.values, sensitive_values: sensitiveOf(r.values) || {} })) } });
-    const prior = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, { type: r.type, name: r.name, values: r.instances[0].attributes }]));
-    const plan = { format: 'fake-tofu-plan', lineage: s.lineage, serial: s.serial, resource_changes: changes, planned_values: mod(after), prior_state: { values: mod(prior) } };
-    writeFileSync(planFile, JSON.stringify(plan));
-    out(show(changes));
-    process.exit(flag('-detailed-exitcode') && changes.length ? 2 : 0);
-    break;
-  }
-  case 'show': {
-    if (!files.length) {
-      // The state, as `tofu show -json` gives it.
+try {
+  switch (cmd) {
+    case 'version':
+      out('OpenTofu v1.8.0-standin');
+      break;
+    case 'init':
+      mkdirSync(join(cwd, '.terraform'), { recursive: true });
+      out('OpenTofu has been successfully initialized!');
+      break;
+    case 'plan': {
+      if (!flag('-input=false')) fail('the stand-in wants -input=false, as automation does.');
+      credential();
+      const planFile = value('-out');
+      if (!planFile) fail('the stand-in wants -out=FILE.');
       const s = state();
-      const resources = s.resources.map((r) => ({ address: `${r.type}.${r.name}`, mode: 'managed', type: r.type, name: r.name, values: r.instances[0].attributes }));
-      out(JSON.stringify({ format_version: '1.0', values: { root_module: { resources } } }));
+      const have = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, r]));
+      const changes = [];
+      if (flag('-destroy')) {
+        for (const r of s.resources) changes.push({ address: `${r.type}.${r.name}`, mode: 'managed', type: r.type, name: r.name, change: { actions: ['delete'], before: r.instances[0].attributes, after: null } });
+      } else {
+        const want = config();
+        for (const w of want) {
+          const r = have.get(w.address);
+          if (!r) changes.push({ address: w.address, mode: 'managed', type: w.type, name: w.name, change: { actions: ['create'], before: null, after: w.attrs } });
+          else if (!same(r.instances[0].attributes, w.attrs)) changes.push({ address: w.address, mode: 'managed', type: w.type, name: w.name, change: { actions: ['update'], before: r.instances[0].attributes, after: w.attrs } });
+        }
+        const names = new Set(want.map((w) => w.address));
+        for (const r of s.resources) if (!names.has(`${r.type}.${r.name}`)) changes.push({ address: `${r.type}.${r.name}`, mode: 'managed', type: r.type, name: r.name, change: { actions: ['delete'], before: r.instances[0].attributes, after: null } });
+      }
+      for (const c of changes) { c.change.before_sensitive = sensitiveOf(c.change.before); c.change.after_sensitive = sensitiveOf(c.change.after); }
+      // What exists after the apply, every resource (OpenTofu's planned_values), and before it (prior_state).
+      const after = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, { type: r.type, name: r.name, values: r.instances[0].attributes }]));
+      for (const c of changes) {
+        if (c.change.actions[0] === 'delete') after.delete(c.address);
+        else after.set(c.address, { type: c.type, name: c.name, values: c.change.after });
+      }
+      const mod = (list) => ({ root_module: { resources: [...list].map(([address, r]) => ({ address, mode: 'managed', type: r.type, name: r.name, values: r.values, sensitive_values: sensitiveOf(r.values) || {} })) } });
+      const prior = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, { type: r.type, name: r.name, values: r.instances[0].attributes }]));
+      const plan = { format: 'fake-tofu-plan', lineage: s.lineage, serial: s.serial, resource_changes: changes, planned_values: mod(after), prior_state: { values: mod(prior) } };
+      writeFileSync(planFile, JSON.stringify(plan));
+      out(show(changes));
+      process.exitCode = flag('-detailed-exitcode') && changes.length ? 2 : 0;
       break;
     }
-    const plan = readJson(files[0], null);
-    if (!plan || plan.format !== 'fake-tofu-plan') fail(`${files[0]} isn't a saved plan.`);
-    if (flag('-json')) out(JSON.stringify({ format_version: '1.2', resource_changes: plan.resource_changes, planned_values: plan.planned_values, prior_state: plan.prior_state }));
-    else out(show(plan.resource_changes));
-    break;
-  }
-  case 'apply': {
-    if (!flag('-input=false')) fail('the stand-in wants -input=false, as automation does.');
-    credential();
-    if (!files.length) fail('the stand-in applies a saved plan only.');
-    const plan = readJson(files[0], null);
-    if (!plan || plan.format !== 'fake-tofu-plan') fail(`${files[0]} isn't a saved plan.`);
-    const s = state();
-    if (existsSync(STATE) && (plan.lineage !== s.lineage || plan.serial !== s.serial)) fail('Saved plan is stale: the state changed since it was made. Make a new plan.');
-    const byAddr = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, r]));
-    let added = 0; let changed = 0; let destroyed = 0;
-    for (const c of plan.resource_changes) {
-      const a = c.change.actions[0];
-      if (a === 'create') { byAddr.set(c.address, { mode: 'managed', type: c.type, name: c.name, instances: [{ attributes: { ...c.change.after, id: createHash('sha256').update(c.address).digest('hex').slice(0, 12) } }] }); added++; }
-      else if (a === 'update') { byAddr.set(c.address, { mode: 'managed', type: c.type, name: c.name, instances: [{ attributes: c.change.after }] }); changed++; }
-      else if (a === 'delete') { byAddr.delete(c.address); destroyed++; }
+    case 'show': {
+      if (!files.length) {
+        // The state, as `tofu show -json` gives it.
+        const s = state();
+        const resources = s.resources.map((r) => ({ address: `${r.type}.${r.name}`, mode: 'managed', type: r.type, name: r.name, values: r.instances[0].attributes }));
+        out(JSON.stringify({ format_version: '1.0', values: { root_module: { resources } } }));
+        break;
+      }
+      const plan = readJson(files[0], null);
+      if (!plan || plan.format !== 'fake-tofu-plan') fail(`${files[0]} isn't a saved plan.`);
+      if (flag('-json')) out(JSON.stringify({ format_version: '1.2', resource_changes: plan.resource_changes, planned_values: plan.planned_values, prior_state: plan.prior_state }));
+      else out(show(plan.resource_changes));
+      break;
     }
-    // The stand-in keeps the configuration's attributes as they were asked for (an id aside), so a
-    // second plan of the same configuration has no changes.
-    for (const [, r] of byAddr) { const { id: _id, ...rest } = r.instances[0].attributes; r.instances[0].attributes = rest; }
-    writeFileSync(STATE, JSON.stringify({ version: 4, serial: s.serial + 1, lineage: s.lineage, resources: [...byAddr.values()] }, null, 2));
-    out(`Apply complete! Resources: ${added} added, ${changed} changed, ${destroyed} destroyed.`);
-    break;
+    case 'apply': {
+      if (!flag('-input=false')) fail('the stand-in wants -input=false, as automation does.');
+      credential();
+      if (!files.length) fail('the stand-in applies a saved plan only.');
+      const plan = readJson(files[0], null);
+      if (!plan || plan.format !== 'fake-tofu-plan') fail(`${files[0]} isn't a saved plan.`);
+      const s = state();
+      if (existsSync(STATE) && (plan.lineage !== s.lineage || plan.serial !== s.serial)) fail('Saved plan is stale: the state changed since it was made. Make a new plan.');
+      const byAddr = new Map(s.resources.map((r) => [`${r.type}.${r.name}`, r]));
+      let added = 0; let changed = 0; let destroyed = 0;
+      for (const c of plan.resource_changes) {
+        const a = c.change.actions[0];
+        if (a === 'create') { byAddr.set(c.address, { mode: 'managed', type: c.type, name: c.name, instances: [{ attributes: { ...c.change.after, id: createHash('sha256').update(c.address).digest('hex').slice(0, 12) } }] }); added++; }
+        else if (a === 'update') { byAddr.set(c.address, { mode: 'managed', type: c.type, name: c.name, instances: [{ attributes: c.change.after }] }); changed++; }
+        else if (a === 'delete') { byAddr.delete(c.address); destroyed++; }
+      }
+      // The stand-in keeps the configuration's attributes as they were asked for (an id aside), so a
+      // second plan of the same configuration has no changes.
+      for (const [, r] of byAddr) { const { id: _id, ...rest } = r.instances[0].attributes; r.instances[0].attributes = rest; }
+      writeFileSync(STATE, JSON.stringify({ version: 4, serial: s.serial + 1, lineage: s.lineage, resources: [...byAddr.values()] }, null, 2));
+      out(`Apply complete! Resources: ${added} added, ${changed} changed, ${destroyed} destroyed.`);
+      break;
+    }
+    default:
+      fail(`the stand-in doesn't know “${cmd}”.`);
   }
-  default:
-    fail(`the stand-in doesn't know “${cmd}”.`);
+} catch (e) {
+  if (!(e instanceof Failed)) throw e;
 }

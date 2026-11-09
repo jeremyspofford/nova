@@ -159,7 +159,7 @@ async function words(page: Page, frame: string, label: string) {
   }
   if (frame === 'check-failed') assert.equal(await f.getByRole('button', { name: 'Retry' }).count(), 1, `${label}: Retry, by the person`);
   if (frame === 'confirm-list') {
-    has('not your passkey'); has('Flagged for the owner');
+    has('needs your passkey'); has('any paired device may: your ruling');
     assert.equal(await f.getByRole('radio', { name: /Make the change and tell me/ }).isChecked(), true, `${label}: tier 1 is the default`);
     assert.equal(await f.getByRole('radio', { name: /Ask me first/ }).isChecked(), false, `${label}: tier 2 is a choice`);
     assert.equal(await f.getByRole('checkbox', { name: /Locks/ }).isChecked(), true, `${label}: locks being marked`);
