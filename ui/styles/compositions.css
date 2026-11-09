@@ -482,6 +482,31 @@
 .if-more { margin-top: var(--space-2); }
 .if-more > .btn { margin-inline: calc(-1 * var(--space-4)); }
 
+/* ---- Nova's browser: starting a task and the flows library (2026-11-09; ui/js/sg-browser.js) ----
+   The Automations panes (.au-*) again: tasks, flows or sites on hairlines, the open one beside them.
+   The separators sit on the list items, never on a control. The live picture is drawn as its frame:
+   a quiet card in the screen's proportions, holding the page's address and what fills it. */
+.bw .au-list > * { flex-shrink: 0; }
+.bw-list, .bw-notes { margin: 0; padding: 0; list-style: none; }
+.bw-list > li + li { border-top: 1px solid var(--border-subtle); }
+.bw-list .au-open { align-items: flex-start; padding-block: var(--space-3); }
+.bw-list .au-open .uc-ic { margin-top: var(--space-1); }
+.bw .au-detail .bw-list { margin-inline: calc(-1 * var(--space-3)); }
+.bw .au-detail .uc-back { margin-bottom: var(--space-2); }
+.bw .au-detail .uc-h { overflow-wrap: anywhere; }
+.bw-kind { margin: 0 0 var(--space-1); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+.bw-top-acts { margin: 0 0 var(--space-2); }
+.bw-said { margin: 0 0 var(--space-4); padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.bw-quote { margin: var(--space-2) 0 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.bw-notes > li { padding: var(--space-2) 0; color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); overflow-wrap: anywhere; }
+.bw-notes > li + li { border-top: 1px solid var(--border-subtle); }
+.bw-mono { font-family: var(--font-mono); }
+.bw-screen { margin: var(--space-4) 0; }
+.bw-pic { display: flex; flex-direction: column; justify-content: space-between; aspect-ratio: 16 / 10; padding: var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); background: var(--surface-card); }
+.bw-pic-url { margin: 0; color: var(--text-secondary); }
+.bw-screen > figcaption { margin-top: var(--space-2); }
+.bw .confirm { min-height: var(--hit); }
+
 /* ---- Home Assistant, connecting and controlling (2026-11-09; ui/js/sg-home-assistant.js) ----
    The Automations panes (.au-*) again: Settings' categories or the devices on hairlines, the open
    one beside them. Separators sit on the list items, never on a control. A device's state is words,

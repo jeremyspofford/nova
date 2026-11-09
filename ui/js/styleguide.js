@@ -23,6 +23,7 @@ import { bindReceipts, isRcFrame, rcEntry, rcFrame } from './sg-receipts.js';
 import { bindInbox, ibEntry, ibFrame, isIbFrame } from './sg-inbox.js';
 import { bindComputer, isNcFrame, ncEntry, ncFrame } from './sg-computer.js';
 import { bindInfraForms, ifEntry, ifFrame, isIfFrame } from './sg-infra-forms.js';
+import { bindBrowser, bwEntry, bwFrame, isBwFrame } from './sg-browser.js';
 import { bindHomeAssistant, haEntry, haFrame, isHaFrame } from './sg-home-assistant.js';
 import { bindTaskRuns, isTrFrame, trEntry, trFrame } from './sg-task-runs.js';
 import { bindProviders, isPvFrame, pvEntry, pvFrame } from './sg-providers.js';
@@ -47,6 +48,8 @@ const inboxFrame = only === 'inbox' && isIbFrame(params.get('frame')) ? params.g
 const computerFrame = only === 'computer-door' && isNcFrame(params.get('frame')) ? params.get('frame') : null;
 // And for infrastructure projects and network targets (?entry=infra-forms&frame=<state>).
 const infraFrame = only === 'infra-forms' && isIfFrame(params.get('frame')) ? params.get('frame') : null;
+// And for Nova's browser: starting a task and the flows library (?entry=browser-tasks&frame=<state>).
+const browserFrame = only === 'browser-tasks' && isBwFrame(params.get('frame')) ? params.get('frame') : null;
 // And for Home Assistant (?entry=home-assistant&frame=<state>).
 const haFrameName = only === 'home-assistant' && isHaFrame(params.get('frame')) ? params.get('frame') : null;
 // And for coding, infrastructure and network runs in Tasks (?entry=task-runs&frame=<state>).
@@ -819,6 +822,7 @@ ${state('A reply that followed a skill', `<div class="thread">${renderTurn(usedS
       ['inbox', 'Messages and quiet hours (for the owner’s reaction)', 'Design first, nothing wired: what Nova tells you on its own, unread and read, each with where it came from; one opened; what quiet hours hold and what happens when they end; and editing them. Drawn from the real model (src/core/triggers.ts): a message traces to a trigger, from an automation or one of Nova’s own parts; read and Let it through are the only actions; held messages go out one by one after quiet hours end, with no digest. A held message no automation sent is withdrawn today, not sent: flagged for the owner.', () => ibEntry((l, h) => state(l, h))],
       ['computer-door', 'Nova’s computer: the door (for the owner’s reaction)', 'Design first, nothing wired: where you meet Nova’s computer and what is inside. Proposed as a category in Settings › What Nova works with, not a new place in the rail (a question for the owner). Drawn from the real model (src/core/computer/, GET /api/v1/computer): Docker on this machine, a workspace per project with one folder, no network unless declared, each command a task with a checkpoint before any change. There is no terminal, screen or file browser, and no on or off: Nova checks Docker and its image, and a workspace is ready, broken or being made. Chat can’t use it yet. Failures are the backend’s own words.', () => ncEntry((l, h) => state(l, h))],
       ['infra-forms', 'Infrastructure projects and network targets (for the owner’s reaction)', 'Design first, nothing wired, every project, target and host made up, no secret value drawn: both lists and their empty state, adding a project and a target with in-place validation in the core’s words, the credential step (the value goes into Nova’s vault and isn’t shown again), a failed first use, and editing. Drawn from the real model (src/core/infra, src/core/network; /api/v1/infra and /network): a project changes only its budget and price sheet, a target only its token. The backend has no remove, rename or readdress route and no connection test on save (the first plan, or a change’s snapshot, is the first use); adding, editing and saving a secret need no passkey; only applies are tier 3, confirmed in Tasks. Those gaps are flagged, not drawn as working.', () => ifEntry((l, h) => state(l, h))],
+      ['browser-tasks', 'Nova’s browser: starting a task and the flows library (for the owner’s reaction)', 'Design first, nothing wired, every site, task and flow made up, no sign-in value drawn: the door (proposed as a category in Settings › What Nova works with, beside Nova’s computer), starting a task from a flow with the sites it may visit and the sign-in it uses, a task waiting for your OK, running with its live picture, needing you, done and failed, the flows library, sites and sign-ins, and the empty states. Drawn from the real model (src/core/browser/, /api/v1/browser): a task is a step plan held to its declared hosts; one sign-in per site, from the vault, typed only on that host; a live picture anyone may watch, and pause, stop and takeover for Nova’s own screen and approving devices; a checkout stops at the total. A flow lists its shape, never its steps. There is no planner from words, no chat start except account changes, and no route to edit or retire a flow: flagged, not drawn as working.', () => bwEntry((l, h) => state(l, h))],
       ['home-assistant', 'Home Assistant: connecting and controlling (for the owner’s reaction)', 'Design first, nothing wired, every device made up, no token drawn: connecting with an address and a long-lived token (checked with Home Assistant before the vault keeps it), what Nova sees and changes, approvals, which kinds confirm every time, disconnecting, and each failure in the backend’s own words. Drawn from the real model (src/core/connectors/home-assistant.ts; /api/v1/connectors/home-assistant): Nova sees each entity’s state and last change only, no attributes or rooms; every change is a task that asks first (tier 2), locks and alarms confirm every time (tier 3), and Nova reads the device back as the evidence. Chat can’t use it, and there is no list of services, so the buttons per kind are proposed. Safety questions are flagged: a script, a scene or a garage door asks first but doesn’t confirm every time, and taking locks off the list needs no passkey.', () => haEntry((l, h) => state(l, h))],
       ['task-runs', 'Coding, infrastructure and network runs in Tasks (for the owner’s reaction)', 'Design first, nothing wired, every repository, project, target and host made up. Proposed: one list, Tasks’ own groups, each run one row with its steps inside, not a list per kind: what needs you comes first whatever its kind, and a run’s steps are already tasks in the ledger. Drawn from the real model (src/core/coding, src/core/infra, src/core/network; /api/v1/coding, /infra, /network): each run is a chain of ledger tasks; a coding run writes in Nova’s own worktree, asks before it runs your tests (tier 2) and every time before it merges (tier 3), and never pushes; a plan changes nothing and is priced against its project’s budget, and one that adds cost and ends over it is never offered for the tier-3 apply, which comes after a checkpoint; a network change takes a snapshot, asks every time, and is put back by itself unless Nova hears from a paired phone or browser within the window. Gaps flagged, not drawn as working: no single runs route, no live output while a plan or apply runs, no run-again, no putting a change back while the switch watches, and no cost for coding runs beyond the agent’s own usage.', () => trEntry((l, h) => state(l, h))],
       ['providers', 'Providers and models (for the owner’s reaction)', 'Design first, nothing wired, every address, model and spend made up, no key drawn (keys are vault names; the callback token is a demo): the providers with their health, Check now and each answer it really gives, n8n’s callback token shown once and made anew, what may leave your devices, the roles, waking a computer, the cloud model and its budget, and prices with where each comes from. Proposed inside Settings › Models and providers, the category that already holds both parts. Drawn from the real model (src/core/providers, src/core/models; /api/v1/providers and /models): only a provider with an address can be checked; a command-line one is “Installed.” when its program is found. There is no model warm-up, and Nova can’t show the prices it keeps; those gaps are drawn as gaps, not controls.', () => pvEntry((l, h) => state(l, h))],
@@ -879,6 +883,12 @@ function render() {
     document.body.classList.add('sg-full');
     sg.innerHTML = draw(() => ifFrame(infraFrame));
     bindInfraForms(sg);
+    return;
+  }
+  if (browserFrame) {
+    document.body.classList.add('sg-full');
+    sg.innerHTML = draw(() => bwFrame(browserFrame));
+    bindBrowser(sg);
     return;
   }
   if (haFrameName) {
@@ -942,6 +952,7 @@ function render() {
   bindInbox(sg);
   bindComputer(sg);
   bindInfraForms(sg);
+  bindBrowser(sg);
   bindHomeAssistant(sg);
   bindTaskRuns(sg);
   bindProviders(sg);
