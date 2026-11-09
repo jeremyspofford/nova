@@ -1,7 +1,7 @@
 // A Home Assistant service call says what it will do, and is gated by what it touches (M5 review):
-// its data is checked (entity names, plain keys and values) and shown in the approval; the tier
-// comes from the entities as well as the domain, so homeassistant.turn_off on a lock needs the
-// lock's confirmation; and a bare name (homeassistant, ha.lan) counts as local only once it has
+// its data is checked (entity names, plain keys and values) and shown in the task's goal; the tier
+// comes from the entities as well as the domain, so homeassistant.turn_off on a marked lock needs
+// the lock's confirmation; and a bare name (homeassistant, ha.lan) counts as local only once it has
 // been resolved to an address on this network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,12 +19,15 @@ async function connected() {
   return { ha, nova, done: async () => { await nova.stop(); await ha.close(); } };
 }
 
-test('the tier comes from the entities too: turning off a lock through the homeassistant domain needs its confirmation', async () => {
+// Locks are no longer on the tier-3 list by default (owner ruling 2026-11-09), so the person marks
+// them here first; the rule tested is unchanged.
+test('the tier comes from the entities too: turning off a marked lock through the homeassistant domain needs its confirmation', async () => {
   const { nova, done } = await connected();
   try {
+    assert.equal((await nova.call('PUT', `${HA}/settings`, { tier3_domains: ['lock'] })).status, 200);
     assert.equal((await nova.call('POST', `${HA}/services/homeassistant/turn_off`, { entity_id: 'lock.back_door' })).body.approval_tier, 3);
     assert.equal((await nova.call('POST', `${HA}/services/homeassistant/turn_off`, { data: { entity_id: ['light.kitchen', 'lock.back_door'] } })).body.approval_tier, 3);
-    assert.equal((await nova.call('POST', `${HA}/services/homeassistant/turn_off`, { entity_id: 'light.kitchen' })).body.approval_tier, 2);
+    assert.equal((await nova.call('POST', `${HA}/services/homeassistant/turn_off`, { entity_id: 'light.kitchen' })).body.approval_tier, 1);
   } finally { await done(); }
 });
 
@@ -38,7 +41,7 @@ test('service data is checked and shown in the approval', async () => {
     assert.equal((await nova.call('POST', `${HA}/services/light/turn_on`, { entity_id: 'light.kitchen', data: { entity_id: 'light.porch' } })).status, 400, 'two different entities named');
     const made = await nova.call('POST', `${HA}/services/light/turn_on`, { entity_id: 'light.kitchen', data: { brightness: 120, color_name: 'warm white' } });
     assert.equal(made.status, 201);
-    const t = await until(() => nova.get(`/tasks/${made.body.id}`), (x) => x.state === 'waiting');
+    const t = await until(() => nova.get(`/tasks/${made.body.id}`), (x) => ['done', 'failed', 'waiting'].includes(x.state));
     assert.match(t.brief.goal, /brightness 120/);
     assert.match(t.brief.goal, /color_name warm white/);
   } finally { await done(); }

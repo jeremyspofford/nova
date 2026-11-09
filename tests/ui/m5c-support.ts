@@ -50,9 +50,11 @@ export function browserTask(plan: unknown, title = 'Sign up on the example site'
 
 type M = ReturnType<typeof blank>;
 
-// Delegates a browser task and gives the OK a form plan asks for (tier 2), as the person would.
-export async function delegate(m: M, plan: unknown, title?: string) {
-  const r = await m.send('POST', '/api/v1/tasks', browserTask(plan, title));
+// Delegates a browser task and gives the OK it asks for, as the person would: none for a form plan
+// on its own site (tier 1 since the owner's ruling of 2026-11-09), once at tier 2, with a confirm at
+// tier 3. `extra`: more of the task, such as a raised approval_tier.
+export async function delegate(m: M, plan: unknown, title?: string, extra: Record<string, unknown> = {}) {
+  const r = await m.send('POST', '/api/v1/tasks', { ...browserTask(plan, title), ...extra });
   if (r.status === 201 && r.body.state === 'waiting' && r.body.approval_tier >= 2 && !r.body.approved_at) {
     const ok = await m.send('POST', `/api/v1/tasks/${r.body.id}/approve`, r.body.approval_tier === 3 ? { confirm: true } : {});
     if (ok.status !== 200) throw new Error(`approve: ${JSON.stringify(ok.body)}`);

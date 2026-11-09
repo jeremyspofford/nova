@@ -9,8 +9,10 @@
 // select, wait, read, a step for a person, login, checkout, and the account steps), the page that
 // shows it worked (verify), and a profile: Nova's own, which keeps cookies between tasks and runs
 // one task at a time, or a throwaway one. Tiers (plan.ts minTierOf): a plan that only reads asks
-// nothing; one that types, chooses or clicks asks first (2); a checkout or an account change asks
-// every time (3, {confirm: true}, with a passkey on Nova's own screen). A sign-in is one per site,
+// nothing; one that signs in with a saved sign-in, types, chooses or clicks on its own sites is act
+// and report (1, owner ruling 2026-11-09; it asked first, 2, before); a checkout or an account
+// change asks every time (3, {confirm: true}, with a passkey on Nova's own screen), signed in or
+// not, and so does forgetting a site. A sign-in is one per site,
 // saved in the vault under browser/login/<host>/ and typed by the worker only into a page on that
 // host, over https (plain http only to this machine), at the moment of use; its value is never
 // shown. While a task runs there is a live picture (JPEG frames over server-sent events) that
@@ -90,7 +92,9 @@ const LEDE = 'Nova’s own browser works through web pages for you, only on the 
 const SIGN_IN = 'Nova types it only into a page on that site, over https, when a step signs in. It is never shown, here or in chat.';
 const ACTS_ONLY = 'Anyone of yours can watch. Only Nova’s own screen, or a device you’ve allowed to approve, can pause, stop or take over.';
 const flowState = (f) => (f.state === 'active' ? 'Ready' : f.state === 'draft' ? 'Being checked' : 'Retired');
-const tierWords = (f) => (f.checkout ? 'Every time (tier 3): it ends at a checkout' : 'First (tier 2): it types and clicks');
+const tierWords = (f) => (f.checkout ? 'Every time (tier 3): it ends at a checkout' : 'Not first (tier 1): it signs in, types and clicks on its own site, and reports what it did');
+// Using a saved sign-in (owner ruling 2026-11-09): it doesn't make a task ask first by itself.
+const SIGN_IN_TIER = 'Signing in with it doesn’t make a task ask first: a task that only signs in, types and clicks on its own sites runs and reports (tier 1). A checkout or an account change still asks every time.';
 
 // ---- the door: a category in Settings --------------------------------------------------------------
 
@@ -213,7 +217,7 @@ function startWords(id) {
 function approve(id) {
   return `${back(id)}${kind('Waiting for your OK')}<h3 class="uc-h" id="${id}-title">${esc(TASKS.ok.title)}</h3>
 <p class="au-sentence">Nova will follow “reorder-paper” on shop.example.com, signed in, and stop at the checkout’s total.</p>
-${reach(id)}${facts([['Asks', 'Every time (tier 3): it ends at a checkout'], ['Proof', 'A screenshot, and Nova’s own read of https://shop.example.com/checkout showing “Order summary”'], ['Task', `${mono(TASKS.ok.id)} in Tasks`]])}
+${reach(id)}${facts([['Asks', 'Every time (tier 3): it ends at a checkout. Signing in alone wouldn’t ask (tier 1).'], ['Proof', 'A screenshot, and Nova’s own read of https://shop.example.com/checkout showing “Order summary”'], ['Task', `${mono(TASKS.ok.id)} in Tasks`]])}
 <form class="au-form bw-confirm" data-sg-inert novalidate aria-label="Approve this task">${passkeyConfirm({ state: 'ready' })}
 <div class="au-actions">${passkeyAction({ state: 'ready' })}<button type="button" class="btn">Cancel the task</button><button type="button" class="btn quiet">Not now</button></div></form>`;
 }
@@ -282,12 +286,12 @@ function flowsEmpty(id) {
 function site(id) {
   const s = SITES[0];
   return `${back(id)}${kind('Site')}<h3 class="uc-h" id="${id}-title">${esc(s.site)}</h3>
-${facts([['Sign-in', `Saved. ${SIGN_IN}`], ['Kept data', 'Cookies and storage in Nova’s own profile'], ['First used', esc(s.first)], ['Last used', esc(s.last)]])}
+${facts([['Sign-in', `Saved. ${SIGN_IN}`], ['Using it', esc(SIGN_IN_TIER)], ['Kept data', 'Cookies and storage in Nova’s own profile'], ['First used', esc(s.first)], ['Last used', esc(s.last)]])}
 <form class="au-form" data-sg-inert novalidate aria-labelledby="${id}-rep"><h4 class="uc-group au-group-head" id="${id}-rep">Replace the sign-in</h4>
 <div class="au-pair"><div class="au-field"><label class="au-label" for="${id}-user">Username</label><input class="uc-input" id="${id}-user" autocomplete="off" spellcheck="false"></div><div class="au-field"><label class="au-label" for="${id}-pass">Password</label><input class="uc-input" id="${id}-pass" type="password" autocomplete="new-password"></div></div>
 <p class="au-note">Never type a password into chat; save it here instead. The one saved now isn’t shown.</p>
 <div class="au-actions"><button type="submit" class="btn" data-bw-demo>Save the sign-in</button></div></form>
-<div class="au-danger"><a class="btn quiet" href="#${id}-forget">Forget this site</a><p class="au-note">Asks every time. Its cookies and storage go, and its sign-in too if you say.</p></div>`;
+<div class="au-danger"><a class="btn quiet" href="#${id}-forget">Forget this site</a><p class="au-note">Asks every time (tier 3: it deletes data). Its cookies and storage go, and its sign-in too if you say.</p></div>`;
 }
 
 function forget(id) {

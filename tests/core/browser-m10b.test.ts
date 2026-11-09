@@ -82,11 +82,15 @@ test('the plan validator refuses the pay control, a pay address and card fields,
   assert.equal(ok.steps.length, 3);
 });
 
-test('tiers: a checkout plan is tier 3, always; a plan that types or clicks is tier 2; a read is 0', () => {
+// Owner ruling 2026-11-09 (docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md): using a saved
+// sign-in, and typing or clicking on the task's own sites, is tier 1 (act and report); it was tier 2.
+test('tiers: a checkout plan is tier 3, always, and so is an account change; a plan that types, clicks or signs in is tier 1; a read is 0', () => {
   const h = ['127.0.0.1:5000'];
   assert.equal(minTierOf(validatePlan({ allowed_hosts: h, steps: [{ do: 'navigate', url: 'http://127.0.0.1:5000/checkout' }, { do: 'checkout', lines: '.line', total: '#total', pay: '#complete' }] })), 3);
-  assert.equal(minTierOf(validatePlan({ allowed_hosts: h, steps: [{ do: 'navigate', url: 'http://127.0.0.1:5000/' }, { do: 'click', selector: '#add' }] })), 2);
-  assert.equal(minTierOf(validatePlan({ allowed_hosts: h, steps: [{ do: 'navigate', url: 'http://127.0.0.1:5000/login' }, { do: 'login', username: '#u', password: '#p', submit: '#go' }] })), 2);
+  assert.equal(minTierOf(validatePlan({ allowed_hosts: h, steps: [{ do: 'navigate', url: 'http://127.0.0.1:5000/' }, { do: 'click', selector: '#add' }] })), 1);
+  assert.equal(minTierOf(validatePlan({ allowed_hosts: h, steps: [{ do: 'navigate', url: 'http://127.0.0.1:5000/login' }, { do: 'login', username: '#u', password: '#p', submit: '#go' }] })), 1);
+  assert.equal(minTierOf(validatePlan({ allowed_hosts: h, steps: [{ do: 'navigate', url: 'http://127.0.0.1:5000/login' }, { do: 'login', username: '#u', password: '#p', submit: '#go' }, { do: 'navigate', url: 'http://127.0.0.1:5000/checkout' }, { do: 'checkout', lines: '.line', total: '#total', pay: '#complete' }] })), 3, 'a sign-in doesn’t lower a checkout');
+  assert.equal(minTierOf({ account: { change: 'password', site: '127.0.0.1:5000' }, steps: [{ do: 'navigate', url: 'http://127.0.0.1:5000/' }, { do: 'login', username: '#u', password: '#p', submit: '#go' }] } as never), 3, 'an account change stays tier 3');
   assert.equal(minTierOf(validatePlan({ allowed_hosts: h, steps: [{ do: 'navigate', url: 'http://127.0.0.1:5000/' }, { do: 'read', selector: 'h1' }] })), 0);
 });
 

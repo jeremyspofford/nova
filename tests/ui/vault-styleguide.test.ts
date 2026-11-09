@@ -5,7 +5,8 @@
 // (the top bar's) and none in a row, at most one primary control. No frame draws a secret's value:
 // every password field is empty, and nothing offers to show, reveal or copy one. The words are the
 // real model's (src/core/vault.ts, the /vault routes): names only, the vault deletes providers'
-// secrets alone, a reset is tier 3 with a passkey on Nova's own screen, the old file is set aside,
+// secrets alone, deleting one and a reset are tier 3 with a passkey on Nova's own screen (owner
+// ruling 2026-11-09), a paired approver confirms with the box alone, the old file is set aside,
 // and each failure quotes the backend's own words. On a phone (390×844) and a Duo's cover screen
 // (380×900) each frame is one column filling the screen. With NOVA_UI_SHOTS set
 // (scripts/ui-test.sh), Chromium writes the owner's screenshots.
@@ -117,8 +118,10 @@ async function words(page: Page, frame: string, label: string) {
     assert.equal(await f.getByLabel('New value').getAttribute('type'), 'password', `${label}: the new value is a password field`);
   }
   if (frame === 'delete-confirm') {
-    for (const s of ['can’t be brought back', 'The key CLOUD_MODELS_KEY isn’t in the vault yet.', 'under a new key', 'no confirm and no passkey']) has(s);
-    assert.equal(await f.getByRole('button', { name: 'Delete CLOUD_MODELS_KEY' }).count(), 1, `${label}: one delete`);
+    // Tier 3 since the owner's ruling of 2026-11-09: the box and a passkey, every time.
+    for (const s of ['can’t be brought back', 'The key CLOUD_MODELS_KEY isn’t in the vault yet.', 'under a new key', 'Asks every time', 'Deleting a secret is tier 3']) has(s);
+    lacks('no confirm and no passkey');
+    assert.ok(await f.getByRole('button', { name: 'Confirm with passkey' }).isDisabled(), `${label}: the passkey waits for the box`);
   }
   if (frame === 'deleted') { has('Cloud models needs a key again'); assert.equal(await f.locator('.vt-list a').count(), 13, `${label}: the name is gone from the list`); }
   if (frame === 'elsewhere') { has('The vault deletes providers’ keys only'); has('Disconnecting Home Assistant'); has('no route removes a project’s secret or a target’s token'); }
@@ -128,7 +131,7 @@ async function words(page: Page, frame: string, label: string) {
   }
   if (frame === 'reset-confirm') { has('Asks every time'); assert.ok(await f.getByRole('button', { name: 'Confirm with passkey' }).isDisabled(), `${label}: the passkey waits for the box`); }
   if (frame === 'reset-no-passkey') { has('Add one first'); assert.equal(await f.getByRole('button', { name: 'Add a passkey' }).count(), 1, `${label}: Add a passkey`); assert.equal(await f.getByRole('button', { name: 'Confirm with passkey' }).count(), 0, `${label}: nothing to confirm with`); }
-  if (frame === 'reset-paired') { has('the core asks only for this box: no passkey'); assert.ok(await f.getByRole('button', { name: 'Start a new vault' }).isDisabled(), `${label}: waits for the box`); }
+  if (frame === 'reset-paired') { has('this box is the confirmation: no passkey, as for every tier-3 route'); has('can’t approve can’t start a new vault'); assert.ok(await f.getByRole('button', { name: 'Start a new vault' }).isDisabled(), `${label}: waits for the box`); }
   if (frame === 'reset-done') { has('secrets.json.unopenable-2026-11-09'); has('To set again'); }
   if (frame === 'file-key') has('Anyone who can read Nova’s home folder can open them.');
   if (frame === 'keychain-waiting') { has('Nova waits for the keychain rather than starting over'); has('Can’t open now'); assert.equal(await f.locator('.vt-list').count(), 0, `${label}: no names while it can’t open`); }

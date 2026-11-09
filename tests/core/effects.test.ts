@@ -209,6 +209,10 @@ test('Home Assistant: a call whose read-back lags waits for you instead of calli
   try {
     assert.equal((await nova.call('POST', `${HA}/connect`, { url: `${ha.base}/`, token: ha.token })).status, 200);
     await until(() => nova.get(HA), (v) => v.live === 'listening');
+    // A call the person asks for is tier 1 since the owner's ruling of 2026-11-09; this test keeps the
+    // ask-first path (and its retry asking again) by setting the service tier to 2. The tier-1 hold is
+    // tested in tests/core/home-assistant.test.ts.
+    assert.equal((await nova.call('PUT', `${HA}/settings`, { service_tier: 2 })).status, 200);
     // The light takes its time: Nova's read right after the call still shows it off.
     ha.state.lagMs = 400;
     const made = await nova.call('POST', `${HA}/services/light/turn_on`, { entity_id: 'light.kitchen' });

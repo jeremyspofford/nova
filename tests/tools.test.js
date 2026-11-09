@@ -77,7 +77,7 @@ test('htmlToText leaves hostile character references as they are and still decod
 });
 
 test('the protocol lists every tool on offer', () => {
-  const p = toolProtocol(availableTools({ gmail: true, skills: 1, delegate: true, self: true, coding: true, ops: true }));
+  const p = toolProtocol(availableTools({ gmail: true, skills: 1, delegate: true, self: true, coding: true, ops: true, homeControl: true }));
   for (const name of Object.keys(TOOLS)) assert.ok(p.includes(name));
 });
 

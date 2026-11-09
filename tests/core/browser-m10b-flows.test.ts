@@ -43,12 +43,15 @@ test('a learnt flow is a decision template: dry runs both ways, activated throug
     assert.match(c.ledger.get(task.id).verification!.checks[0]!.why, /re-ran .* dry runs .* itself/);
     // The steps come back out, in order.
     assert.deepEqual(stepsOf(c.templates.version(id, 1)!).map((x) => x.step.do), ['navigate', 'click']);
-    // A plan that names the flow runs those steps, at the tier they need.
+    // A plan that names the flow runs those steps, at the tier they need: clicking on its own site
+    // is tier 1 since the owner's ruling of 2026-11-09 (it was 2), so the task is held at 2 here to
+    // keep it from running, and the tier the flow's steps need is read from the worker itself.
+    const inputs = { allowed_hosts: [SITE], flow: { name: 'order', site: SITE, version: 1 }, verify: { url: `http://${SITE}/cart`, expect: ['mug'] } };
+    assert.equal(c.ledger.workers.get('browser')!.minTier!({ inputs, evidence_required: [{ kind: 'url' }] }), 1, 'it clicks on its own site: act and report');
     const t = c.ledger.create({
-      title: 'Order again', owner: 'browser', goal: 'The cart has the mug.', origin: { kind: 'user' }, evidence_required: [{ kind: 'screenshot' }, { kind: 'url' }],
-      inputs: { allowed_hosts: [SITE], flow: { name: 'order', site: SITE, version: 1 }, verify: { url: `http://${SITE}/cart`, expect: ['mug'] } },
+      title: 'Order again', owner: 'browser', goal: 'The cart has the mug.', origin: { kind: 'user' }, evidence_required: [{ kind: 'screenshot' }, { kind: 'url' }], approval_tier: 2, inputs,
     });
-    assert.equal(t.approval_tier, 2, 'it clicks, so it asks first');
+    assert.equal(t.approval_tier, 2);
     assert.equal(c.ledger.get(t.id).state, 'waiting');
     c.ledger.cancel(t.id);
     // A version that isn't active, or doesn't exist, is refused.

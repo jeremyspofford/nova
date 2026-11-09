@@ -9,14 +9,18 @@
 // egress: this network, a mesh device or a bare name that resolved here is local, anything else is
 // remote, and local-only never contacts a remote one. What Nova sees (tier 0): every entity's id,
 // name, state and last change, nothing else (no attributes: no brightness, no units, no areas). What
-// it changes: a service call, which is a Work Ledger task at tier 2 (asks first), or tier 3 (confirm
-// every time; a passkey on Nova's own screen) when the domain or any entity it names is on the
-// person's list, locks and alarms by default; after the call Nova reads the entity back itself as
-// the evidence, and after a failure it asks rather than calling again. State changes come over the
-// WebSocket and become trigger records only for entities a rule listens to; a dropped socket
-// reconnects with growing pauses and misses what changed meanwhile. Disconnecting asks Home
-// Assistant to delete the token (auth/delete_refresh_token, by the token's issuer), then deletes it
-// from the vault with the rules that listen and the settings. No agent tool drives it: chat can't.
+// it changes: a service call, which is a Work Ledger task. Since the owner's ruling of 2026-11-09
+// (docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md) a change the person asks for is tier 1, act
+// and report: made, then recorded with what changed; the service tier is a setting (2 asks first),
+// and tier 3 (confirm every time; a passkey on Nova's own screen) applies when the domain or any
+// entity it names is on the person's list, empty by default. After the call Nova reads the entity
+// back itself as the evidence, and when that doesn't show the change it holds the task rather than
+// calling again. Chat changes it too (home_call); after a chat read something from outside, it asks
+// first, whatever the tier. State changes come over the WebSocket and become trigger records only
+// for entities a rule listens to; a dropped socket reconnects with growing pauses and misses what
+// changed meanwhile. Disconnecting asks Home Assistant to delete the token
+// (auth/delete_refresh_token, by the token's issuer), then deletes it from the vault with the rules
+// that listen and the settings.
 // Its CSS is ui/styles/compositions.css (.ha-*, and the .au-* panes it shares with the Automations
 // compositions); the narrow layout is layout.css's .au-panes rule.
 import { ICONS, passkeyAction, passkeyConfirm } from './components.js';
@@ -26,12 +30,12 @@ import { statusIcon } from './status-icon.js';
 // Every frame: [state, what it shows, which pane a phone shows].
 export const HA_FRAMES = [
   ['connect', 'Connecting: the address and the token, and what happens to the token', 'detail'],
-  ['connected', 'Connected: what Nova can see without asking, what asks first, and what confirms every time', 'detail'],
-  ['devices', 'What Nova can see: every entity’s state, and one light with the change it can ask for', 'list'],
-  ['approve', 'Turning off a light asks first (tier 2): the task waiting for your OK', 'detail'],
-  ['approve-lock', 'Unlocking a lock confirms every time (tier 3), with your passkey', 'detail'],
+  ['connected', 'Connected: what Nova can see without asking, what it changes when you ask, and what you can make confirm every time', 'detail'],
+  ['devices', 'What Nova can see: every entity’s state, and one light with the change you can ask for', 'list'],
+  ['done', 'Turning off a light you asked for: done and reported (tier 1), with Nova’s read-back', 'detail'],
+  ['approve-lock', 'Unlocking a lock, once you marked locks: it confirms every time (tier 3), with your passkey', 'detail'],
   ['check-failed', 'Nova read the light back and it hadn’t changed: the task waits for you, it doesn’t call again', 'detail'],
-  ['confirm-list', 'Which kinds confirm every time: taking locks off the list, and what that loosens', 'detail'],
+  ['confirm-list', 'Asking first: the service tier, and marking locks to confirm every time', 'detail'],
   ['disconnect', 'Disconnecting: what Nova deletes there and here', 'detail'],
   ['disconnected-note', 'Disconnected here, but Home Assistant couldn’t be asked to delete the token', 'detail'],
   ['unreachable', 'Can’t connect: nothing answers at that address (the backend’s words)', 'detail'],
@@ -43,12 +47,12 @@ export const HA_FRAMES = [
   ['paused', 'Connected to one outside your network, then Nova was set to local-only: paused', 'detail'],
 ];
 const paneOf = (s) => HA_FRAMES.find(([k]) => k === s)?.[2] ?? 'detail';
-const INSIDE = new Set(['devices', 'approve', 'approve-lock', 'check-failed']);
+const INSIDE = new Set(['devices', 'done', 'approve-lock', 'check-failed']);
 
 // What the connector says of itself (home-assistant.ts: summary, can, never, setup).
-const SUMMARY = 'Your smart home: Nova can see what your devices are doing, hear when they change, and change them when you say yes.';
-const CAN = ['See the state of your lights, sensors, locks and other devices.', 'Notice when something changes, for the rules you set up.', 'Turn things on and off, after asking you first.'];
-const NEVER = ['Change anything without your OK.', 'Unlock or disarm without an explicit confirmation.'];
+const SUMMARY = 'Your smart home: Nova can see what your devices are doing, hear when they change, and change them when you ask.';
+const CAN = ['See the state of your lights, sensors, locks and other devices.', 'Notice when something changes, for the rules you set up.', 'Turn things on and off when you ask, and tell you what changed.'];
+const NEVER = ['Change anything unless you, or a rule you set up, asks.', 'Change anything from a chat that has read something from outside, without asking you first.'];
 const HINT = 'Make one in Home Assistant: your profile, Security, Long-lived access tokens.';
 const ADDRESS = 'http://homeassistant.local:8123';
 const HOST = 'homeassistant.local:8123';
@@ -63,10 +67,11 @@ const SAID = {
   paused: 'Paused: it’s outside your network and Nova is set to local-only.',
   reconnecting: 'The live connection dropped; Nova is reconnecting.',
   note: 'Couldn’t reach Home Assistant. Delete the token in your Home Assistant profile, under Long-lived access tokens.',
-  loosen: 'Taking lock off the list means Nova asks just once, not with a confirmation every time.',
+  loosen: 'Taking lock off the list means Nova no longer asks for a confirmation every time. Send confirm: true to do that.',
+  done: 'light.turn_off: light.kitchen is off now.',
+  checked: 'Nova read light.kitchen from Home Assistant itself after the call: off.',
   held: "May already have happened: The evidence didn't hold up: Nova read light.kitchen from Home Assistant itself: it is on, not off. Check, then retry or cancel.",
 };
-const TIER3 = ['lock', 'alarm_control_panel'];
 
 // Entities, as GET /api/v1/connectors/home-assistant/states returns them: id, domain, name, state,
 // last change. Grouped here by domain; Home Assistant's areas aren't in the view.
@@ -89,7 +94,7 @@ const slot = (state, size) => `<span class="au-icon" data-ha-icon="${state}" dat
 const facts = (rows) => `<dl class="uc-facts au-facts">${rows.map(([k, v]) => `<div class="uc-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>`;
 const mono = (t) => `<span class="uc-mono">${esc(t)}</span>`;
 const said = (id, head, text, note = '') => `<div class="au-result" data-tone="warn" role="group" aria-labelledby="${id}-said-h"><div class="au-result-text"><p class="au-block-head" id="${id}-said-h">${head}</p><p class="ha-quote">${esc(text)}</p>${note ? `<p class="au-note">${note}</p>` : ''}</div></div>`;
-const NOT_CHAT = 'Nova’s chat can’t change your devices yet: you ask for each change here, and each one is a task in Tasks.';
+const CHAT = 'You can ask here or in chat; each change is a task in Tasks. After a chat has read something from outside (mail, a web page), Nova asks you first, whatever the tier.';
 
 // ---- the door: Settings › Connections ------------------------------------------------------------
 
@@ -148,14 +153,15 @@ const CONNECTED = `Connected to Home since November 2, 2026.`;
 function connectedPane(id, { live = 'Hearing changes as they happen.', tone = 'is-ok', extra = '' } = {}) {
   const tiers = facts([
     ['Sees', `Every device’s state and when it last changed: ${COUNT} entities. Without asking (tier 0): Nova only looks.`],
-    ['Changes', 'Asks first (tier 2), once for each change: lights, switches, covers and everything else.'],
-    ['Confirms every time', `Locks and alarms (tier 3), with your passkey on Nova’s own screen: ${TIER3.map(mono).join(', ')}.`],
+    ['Changes', 'Made when you ask (tier 1), and reported: lights, switches, locks, covers and everything else. Nova reads each device back from Home Assistant as the evidence.'],
+    ['Confirms every time', 'None by default. Mark kinds, like locks or the garage door, to confirm every time (tier 3), with your passkey on Nova’s own screen.'],
+    ['After outside content', 'In a chat that has read mail or a web page, Nova asks you first before any change.'],
     ['Listens', `One rule listens to it: “${RULE[0]}”, on ${mono(RULE[1])}.`],
     ['Where', `${mono(HOST)}, on this network, so it works while Nova is local-only.`],
   ]);
   return `${head(id, `${CONNECTED} ${live}`, tone)}${extra}<p class="uc-lede">${esc(SUMMARY)}</p>${tiers}
-<div class="au-actions"><a class="btn primary" href="#${id}-devices">See your devices</a><a class="btn quiet" href="#${id}-confirm-list">Which kinds confirm every time</a></div>
-<p class="au-note">${NOT_CHAT}</p>
+<div class="au-actions"><a class="btn primary" href="#${id}-devices">See your devices</a><a class="btn quiet" href="#${id}-confirm-list">Asking first</a></div>
+<p class="au-note">${CHAT}</p>
 <div class="au-danger"><a class="btn quiet" href="#${id}-disconnect">Disconnect</a><p class="au-note">Nova asks Home Assistant to delete its token, then deletes it here with the rule that listens.</p></div>`;
 }
 
@@ -175,19 +181,22 @@ function connectPane(id, state) {
 function disconnectPane(id) {
   return `${settingsBack(id)}<form class="au-form ha-confirm" data-sg-inert novalidate aria-labelledby="${id}-title"><p class="ha-kind">Disconnect</p><h3 class="uc-h" id="${id}-title">Disconnect Home Assistant?</h3>
 <p class="au-sentence">Nova asks Home Assistant to delete its token, then deletes the token from Nova’s vault, the rule listening to it and its settings.</p>
-${facts([['There', `Home Assistant deletes the token, if it answers. If it can’t be asked, Nova says so, and you delete it in your profile there.`], ['Here', `${mono('connector/home-assistant/HA_TOKEN')}; the rule “${RULE[0]}”; which kinds confirm every time.`], ['Stays', 'Your devices and Home Assistant itself, as they are. Past tasks stay in Tasks.']])}
-<p class="au-note">Connecting again starts fresh, with locks and alarms confirming every time.</p>
+${facts([['There', `Home Assistant deletes the token, if it answers. If it can’t be asked, Nova says so, and you delete it in your profile there.`], ['Here', `${mono('connector/home-assistant/HA_TOKEN')}; the rule “${RULE[0]}”; which kinds confirm every time, and whether changes ask first.`], ['Stays', 'Your devices and Home Assistant itself, as they are. Past tasks stay in Tasks.']])}
+<p class="au-note">Connecting again starts fresh: changes made when you ask, and no kind confirming every time until you mark it.</p>
 <div class="au-actions"><button type="submit" class="btn primary" data-ha-demo>Disconnect</button><button type="button" class="btn quiet">Keep it</button></div></form>`;
 }
 
+// The settings (GET and PUT /settings): service_tier (1 by default, 2 asks first) and tier3_domains
+// (empty by default). Here the person marks locks: that tightens a gate, so it needs no confirmation.
 function confirmList(id) {
   const box = (d, words, on) => `<label class="uc-choice au-choice"><input type="checkbox" name="${id}-t3" value="${d}"${on ? ' checked' : ''}><span>${words} <span class="uc-faint">· ${esc(d)}</span></span></label>`;
-  return `${settingsBack(id)}<form class="au-form" data-sg-inert novalidate aria-labelledby="${id}-title"><p class="ha-kind">Home Assistant</p><h3 class="uc-h" id="${id}-title">Which kinds confirm every time</h3>
-<p class="au-sentence">Any change asks first. These kinds also need an explicit confirmation every time, with your passkey on Nova’s own screen.</p>
-<fieldset class="au-checks"><legend class="au-label">Confirm every time</legend>${box('lock', 'Locks', false)}${box('alarm_control_panel', 'Alarms', true)}${box('cover', 'Covers, like the garage door', false)}${box('script', 'Scripts', false)}</fieldset>
-<p class="au-note">A change counts as one of these when its kind is, or when any device it names is.</p>
-${said(id, 'This loosens a gate', SAID.loosen, 'Today that needs only the tick below, not your passkey.')}
-<label class="confirm"><input type="checkbox" name="${id}-loosen"> I understand: unlocking will ask just once.</label>
+  const tier = (v, words, on) => `<label class="uc-choice au-choice"><input type="radio" name="${id}-tier" value="${v}"${on ? ' checked' : ''}><span>${words}</span></label>`;
+  return `${settingsBack(id)}<form class="au-form" data-sg-inert novalidate aria-labelledby="${id}-title"><p class="ha-kind">Home Assistant</p><h3 class="uc-h" id="${id}-title">Asking first</h3>
+<p class="au-sentence">By default Nova makes a change when you ask and tells you what changed. You can make every change ask first, and mark kinds that need an explicit confirmation every time.</p>
+<fieldset class="au-checks"><legend class="au-label">Changes you ask for</legend>${tier(1, 'Make the change and tell me (tier 1, the default)', true)}${tier(2, 'Ask me first (tier 2)', false)}</fieldset>
+<fieldset class="au-checks"><legend class="au-label">Confirm every time (tier 3)</legend>${box('lock', 'Locks', true)}${box('alarm_control_panel', 'Alarms', false)}${box('cover', 'Covers, like the garage door', false)}${box('script', 'Scripts', false)}</fieldset>
+<p class="au-note">A change counts as one of these when its kind is, or when any device it names is. Marked kinds confirm with your passkey on Nova’s own screen.</p>
+<p class="au-note">Marking a kind, or asking first, tightens a gate: no confirmation needed. Taking a kind off, or going back to tier 1, loosens one, and Nova says so: “${esc(SAID.loosen)}” Today that needs only a tick, not your passkey. (Flagged for the owner.)</p>
 <div class="au-actions"><button type="submit" class="btn primary" data-ha-demo>Save</button><button type="button" class="btn quiet">Cancel</button></div></form>`;
 }
 
@@ -204,22 +213,23 @@ const back = (id) => `<a class="uc-row uc-back" href="#${id}-list"><span class="
 function lightPane(id) {
   return `${back(id)}<p class="ha-kind">Light · ${mono('light.kitchen')}</p><h3 class="uc-h" id="${id}-name">Kitchen light</h3>
 <p class="au-sentence">On, since 18:42.</p>
-${facts([['Nova sees', 'Its state and when it last changed. Not its brightness or colour.'], ['A change', 'Asks first (tier 2). It becomes a task that waits for your OK; then Nova calls Home Assistant and reads the light back itself, to check it is off.'], ['Listens', 'No rule listens to it.']])}
+${facts([['Nova sees', 'Its state and when it last changed. Not its brightness or colour.'], ['A change', 'Made when you ask (tier 1), and reported. It becomes a task in Tasks: Nova calls Home Assistant, then reads the light back itself, to check it is off.'], ['Listens', 'No rule listens to it.']])}
 <div class="au-actions"><button type="button" class="btn primary" data-ha-demo>Turn off</button></div>
-<p class="au-note">${NOT_CHAT}</p>`;
+<p class="au-note">${CHAT}</p>`;
 }
 
-function approvePane(id) {
-  return `${back(id)}<p class="ha-kind">Waiting for your OK</p><h3 class="uc-h" id="${id}-title">turn off light.kitchen (Home Assistant)</h3>
-<p class="au-sentence">Home Assistant runs light.turn_off on light.kitchen, and light.kitchen shows off.</p>
-${facts([['Asks', 'First (tier 2): it changes your home'], ['Then', `Nova reads ${mono('light.kitchen')} back from Home Assistant itself, as the evidence.`], ['If it goes wrong', 'Nova doesn’t call again by itself: it may already have happened, so it asks you.'], ['Task', `${mono('7c1e5a90')} in Tasks`]])}
-<div class="au-actions"><button type="button" class="btn primary" data-ha-demo>Approve</button><button type="button" class="btn">Cancel the task</button><button type="button" class="btn quiet">Not now</button></div>`;
+// Act and report (tier 1): what the ledger records once the change is made and checked.
+function donePane(id) {
+  return `${back(id)}<p class="ha-kind">Done and reported</p><h3 class="uc-h" id="${id}-title">turn off light.kitchen (Home Assistant)</h3>
+<p class="au-sentence">${esc(SAID.done)}</p>
+${facts([['Asked', 'Not first: you asked for it (tier 1, act and report)'], ['Checked', esc(SAID.checked)], ['If it goes wrong', 'Nova doesn’t call again by itself: it may already have happened, so the task waits for you.'], ['Task', `${mono('7c1e5a90')} in Tasks, done at 18:55`]])}
+<div class="au-actions"><a class="btn" href="#${id}-tasks">Open in Tasks</a><button type="button" class="btn quiet" data-ha-demo>Turn it back on</button></div>`;
 }
 
 function lockPane(id) {
   return `${back(id)}<form class="au-form ha-confirm" data-sg-inert novalidate aria-labelledby="${id}-title"><p class="ha-kind">Asks every time</p><h3 class="uc-h" id="${id}-title">unlock lock.front_door (Home Assistant)</h3>
 <p class="au-sentence">Home Assistant runs lock.unlock on lock.front_door, and lock.front_door shows unlocked.</p>
-${facts([['Asks', 'Every time (tier 3): locks are on your list'], ['Then', `Nova reads ${mono('lock.front_door')} back from Home Assistant itself, as the evidence.`], ['If it runs again', 'It asks again: a retry is confirmed again too.'], ['Task', `${mono('e42b9d13')} in Tasks`]])}
+${facts([['Asks', 'Every time (tier 3): you marked locks to confirm every time. Unmarked, an unlock you ask for just happens, and is reported.'], ['Then', `Nova reads ${mono('lock.front_door')} back from Home Assistant itself, as the evidence.`], ['If it runs again', 'It asks again: a retry is confirmed again too.'], ['Task', `${mono('e42b9d13')} in Tasks`]])}
 ${passkeyConfirm({ state: 'ready' })}
 <div class="au-actions">${passkeyAction({ state: 'ready' })}<button type="button" class="btn quiet">Cancel</button></div></form>`;
 }
@@ -253,12 +263,12 @@ function doorPane(id, state) {
   return connectPane(id, state);
 }
 
-const LIVE = { approve: 'needs-you', 'approve-lock': 'needs-you', 'check-failed': 'needs-you', 'token-revoked': 'needs-you' };
+const LIVE = { 'approve-lock': 'needs-you', 'check-failed': 'needs-you', 'token-revoked': 'needs-you' };
 
 export function haFrame(state) {
   const live = LIVE[state] ?? 'idle';
   if (INSIDE.has(state)) {
-    const right = { devices: lightPane, approve: approvePane, 'approve-lock': lockPane, 'check-failed': heldPane }[state];
+    const right = { devices: lightPane, done: donePane, 'approve-lock': lockPane, 'check-failed': heldPane }[state];
     const current = state === 'approve-lock' ? 'lock.front_door' : 'light.kitchen';
     return screen(state, 'Home Assistant', pair((id) => entityList(id, current), right), live);
   }
