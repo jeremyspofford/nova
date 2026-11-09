@@ -71,7 +71,8 @@ test('M6b: Settings › Models — device map, recommendation, roles, a download
     await section.locator('form[data-form="disk"] input[name="gb"]').fill('1');
     await section.locator('form[data-form="disk"] button[type="submit"]').click();
     await page.waitForFunction(() => /of a 1 GB budget/.test(document.querySelector('#models')?.textContent ?? ''));
-    if (!(await section.locator('details.model-more').getAttribute('open'))) await section.locator('details.model-more summary').click();
+    // Opened above, it stays open through every redraw since (the download, the save, the watcher).
+    assert.equal(await section.locator('details.model-more').getAttribute('open'), '', 'the installed list stays open across redraws');
     await section.locator('form[data-form="pull"] input[name="model"]').fill('nomic-embed-text');
     await section.locator('form[data-form="pull"] button[type="submit"]').click();
     await page.waitForFunction(() => /Refused: nomic-embed-text takes about \d+ MB/.test(document.body.textContent ?? ''));
