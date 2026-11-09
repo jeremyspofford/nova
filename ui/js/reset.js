@@ -8,7 +8,7 @@
 // and what is not (the person's own files, backup folders that aren't there, devices that can't be
 // told, the code releases); then Nova starts over. Everything listed comes from GET /reset: real
 // state only.
-import { api, on } from './core.js';
+import { api, on, reach } from './core.js';
 import { escapeHtml as esc } from './markdown.js';
 import { status } from './components.js';
 import { openSheet, toast } from './shell.js';
@@ -162,11 +162,11 @@ async function erase(form) {
 function waitForFirstRun(id) {
   const look = async () => {
     try {
-      const r = await fetch('/api/v1/reset/report', { headers: { 'x-nova': '1' } });
+      const r = await reach('/api/v1/reset/report', { headers: { 'x-nova': '1' } });
       const report = r.ok ? await r.json() : null;
       if (report?.id === id) { location.assign('/'); return; }
       // Still up: if the restart failed, say plainly that it finishes when Nova starts next.
-      const now = r.ok ? await fetch('/api/v1/reset', { headers: { 'x-nova': '1' } }).then((x) => (x.ok ? x.json() : null)) : null;
+      const now = r.ok ? await reach('/api/v1/reset', { headers: { 'x-nova': '1' } }).then((x) => (x.ok ? x.json() : null)) : null;
       if (now?.staged_said && now.staged_said !== flow.staged?.said && flow.step === 'erasing') {
         flow.staged = { ...flow.staged, said: now.staged_said, restart: 'next-start' };
         show();
