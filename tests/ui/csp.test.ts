@@ -47,8 +47,12 @@ async function sweep(b: Browser, engine: string, base: string) {
           seen.push(`${id}/${mode}:${s.sheet?.cssRules.length ?? 0}:${s.textContent!.split('\n')[0]!.includes(`(${id})`)}`);
         }
         await t.endPreview();
+        // The swapped sheet keeps its place in the cascade: first, ahead of the app's own sheets.
+        const ds = document.getElementById('ds')!;
+        seen.push(`place:${document.styleSheets[0]?.ownerNode === ds && (ds.nextElementSibling as HTMLLinkElement | null)?.getAttribute('href') === '/styles/base.css'}`);
         return seen;
       });
+      assert.equal(swapped.pop(), 'place:true', `${engine} ${layout}: <style id="ds"> keeps its DOM position after the swaps`);
       assert.ok(swapped.length >= 4 && swapped.every((s) => !/:0:|:false$/.test(s)), `${engine} ${layout}: every swapped design applies: ${swapped.join(' ')}`);
       found.push(...(await read()).map((v) => `${engine} ${layout} / (design swap): ${v}`));
       // A control: what the policy is for is refused, and the watch sees it.
