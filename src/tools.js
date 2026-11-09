@@ -415,34 +415,50 @@ export const TOOLS = {
       };
     },
   },
-  // Home Assistant through chat (owner ruling 2026-11-09, docs/builder-packet/INPUT-2026-11-09-TIER-RULING.md):
-  // a change the person asks for is made and reported (tier 1), with Nova's own read-back from Home
-  // Assistant as the evidence; a domain the person marked still confirms every time, in Tasks. In a
-  // run that read outside content it asks first, as the ingest gate's guarded steps do (runner.js
-  // GUARDED).
-  home_call: {
-    signature: '{"domain": "light", "service": "turn_on", "entity_id": "light.kitchen", "data": {"brightness": 120}}',
-    doc: 'Change something in the person’s home through their Home Assistant, when they ask: a service by its domain and name (light turn_on, lock unlock, cover open_cover), the entity it acts on, and any settings in "data" (plain values only). Nova makes the call and reads the device back from Home Assistant itself as the evidence; the person sees it in Tasks. A domain they marked to confirm every time waits for them in Tasks instead. Only for a change they asked for, never on your own initiative.',
-    // The words follow the service tier (src/core/approvals, home-assistant.service); at 1, `doc`.
-    docFor(approvals) {
-      return tierIn(approvals, 'home-assistant.service', 1) >= 2 ? this.doc.replace('Nova makes the call and reads', 'After the person’s OK in Tasks (their setting), Nova makes the call and reads') : this.doc;
+  // Any connected service, through one tool (the owner's direction: whatever service someone adds is
+  // managed the same way). A service's manifest declares its actions (src/core/extensions.ts
+  // ManifestAction), each under a capability in the approvals registry; the core runs one as that
+  // connector's own task, never below its capability's tier (src/core/connectors/index.ts act), with
+  // the connector's own evidence. Each such capability lists this tool, so in a run that read outside
+  // content it asks first through the registry (runner.js guardedWords). Home Assistant's call is one
+  // such action (owner ruling 2026-11-09: a home change the person asks for is tier 1).
+  service_call: {
+    signature: '{"service": "home-assistant", "action": "call", "args": {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"}}',
+    doc: 'Act on one of the person’s connected services, when they ask: "service" names it, "action" one of its actions (it may be left out when the service has one), and "args" what that action needs. The connected services and their actions are listed below when there are any. Nova runs it as that service’s own task and checks the result with the service itself; the person sees it in Tasks. An action whose setting asks first waits for them in Tasks instead. Only for something they asked for, never on your own initiative.',
+    // The connected services, their actions and each one's words at its capability's tier now
+    // (src/core/approvals). Without services, `doc`.
+    docFor(approvals, services = null) {
+      let list = [];
+      try { list = services?.list() ?? []; } catch { list = []; }
+      if (!list.length) return this.doc;
+      const lines = list.flatMap((s) => s.actions.map((a) => {
+        const tier = tierIn(approvals, a.capability, 3);
+        const when = byTierJs(tier, { confirm: 'The person confirms it in Tasks, every time, before Nova runs it.', ok: 'After the person’s OK in Tasks (their setting), Nova runs it.', free: 'Nova runs it and reports it.' });
+        const args = Object.entries(a.args).map(([k, v]) => `${k}: ${v}`).join('; ');
+        return `  - service "${s.id}" (${s.name}), action "${a.id}": ${a.name}. ${a.words} ${when} args: ${args || 'none'}.${a.example ? ` Example args: ${JSON.stringify(a.example)}` : ''}`;
+      }));
+      return `${this.doc}\n  Connected services and their actions:\n${lines.join('\n')}`;
     },
     needsApproval: false,
-    available: (ctx) => ctx.homeControl,
-    async run(args, { homeControl: home, signal }) {
+    // It acts only through capabilities in the approvals registry: without a readable registry, the
+    // outside-content guard can't tell which, so it asks (runner.js guardedWords).
+    guardedByRegistry: true,
+    available: (ctx) => ctx.services,
+    async run(args, { services, signal }) {
       const a = args ?? {};
-      const made = home.call(String(a.domain ?? ''), String(a.service ?? ''), { ...(a.entity_id !== undefined ? { entity_id: a.entity_id } : {}), ...(a.data !== undefined ? { data: a.data } : {}) });
+      const made = services.act(a.service, a.action, a.args ?? {});
+      const name = (() => { try { return services.list().find((s) => s.id === made.owner)?.name ?? made.owner; } catch { return made.owner; } })();
       // Wait a little for the result, so the reply can say what happened.
       let t = made;
       for (let i = 0; i < 100 && !signal?.aborted && ['queued', 'active', 'verifying'].includes(t.state); i++) {
         await new Promise((r) => setTimeout(r, 100));
-        t = home.task(made.id);
+        t = services.task(made.id);
       }
       const asks = t.state === 'waiting' && t.approval_tier >= 2 && !t.approved_at;
-      const output = t.state === 'done' ? `Done, and checked: ${t.reason} Nova read it back from Home Assistant itself.`
-        : asks ? `“${t.title}” waits for the person’s ${t.approval_tier === 3 ? 'explicit confirmation' : 'OK'} in Tasks: their Home Assistant settings ask first for this. Nothing has changed yet.`
+      const output = t.state === 'done' ? `Done, and checked: ${t.reason} Nova checked it with ${name} itself.`
+        : asks ? `“${t.title}” waits for the person’s ${t.approval_tier === 3 ? 'explicit confirmation' : 'OK'} in Tasks: their settings for ${name} ask first for this. Nothing has changed yet.`
           : t.state === 'waiting' || t.state === 'failed' ? `“${t.title}” didn’t finish: ${t.reason}`
-            : `Home Assistant is still on “${t.title}”; the result shows in Tasks.`;
+            : `${name} is still on “${t.title}”; the result shows in Tasks.`;
       return { output, summary: t.title, link: '/tasks' };
     },
   },
@@ -531,10 +547,23 @@ export const TOOLS = {
   },
 };
 
+// Older tool names, kept so a saved conversation or a model that still writes one works: each becomes
+// the tool that replaced it, with its arguments moved where that tool takes them. home_call (#430,
+// Home Assistant only) is service_call on Home Assistant's call.
+export const ALIASES = {
+  home_call: { to: 'service_call', capability: 'home-assistant.service', args: (a) => ({ service: 'home-assistant', action: 'call', args: a ?? {} }) },
+};
+// A call by an older name, as the call it stands for; any other call as it is.
+export function unalias(call) {
+  const al = call && Object.hasOwn(ALIASES, call.name) ? ALIASES[call.name] : null;
+  return al ? { name: al.to, args: al.args(call.args), alias: call.name } : call;
+}
+
 // The tools on offer right now: Gmail's only while it's connected, use_skill
-// only when a skill is installed, delegate only in a conversation with the person.
-export function availableTools({ gmail = false, skills = 0, delegate = false, self = false, coding = false, ops = false, homeControl = false } = {}) {
-  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate, self, coding, ops, homeControl }));
+// only when a skill is installed, delegate only in a conversation with the person, service_call only
+// while a connected service has actions, in the person's own conversations.
+export function availableTools({ gmail = false, skills = 0, delegate = false, self = false, coding = false, ops = false, services = false } = {}) {
+  return Object.keys(TOOLS).filter((n) => !TOOLS[n].available || TOOLS[n].available({ gmail, skills, delegate, self, coding, ops, services }));
 }
 
 // Local-only means nothing leaves the person's devices, so tools that reach the internet (the
@@ -568,11 +597,12 @@ export function parseSearch(html, limit = 8) {
 }
 
 // approvals: the core's approvals registry, so a tool's words follow the tiers set now (docFor);
-// without it, each tool's words at the defaults.
-/** @param {string[]} [names] @param {{ effective(id: string): number } | null} [approvals] */
-export function toolProtocol(names = availableTools(), approvals = null) {
+// without it, each tool's words at the defaults. services: the core's connected services with their
+// actions (core.services), which service_call lists.
+/** @param {string[]} [names] @param {{ effective(id: string): number } | null} [approvals] @param {{ list(): unknown[] } | null} [services] */
+export function toolProtocol(names = availableTools(), approvals = null, services = null) {
   const list = names
-    .map((name) => `- ${name} ${TOOLS[name].signature}\n  ${TOOLS[name].docFor ? TOOLS[name].docFor(approvals) : TOOLS[name].doc}`)
+    .map((name) => `- ${name} ${TOOLS[name].signature}\n  ${TOOLS[name].docFor ? TOOLS[name].docFor(approvals, services) : TOOLS[name].doc}`)
     .join('\n');
   return `# Tools
 
@@ -665,7 +695,10 @@ export function parseToolCall(raw, names = Object.keys(TOOLS)) {
   const visible = raw.slice(0, at).replace(/```\w*\s*$/, '').trim();
   const m = raw.slice(at).match(CALL_RE);
   if (!m) return { visible, call: null, error: 'The tool call was not closed with </tool_call>.' };
-  const [, name, body] = m;
+  const [, said, body] = m;
+  // An older name for a tool on offer stands for that tool (ALIASES).
+  const al = Object.hasOwn(ALIASES, said) && names.includes(ALIASES[said].to) ? said : null;
+  const name = al ? ALIASES[al].to : said;
   if (!names.includes(name)) {
     const why = name.startsWith('gmail_') && TOOLS[name] ? 'Gmail is not connected, so there is no tool named' : 'There is no tool named';
     return { visible, call: { name, args: {} }, error: `${why} ${name}.` };
@@ -677,7 +710,7 @@ export function parseToolCall(raw, names = Object.keys(TOOLS)) {
   } catch {
     return { visible, call: { name, args: {} }, error: 'The tool arguments were not a JSON object.' };
   }
-  return { visible, call: { name, args }, error: null };
+  return { visible, call: al ? unalias({ name: al, args }) : { name, args }, error: null };
 }
 
 export function runCommand(command, { cwd, signal, timeoutMs = 120_000 }) {

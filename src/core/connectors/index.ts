@@ -67,6 +67,26 @@ export interface Connector {
   worker?: Worker;
   confirm?: Checker;
   routes?: Route[];
+  // Runs one of the actions its manifest declares (Manifest.actions), with the args the chat tool
+  // passed, as a task for its own worker through ctx.delegate: its own evidence or read-back, its
+  // own checks. Called only through Connectors.act, which holds the task to at least the tier of the
+  // action's capability. Nothing about it is particular to one service.
+  act?(action: string, args: Record<string, unknown>): Task;
+}
+
+// A connected service's actions, as the chat tool lists and runs them.
+export interface ServiceActions {
+  id: string;
+  name: string;
+  actions: { id: string; name: string; words: string; args: Record<string, string>; example: Record<string, unknown> | null; capability: string }[];
+}
+
+// What a manifest declares it can do, with each action's capability by its full id.
+export function serviceOf(m: Pick<Manifest, 'id' | 'name' | 'actions'>): ServiceActions {
+  return {
+    id: m.id, name: m.name,
+    actions: (m.actions ?? []).map((a) => ({ id: a.id, name: a.name, words: a.words, args: { ...a.args }, example: a.example ?? null, capability: `${m.id}.${a.approval}` })),
+  };
 }
 
 export interface ConnectorContext {
@@ -134,6 +154,8 @@ export class Connectors extends EventEmitter {
   #all = new Map<string, Connector>();
   #started = false;
   #removing = new Set<string>();
+  // While an action runs (act): whose, the tier its capability is at, and the task it made.
+  #acting: { id: string; floor: Tier; made: Task | null } | null = null;
 
   constructor(o: ConnectorsOptions) {
     super();
@@ -290,6 +312,62 @@ export class Connectors extends EventEmitter {
     await Promise.all([...this.#all.values()].map(async (c) => { try { await c.stop?.(); } catch { /* stopping anyway */ } }));
   }
 
+  // ---- actions: what connected services can do when the person asks (service_call) ------------
+
+  // Every connected service whose manifest declares actions and that can run them.
+  actions(): ServiceActions[] {
+    return [...this.#all.values()]
+      .filter((c) => !!c.act && !!c.manifest.actions?.length && safeStatus(c).connected === true)
+      .map((c) => serviceOf(c.manifest));
+  }
+
+  // The service a call names: its id, or its name in any case.
+  #service(name: unknown): Connector | null {
+    const n = String(name ?? '').trim().toLowerCase();
+    if (!n) return null;
+    return this.#all.get(n) ?? [...this.#all.values()].find((c) => c.manifest.name.toLowerCase() === n) ?? null;
+  }
+
+  // The action a call names, with its capability's full id: the one action, when it has just one.
+  #action(c: Connector, action: unknown): { id: string; capability: string } | null {
+    const all = c.manifest.actions ?? [];
+    const a = action === undefined || action === null || action === '' ? (all.length === 1 ? all[0] : undefined) : all.find((x) => x.id === action);
+    return a ? { id: a.id, capability: `${c.manifest.id}.${a.approval}` } : null;
+  }
+
+  // The capability a call acts on, for the outside-content guard's words; null if it names none.
+  capabilityOf(service: unknown, action?: unknown): string | null {
+    const c = this.#service(service);
+    return c ? this.#action(c, action)?.capability ?? null : null;
+  }
+
+  // Runs one action of a connected service: the single entry point for every service. The task is
+  // the connector's own (its worker, its evidence), and never below the tier its capability is set
+  // to now, whatever the connector asked for.
+  act(service: unknown, action: unknown, args: unknown): Task {
+    const c = this.#service(service);
+    const list = () => this.actions().map((s) => `${s.id} (${s.actions.map((a) => a.id).join(', ')})`).join('; ') || 'none';
+    if (!c || !c.act || !c.manifest.actions?.length) throw new CoreError('not_found', `No connected service called “${String(service ?? '').slice(0, 60)}” has actions. Connected ones with actions: ${list()}.`);
+    if (safeStatus(c).connected !== true) throw new CoreError('conflict', `${c.manifest.name} isn’t connected. Connect it in Settings, under Connections.`);
+    const a = this.#action(c, action);
+    if (!a) throw new CoreError('validation', `${c.manifest.name} has no action “${String(action ?? '').slice(0, 60)}”. Its actions: ${c.manifest.actions.map((x) => x.id).join(', ')}.`);
+    if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) throw new CoreError('validation', 'args is an object of what the action needs.');
+    // Fails closed: an action whose capability isn't in the registry doesn't run.
+    if (this.#o.approvals && !this.#o.approvals.has(a.capability)) throw new CoreError('conflict', `${c.manifest.name}’s action ${a.id} has no approval tier Nova knows, so it doesn’t run.`);
+    const floor = this.#o.approvals ? this.#o.approvals.effective(a.capability) : 0;
+    const acting: { id: string; floor: Tier; made: Task | null } = { id: c.manifest.id, floor: floor as Tier, made: null };
+    this.#acting = acting;
+    let task: Task;
+    try {
+      task = c.act(a.id, { ...((args as Record<string, unknown> | undefined) ?? {}) });
+    } finally {
+      this.#acting = null;
+    }
+    // The task must be the one it delegated just now, through the gate above.
+    if (!acting.made || acting.made.id !== task?.id) throw new CoreError('conflict', `${c.manifest.name} didn’t run ${a.id} as a task of its own, so Nova doesn’t count it as done.`);
+    return task;
+  }
+
   routes(): Route[] {
     return [...this.#all.values()].flatMap((c) => (c.routes ?? []).map((r) => ({ ...r, path: `/connectors/${c.manifest.id}${r.path}` })));
   }
@@ -374,7 +452,13 @@ export class Connectors extends EventEmitter {
       topics: () => o.triggers.connectorTopics(id()),
       permits: (egress) => permits(o.privacy(), egress),
       meshHosts: () => o.meshHosts(),
-      delegate: (input) => o.delegate(id(), input),
+      // During an action (Connectors.act), never below the tier its capability is at now.
+      delegate: (input) => {
+        const acting = this.#acting && this.#acting.id === id() ? this.#acting : null;
+        const task = o.delegate(id(), acting ? { ...input, approval_tier: Math.max(input.approval_tier ?? 1, acting.floor) as Tier } : input);
+        if (acting) acting.made = task;
+        return task;
+      },
       problem: (message, detail) => { o.log.problem('connectors', message, detail ? { detail } : {}); },
       changed: () => this.emit('change', { id: id(), connected: c ? safeStatus(c).connected : false }),
       now: () => o.now(),

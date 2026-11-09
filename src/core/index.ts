@@ -52,7 +52,7 @@ import { DEVICE_CONFIG_SECTIONS, Spokes } from './mesh/spokes.ts';
 import { agentTar, joinScript } from './mesh/agent.ts';
 import { Vault, type KeyMode, type KeyStore } from './vault.ts';
 import { Connectors } from './connectors/index.ts';
-import { homeAssistant, type HomeAssistantConnector, type HomeAssistantOptions, type ServiceCall } from './connectors/home-assistant.ts';
+import { homeAssistant, type HomeAssistantOptions } from './connectors/home-assistant.ts';
 import { Providers } from './providers/registry.ts';
 import { Browser, type BrowserOptions } from './browser/worker.ts';
 import type { Hub } from './browser/plan.ts';
@@ -146,8 +146,8 @@ export { TOKENS, TOKEN_NAMES, ORB_STATES, ORB_STATE_VARS, cssVar, contrast, vali
 // The vault and connectors (M5b): Era 2's Gmail keeps its secrets in the vault and registers as a connector.
 export { Vault, FILE_KEY_NOTICE, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore } from './vault.ts';
 export type { KeyStore, Run as KeyCommandRunner } from './vault.ts';
-export { addressEgress } from './connectors/index.ts';
-export type { ConnectorContext } from './connectors/index.ts';
+export { addressEgress, serviceOf } from './connectors/index.ts';
+export type { ConnectorContext, ServiceActions } from './connectors/index.ts';
 export { tokenIssuer } from './connectors/home-assistant.ts';
 // Resilience (M7b): the supervisor's link and shared pieces (src/supervisor imports only this file).
 export { BrokerClient } from './broker/client.ts';
@@ -823,13 +823,16 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     approvals,
   });
   // Home Assistant's service tier is the registry's home-assistant.service, declared in its manifest.
-  const homeConnector = connectors.register(homeAssistant(o.homeAssistant)) as HomeAssistantConnector;
-  // Home Assistant through chat (home_call, src/tools.js): a service call the person asks for, as
-  // the connector's own task at the tier its domain needs (owner ruling 2026-11-09: 1 by default).
-  // The chat's ingest gate asks first after outside content (src/runner.js GUARDED).
-  const homeControl = {
-    connected: () => homeConnector.status().connected === true,
-    call: (domain: string, service: string, body: ServiceCall) => homeConnector.callService(domain, service, body),
+  connectors.register(homeAssistant(o.homeAssistant));
+  // Connected services through chat (service_call, src/tools.js): whatever a connected service's
+  // manifest declares it can do, run as that connector's own task, never below the tier of the
+  // action's capability (Home Assistant's call: 1 by default, owner ruling 2026-11-09). Each action's
+  // capability lists the tool, so the chat's ingest gate asks first after outside content through
+  // the approvals registry. Nothing here is particular to one service.
+  const services = {
+    list: () => connectors.actions(),
+    act: (service: unknown, action: unknown, args: unknown) => connectors.act(service, action, args),
+    capabilityOf: (service: unknown, action?: unknown) => connectors.capabilityOf(service, action),
     task: (id: string) => ledger.get(id),
   };
   // Resilience (M7b): nightly backups and the restore drill as ledger work, repair playbooks, the
@@ -1806,7 +1809,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   const core = {
     self,
     db, log, profile, ledger, setup, extensions, design, workspace, migration, routes, templates, decisions, triggers, memory, receipts, backups, providers, browser, computer, coding, infra, network, approvals,
-    ingest, vault, broker: o.broker ?? null, connectors, homeControl, capture, models, changes, caps, passkeys,
+    ingest, vault, broker: o.broker ?? null, connectors, services, capture, models, changes, caps, passkeys,
     // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
     // asking for a template. Never a seat: nothing reaches a decision model except through it.
     decisionService: { view: decisionService.view, refresh: decisionService.refresh, standing: decisionService.standing, ask: decisionService.service.ask.bind(decisionService.service) }, foundry, resilience: keep, checkpoints, restarter, reset,

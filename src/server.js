@@ -143,8 +143,9 @@ export function createNova(config = loadConfig(), deps = {}) {
   // Infrastructure, networking and accounts through chat (M10d): the chat agent's infra_plan,
   // network_change and account_change tools start the core's runs, changes and account tasks.
   runner.ops = { infra: core.infra, network: core.network, browser: core.browser };
-  // Home Assistant through chat (owner ruling 2026-11-09): home_call, offered while it is connected.
-  runner.homeControl = core.homeControl;
+  // Connected services through chat: service_call, offered while a connected service declares actions
+  // (Home Assistant's call today; any service that declares actions later, with no new tool).
+  runner.services = core.services;
   // Approval tiers as settings (core approvals): the tools' words follow them, and the guard covers
   // every registered capability's chat tool.
   runner.approvals = core.approvals;

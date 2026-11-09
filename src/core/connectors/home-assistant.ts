@@ -8,8 +8,9 @@
 //    the person marks are tier 3, confirmed every time (none by default). It runs as a Work Ledger
 //    task for this connector's worker, so the ledger's gate holds whatever tier applies, and Nova
 //    reads the entity back from Home Assistant itself as the evidence; a read-back that doesn't show
-//    the change holds the task for the person. From chat (home_call) it is a guarded step: after the
-//    run read outside content it asks first, whatever the tier (src/runner.js, GUARDED);
+//    the change holds the task for the person. From chat it is the action "call", run through the
+//    one chat tool every service shares (service_call); its capability lists that tool, so after the
+//    run read outside content it asks first, whatever the tier (the approvals registry's guardWords);
 //  - state changes (WebSocket, subscribe_events state_changed), which become event trigger records
 //    for the entities a rule listens to. A dropped socket is reopened with growing pauses.
 // Egress is local for an address on this network or the mesh, remote otherwise; local-only never
@@ -20,7 +21,8 @@ import { reportOf, type Brief, type Evidence, type Tier } from '../envelope.ts';
 import type { Task } from '../ledger.ts';
 import type { Egress } from '../workers.ts';
 import type { Route } from '../api.ts';
-import type { ManifestApproval } from '../approvals/index.ts';
+import { SERVICE_TOOL, type ManifestApproval } from '../approvals/index.ts';
+import type { ManifestAction } from '../extensions.ts';
 import type { Connector, ConnectorContext, ConnectorStatus } from './index.ts';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { addressEgress, needsResolving, resolvesLocal } from './index.ts';
@@ -43,7 +45,8 @@ const EXPECT: Record<string, string> = { turn_on: 'on', turn_off: 'off', lock: '
 
 export const HA_MANIFEST = {
   id: HA_ID,
-  version: '1.0.0',
+  // 1.1.0: its chat action through service_call (the record a Nova already has is updated to it).
+  version: '1.1.0',
   kind: 'connector' as const,
   name: 'Home Assistant',
   capabilities: ['home.states.read', 'home.services.call', 'home.events'],
@@ -62,17 +65,26 @@ export const HA_MANIFEST = {
   // report), and it is 1 or 2, since tier 3 is per domain (the targets the person marks).
   approvals: [{
     id: 'service', name: 'Change your home through Home Assistant', effect: 'irreversible', default: 1, tiers: [1, 2],
-    tools: ['home_call'], guard: 'change your home', targets: 'Home Assistant domains (lock, alarm_control_panel) marked to confirm every time',
+    tools: [SERVICE_TOOL], guard: 'change your home', targets: 'Home Assistant domains (lock, alarm_control_panel) marked to confirm every time',
   }] as ManifestApproval[],
+  // What chat can ask it to do, through the one chat tool every service shares (service_call),
+  // declared like any service's: a service call, under the capability above.
+  actions: [{
+    id: 'call', name: 'Call a Home Assistant service',
+    words: 'Change something in the person’s home: a service by its domain and name (light turn_on, lock unlock, cover open_cover), the entity it acts on, and any settings in "data" (plain values only). Nova reads the device back from Home Assistant itself as the evidence. A domain they marked to confirm every time waits for them in Tasks instead.',
+    args: { domain: 'the service’s domain, like light', service: 'the service’s name, like turn_on', entity_id: 'optional: the entity it acts on, like light.kitchen', data: 'optional: the service’s settings, plain values only, like {"brightness": 120}' },
+    example: { domain: 'light', service: 'turn_on', entity_id: 'light.kitchen', data: { brightness: 120 } },
+    approval: 'service',
+  }] as ManifestAction[],
 };
 
 interface State { entity_id: string; state: string; attributes?: Record<string, unknown>; last_changed?: string; last_updated?: string }
 // resolved_local: a bare name in the address that resolved to this network when it was connected.
 interface Config { url?: string; since?: string; name?: string | null; broken?: boolean; tier3_domains?: string[]; service_tier?: ServiceTier; resolved_local?: string }
 
-// What a call through home_call (chat) or the API asks for.
+// What a call through chat (service_call's action "call") or the API asks for.
 export interface ServiceCall { entity_id?: unknown; data?: unknown }
-// The connector, with the service call chat's home_call makes (src/tools.js).
+// The connector, with its service call (the API route's, and the action chat runs through act).
 export type HomeAssistantConnector = Connector & { callService(domain: string, service: string, body: ServiceCall): Task };
 
 export interface HomeAssistantOptions {
@@ -404,6 +416,11 @@ export function homeAssistant(o: HomeAssistantOptions = {}) {
     return {
       manifest: HA_MANIFEST,
       callService,
+      // Its one action (the manifest's "call"), run for chat through Connectors.act.
+      act(action: string, args: Record<string, unknown>) {
+        if (action !== 'call') throw new CoreError('validation', `Home Assistant has no action ${action}; its action is call.`);
+        return callService(String(args.domain ?? ''), String(args.service ?? ''), { ...(args.entity_id !== undefined ? { entity_id: args.entity_id } : {}), ...(args.data !== undefined ? { data: args.data } : {}) });
+      },
       // Its targets marked "confirm every time" (approvals/index.ts): the domains.
       marked: (capability: string) => (capability === 'service' ? tier3() : []),
       summary: 'Your smart home: Nova can see what your devices are doing, hear when they change, and change them when you ask.',

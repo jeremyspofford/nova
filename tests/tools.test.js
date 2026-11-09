@@ -77,8 +77,19 @@ test('htmlToText leaves hostile character references as they are and still decod
 });
 
 test('the protocol lists every tool on offer', () => {
-  const p = toolProtocol(availableTools({ gmail: true, skills: 1, delegate: true, self: true, coding: true, ops: true, homeControl: true }));
+  const p = toolProtocol(availableTools({ gmail: true, skills: 1, delegate: true, self: true, coding: true, ops: true, services: true }));
   for (const name of Object.keys(TOOLS)) assert.ok(p.includes(name));
+});
+
+test('service_call is offered only while a connected service has actions; home_call is read as service_call on Home Assistant', () => {
+  assert.ok(availableTools({ services: true }).includes('service_call'));
+  assert.ok(!availableTools({ services: false }).includes('service_call'));
+  assert.ok(!Object.hasOwn(TOOLS, 'home_call'), 'no tool of its own: an alias');
+  const args = { domain: 'lock', service: 'unlock', entity_id: 'lock.back_door' };
+  const raw = `Unlocking.\n<tool_call name="home_call">${JSON.stringify(args)}</tool_call>`;
+  assert.deepEqual(parseToolCall(raw, ['service_call']).call, { name: 'service_call', args: { service: 'home-assistant', action: 'call', args }, alias: 'home_call' });
+  // Not offered (no connected service has actions): the older name is no tool either.
+  assert.match(parseToolCall(raw, ['read_file']).error, /There is no tool named home_call/);
 });
 
 test('memory blocks are taken out of the reply', () => {
