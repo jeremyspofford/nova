@@ -196,7 +196,7 @@ function confirmList(id) {
 <fieldset class="au-checks"><legend class="au-label">Changes you ask for</legend>${tier(1, 'Make the change and tell me (tier 1, the default)', true)}${tier(2, 'Ask me first (tier 2)', false)}</fieldset>
 <fieldset class="au-checks"><legend class="au-label">Confirm every time (tier 3)</legend>${box('lock', 'Locks', true)}${box('alarm_control_panel', 'Alarms', false)}${box('cover', 'Covers, like the garage door', false)}${box('script', 'Scripts', false)}</fieldset>
 <p class="au-note">A change counts as one of these when its kind is, or when any device it names is. Marked kinds confirm with your passkey on Nova’s own screen.</p>
-<p class="au-note">Marking a kind, or asking first, tightens a gate: no confirmation needed. Taking a kind off, or going back to tier 1, loosens one, and Nova says so: “${esc(SAID.loosen)}” On Nova’s own screen that needs your passkey, like any confirmation there; from a paired phone or browser the tick alone does it, even one not allowed to approve. (Flagged for the owner.)</p>
+<p class="au-note">Marking a kind, or asking first, tightens a gate: no confirmation needed. Taking a kind off, or going back to tier 1, loosens one, and Nova says so: “${esc(SAID.loosen)}” On Nova’s own screen that needs your passkey, like any confirmation there; from a paired phone or browser the tick alone does it, and any paired device may: your ruling, 2026-11-09.</p>
 <div class="au-actions"><button type="submit" class="btn primary" data-ha-demo>Save</button><button type="button" class="btn quiet">Cancel</button></div></form>`;
 }
 

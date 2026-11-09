@@ -39,7 +39,7 @@ export const AP_FRAMES = [
   ['home-assistant', 'Home Assistant’s real settings: changes run and are reported, or ask first; the kinds that confirm every time', 'detail'],
   ['raise', 'Raising one is free: Home Assistant set to ask first, saved without a confirmation', 'detail'],
   ['lower', 'Lowering one is a loosening: on Nova’s own screen it needs the box and your passkey ({confirm: true})', 'detail'],
-  ['lower-device', 'The same loosening from a paired phone: the box alone, and any paired phone may (flagged)', 'detail'],
+  ['lower-device', 'The same loosening from a paired phone: the box alone, and any paired phone may (your ruling)', 'detail'],
   ['guard', 'Always on: after Nova reads an email or a web page, these still ask. No switch, and why', 'detail'],
   ['fixed', 'What can’t change, said plainly: Nova never presses pay, and the rest', 'detail'],
   ['chat-steps', 'Without asking (permissions.md) as it is today, and where it would sit in Approvals', 'detail'],
@@ -206,7 +206,7 @@ function lower(id, { device = false } = {}) {
 <div class="au-actions"><button type="submit" class="btn primary" data-ap-confirm disabled>Confirm</button><button type="button" class="btn quiet">Cancel</button></div>`
     : `${passkeyConfirm({ state: 'ready' })}<div class="au-actions">${passkeyAction({ state: 'ready' })}<button type="button" class="btn quiet">Cancel</button></div>`;
   const how = device
-    ? 'On a paired phone or browser, the box alone confirms it. Any paired phone or browser can do this today, not only one you allowed to approve, and no passkey is asked for. (Flagged for you.)'
+    ? 'On a paired phone or browser, the box alone confirms it, with no passkey. Any paired phone or browser may change these settings, not only one you allowed to approve: your ruling, 2026-11-09.'
     : 'On Nova’s own screen, every confirmation like this one takes your passkey, so a program on this computer can’t loosen it by itself.';
   return `${toApprovals(id)}<form class="au-form ap-confirm" data-sg-inert novalidate aria-labelledby="${id}-title"><p class="ap-kind">Loosens: confirms first</p><h3 class="uc-h" id="${id}-title">Let Nova change your home without asking first?</h3>
 <p class="au-sentence">Home Assistant goes from Asks first to Does it and tells you.</p>
@@ -247,7 +247,7 @@ function chatSteps(id) {
   return `${toApprovals(id)}<p class="ap-kind">Approvals · today in Privacy and permissions</p><h3 class="uc-h" id="${id}-title">Without asking</h3>
 <p class="uc-lede">Steps Nova takes in a conversation, or while it works on its own. Each kind starts at Ask first. These switches are kept in permissions.md in your Nova folder, and can be changed there by hand.</p>
 <ul class="ap-list ap-perms" aria-labelledby="${id}-title">${rows}</ul>
-${facts([['Still confirms', 'A step that is tier 3 confirms every time, whatever its switch says.'], ['Still asks', 'After outside content, a guarded step asks.'], ['Turning one on', 'Takes effect at once, with no confirmation. Home Assistant’s loosening confirms first: the two differ today. (Flagged for you.)']])}
+${facts([['Still confirms', 'A step that is tier 3 confirms every time, whatever its switch says.'], ['Still asks', 'After outside content, a guarded step asks.'], ['Turning one on', 'Takes effect at once, with no confirmation: your ruling, 2026-11-09. Home Assistant’s loosening still confirms first.']])}
 <p class="au-note">Proposed: this list moves into Approvals, under “Steps in a conversation”, and its words become the same four as the rest. permissions.md stays the file it is kept in.</p>`;
 }
 

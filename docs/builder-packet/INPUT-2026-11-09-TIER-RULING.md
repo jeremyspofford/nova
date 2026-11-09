@@ -59,3 +59,24 @@ Owner answer, verbatim:
    every call, whoever starts it.
 
 The owner also agreed to a Settings screen for approval tiers, design first.
+
+## Follow-up rulings, 2026-11-09: who may loosen, and the direction
+
+The Approvals compositions found that any paired phone or browser, not only one allowed to
+approve, can loosen Home Assistant's settings, and that turning a chat step to "Without asking"
+takes one click with no confirmation. Owner answers, verbatim:
+
+> Any decice should be able to change home assistant settings
+
+> Yes. We should allow nova to do things without asking. Actually, she should be able to do most or all without asking, or at least have settings to allow that
+
+6. **Any paired device may change Home Assistant's settings.** The route stays open to any paired
+   person, as it is; on Nova's own screen a loosening still confirms with the passkey, like every
+   confirmation there.
+7. **A chat-step switch turns on with one click.** No confirmation is added.
+8. **Direction: Nova should be able to do most or all things without asking, or at least have
+   settings that allow it.** Each capability's tier becomes a setting the owner can lower to
+   "does it and tells you"; defaults stay where they are until the owner changes them. The
+   integrator proposed three floors no setting removes, for the owner to keep or overrule: Nova
+   never presses pay; after outside content a guarded step asks (it stops a message Nova read
+   from acting as the owner); and the vault stays tier 3, by decision 2.

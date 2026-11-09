@@ -144,7 +144,7 @@ async function words(page: Page, frame: string, label: string) {
   if (frame === 'lower') assert.ok(await f.getByRole('button', { name: 'Confirm with passkey' }).isDisabled(), `${label}: the passkey waits for the box`);
   if (frame === 'lower-device') {
     assert.equal(await f.getByRole('button', { name: 'Confirm with passkey' }).count(), 0, `${label}: no passkey on a paired phone`);
-    has('Flagged for you');
+    has('your ruling, 2026-11-09');
   }
   if (frame === 'guard') {
     for (const g of Object.values(GUARDED) as string[]) has(g);
