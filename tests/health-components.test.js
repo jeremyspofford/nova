@@ -74,3 +74,27 @@ test('work costs loading and saving use the retained shared wait clock', (t) => 
   assert.match(saving, /Saving limits/);
   over('health-costs'); over('health-costs-save');
 });
+
+// Health's "What Nova did" (owner, 2026-11-08: the same event three times in a row on the Duo cover).
+test('playbook events: the same event three times in a row is one entry with its count and latest time', () => {
+  const said = 'The chat model answers again. A failed task is yours to retry or cancel.';
+  const r = (at, o = {}) => ({ at, name: 'recheck-worker', by: 'nova', ok: true, said, ...o });
+  const events = components.playbookEvents([r('2026-10-31T08:50:00Z'), r('2026-10-31T08:55:00Z'), r('2026-10-31T09:00:00Z')]);
+  assert.deepEqual(events, [{ name: 'recheck-worker', ok: true, said, at: '2026-10-31T09:00:00Z', count: 3 }]);
+});
+
+test('playbook events: the same event apart (another between) stays apart; a different time or asker is still the same event', () => {
+  const r = (at, said, o = {}) => ({ at, name: 'recheck-worker', by: 'nova', ok: said === 'up', said, ...o });
+  // Different times, and a person's retry that ended the same way: one event.
+  assert.deepEqual(components.playbookEvents([r('2026-10-31T08:00:00Z', 'up'), r('2026-10-31T09:00:00Z', 'up', { by: 'person' })]).map((e) => e.count), [2]);
+  // Not neighbours: kept apart, in order.
+  const apart = components.playbookEvents([r('2026-10-31T07:00:00Z', 'up'), r('2026-10-31T08:00:00Z', 'down'), r('2026-10-31T09:00:00Z', 'up')]);
+  assert.deepEqual(apart.map((e) => [e.said, e.count]), [['up', 1], ['down', 1], ['up', 1]]);
+  // The same words from another repair, or with another outcome, are other events.
+  assert.equal(components.playbookEvents([r('2026-10-31T08:00:00Z', 'up'), r('2026-10-31T09:00:00Z', 'up', { name: 'retry-backup' })]).length, 2);
+  assert.equal(components.playbookEvents([r('2026-10-31T08:00:00Z', 'up'), r('2026-10-31T09:00:00Z', 'up', { ok: false })]).length, 2);
+  // The last three entries after collapsing, not the last three records.
+  const many = components.playbookEvents([r('a', 'one'), r('b', 'two'), r('c', 'three'), r('d', 'four'), r('e', 'four'), r('f', 'four')]);
+  assert.deepEqual(many.map((e) => [e.said, e.count]), [['two', 1], ['three', 1], ['four', 3]]);
+  assert.deepEqual(components.playbookEvents(undefined), []);
+});
