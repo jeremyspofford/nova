@@ -23,7 +23,7 @@
   - Group headings are kept, because the IA test pins "grouped by task"; the composition shows a flat list.
   - The search stays after Enter, so other matches stay marked.
   - On desktop, section hairlines run wider than the row hairlines and controls.
-- Checked:
+- Checked: locally, before CI.
   - lint:tokens, typecheck, unit tests 59/59 (including filterSettings).
   - UI: settings-rebuild 1/1 (new), ui-fixes 4/4, ui-review 3/3, backups-settings 17/17, appearance-redraw 1/1, navigation-drawn 4/4, navigation-reachability 2/2, fold-postures 5/5 (six settings baselines redrawn, the rest kept, then confirmed), m9-targets 2/2, m9-contrast 1/1, m9-motion 1/1, m9-vitals 1/1, posture-sweep 2/2, about-changelog 1/1.
   - The shots walkthrough passed 133/133.
