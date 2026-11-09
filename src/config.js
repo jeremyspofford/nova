@@ -42,8 +42,12 @@ export function loadConfig(env = process.env, root = ROOT) {
     // development (npm run dev), or production.
     instance: instanceOf(env.NOVA_INSTANCE ?? file.instance, env.NOVA_DEV === '1'),
     // Features that ship off: features.interstitial in nova.config.json, or NOVA_FEATURE_INTERSTITIAL=1|0
-    // (the environment wins). Off unless it says on.
-    features: { interstitial: flag(env.NOVA_FEATURE_INTERSTITIAL ?? file.features?.interstitial) },
+    // (the environment wins). Off unless it says on. features.memory_gate (NOVA_FEATURE_MEMORY_GATE):
+    // a reply's memory asks the memory gate before it is written (runner keep()).
+    features: {
+      interstitial: flag(env.NOVA_FEATURE_INTERSTITIAL ?? file.features?.interstitial),
+      memoryGate: flag(env.NOVA_FEATURE_MEMORY_GATE ?? file.features?.memory_gate),
+    },
     maxSteps: Number(file.max_tool_steps ?? 8),
     execTimeoutMs: Number(file.exec_timeout_ms ?? 120_000),
     // Stand-ins for Google and the search engine, for tests and screenshots.

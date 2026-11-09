@@ -221,7 +221,7 @@ export interface IngestOptions {
   timeLimitMs?: number;
 }
 
-export interface Candidate { id: string; at: string; op: 'remember' | 'note' | 'forget'; kind: string | null; content: string | null; target: string | null; replaces: string | null; source: string | null; taint: Taint[] }
+export interface Candidate { id: string; at: string; op: 'remember' | 'note' | 'forget'; kind: string | null; content: string | null; target: string | null; replaces: string | null; source: string | null; taint: Taint[]; reason: string | null }
 export interface Hold { kind: string; ref: string; screen: string; reasons: string[]; at: string }
 
 const screenRow = (r: Record<string, unknown>) => ({ ...r, partial: !!r.partial, scores: r.scores ? JSON.parse(String(r.scores)) : null, flags: JSON.parse(String(r.flags)) });
@@ -354,11 +354,13 @@ export class Ingest {
 
   // ---- memory candidates (plan §8) ----------------------------------------------------------------
 
-  candidate(c: { op: Candidate['op']; kind?: string; content?: string; target?: string; replaces?: string; source?: string; taint: Taint[] }): string {
+  // reason: why it waits when that isn't outside content (migration 0027): the memory gate's
+  // "flag", a conflict with what Nova remembers. The candidate list shows it.
+  candidate(c: { op: Candidate['op']; kind?: string; content?: string; target?: string; replaces?: string; source?: string; taint: Taint[]; reason?: string }): string {
     const id = `mc-${randomUUID().slice(0, 12)}`;
     this.#db().run(
-      'INSERT INTO memory_candidate (id, at, op, kind, content, target, replaces, source, taint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      id, this.#now().toISOString(), c.op, c.kind ?? null, c.content ?? null, c.target ?? null, c.replaces ?? null, c.source ?? null, JSON.stringify(c.taint),
+      'INSERT INTO memory_candidate (id, at, op, kind, content, target, replaces, source, taint, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, this.#now().toISOString(), c.op, c.kind ?? null, c.content ?? null, c.target ?? null, c.replaces ?? null, c.source ?? null, JSON.stringify(c.taint), c.reason ?? null,
     );
     return id;
   }
@@ -504,7 +506,7 @@ export class Ingest {
 }
 
 function toCandidate(r: Record<string, string | null>): Candidate {
-  return { id: r.id!, at: r.at!, op: r.op as Candidate['op'], kind: r.kind ?? null, content: r.content ?? null, target: r.target ?? null, replaces: r.replaces ?? null, source: r.source ?? null, taint: JSON.parse(r.taint ?? '[]') as Taint[] };
+  return { id: r.id!, at: r.at!, op: r.op as Candidate['op'], kind: r.kind ?? null, content: r.content ?? null, target: r.target ?? null, replaces: r.replaces ?? null, source: r.source ?? null, taint: JSON.parse(r.taint ?? '[]') as Taint[], reason: r.reason ?? null };
 }
 
 // Why a block, in plain words: which checks and which questions.

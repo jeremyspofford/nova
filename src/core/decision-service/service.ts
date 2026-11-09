@@ -57,7 +57,9 @@ export interface ServiceOptions {
 // it is routed by the same capture rule as a capture template (cloudAllowed).
 // `version`: a named template version (else the service picks one, see ask()).
 // `capture_source`: the capture source an item came from, for the per-source cloud opt-in.
-export interface AskOptions { subsystem: string; task_id?: string | null; privacy_mode?: PrivacyMode; version?: number; shadow?: boolean; content_class?: 'capture-derived'; capture_source?: string }
+// `source`: where in Nova it was asked when that isn't a task, kept in the record by id only: the
+// conversation and turn (`<session>/<turn>`) a memory came from (migration 0027).
+export interface AskOptions { subsystem: string; task_id?: string | null; privacy_mode?: PrivacyMode; version?: number; shadow?: boolean; content_class?: 'capture-derived'; capture_source?: string; source?: string | null }
 export interface ContentClass { content_class?: 'capture-derived'; capture_source?: string }
 // A seat's evidence-only answers are bounded: at most this many asks per seat per UTC day.
 export const SHADOW_PER_DAY = 200;
@@ -205,7 +207,7 @@ export class DecisionService {
     };
     this.#o.log.write({
       ...result,
-      at: this.#now().toISOString(), task_id: o.task_id ?? null, subsystem: o.subsystem,
+      at: this.#now().toISOString(), task_id: o.task_id ?? null, subsystem: o.subsystem, ...(o.source ? { source: o.source } : {}),
       model_asked: null, privacy_mode: mode, egress: 'none', opt_in: null,
       state_sha256: this.#stateHash(t, o, built.sha256), state_fields: built.fields,
       pieces: 0, requests: 0, usage: { input_tokens: 0, output_tokens: 0 },
@@ -322,7 +324,7 @@ export class DecisionService {
     const opt_in = cloud ? sentOptIn : null;
     const record: DecisionRecord = {
       ...result,
-      at: this.#now().toISOString(), task_id: o.task_id ?? null, subsystem: o.subsystem,
+      at: this.#now().toISOString(), task_id: o.task_id ?? null, subsystem: o.subsystem, ...(o.source ? { source: o.source } : {}),
       model_asked: decided?.seat === 'legacy' ? 'sorting-model' : decided?.model ?? null,
       privacy_mode: mode,
       egress: cloud ? 'remote:typesafe' : asked.size ? 'local' : 'none',
