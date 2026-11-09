@@ -21,8 +21,12 @@ export const SESSION_COOKIE = 'nova_session';
 
 // Outside /api/v1 (whose routes carry their own scope), these paths are public: the pairing page and
 // what it loads, and the device agent's installer (M4b).
+// /js/status-icon.js draws /pair's status icon. Owner, 2026-11-08: it is public only while it stays
+// self-contained (no imports, no network calls, no data access); tests/public-status-icon.test.js
+// fails if it gains one. A change that needs more than drawing comes back to the owner as a new
+// question, not an edit to this allowlisted file.
 export const PUBLIC_PATHS: ReadonlySet<string> = new Set([
-  '/pair', '/js/pair.js', '/js/device-key.js', '/styles/base.css', '/styles/components.css', '/styles/pair.css',
+  '/pair', '/js/pair.js', '/js/device-key.js', '/js/status-icon.js', '/styles/base.css', '/styles/components.css', '/styles/pair.css',
   '/design-system.css', '/icon.svg', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/maskable-512.png',
   '/join.sh', '/device-agent.tar',
 ]);
