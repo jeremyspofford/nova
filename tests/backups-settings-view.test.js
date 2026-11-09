@@ -1,3 +1,4 @@
+import './support/no-browser-storage.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';

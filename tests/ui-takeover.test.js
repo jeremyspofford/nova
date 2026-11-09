@@ -1,6 +1,7 @@
 // The takeover view's words and its one standout action come from the browser session's real
 // state (M5c); pure, so the rules are checked here: who may take over, who may hand back, and what
 // each state says in the one status vocabulary. The live view itself is tests/ui/m5c-takeover.test.ts.
+import './support/no-browser-storage.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { evidenceViewer, takeoverActions, takeoverPanel, takeoverState } from '../ui/js/components.js';
