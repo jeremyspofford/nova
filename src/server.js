@@ -325,6 +325,11 @@ export function createNova(config = loadConfig(), deps = {}) {
       res.writeHead(200, { 'content-type': type, 'cache-control': config.dev ? 'no-store' : 'no-cache', ...htmlSecurityHeaders(shipped, nonce), ...clear });
       return res.end(html);
     }
+    // A text transform also applies outside HTML: /sw.js gets its cache name filled in (sw-version.js).
+    if (page) {
+      res.writeHead(200, { 'content-type': type, 'cache-control': config.dev ? 'no-store' : 'no-cache', 'x-content-type-options': 'nosniff', ...clear });
+      return res.end(page(readFileSync(file, 'utf8')));
+    }
     res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', ...clear });
     createReadStream(file).pipe(res);
   }
