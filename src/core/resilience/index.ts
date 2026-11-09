@@ -530,7 +530,7 @@ export class Resilience {
         },
       },
       {
-        method: 'POST', path: '/supervisor/rollback', status: 202, summary: 'Go back to the previous release ({confirm: true}, the hub’s own screen only). Refused, with the reason, when it would lose what was written since a database upgrade.',
+        method: 'POST', path: '/supervisor/rollback', status: 202, summary: 'Go back to the previous release (tier 3: {confirm: true}, the hub’s own screen only). Refused, with the reason, when it would lose what was written since a database upgrade.',
         body: '{confirm}',
         handle: async ({ body, who }) => {
           console(who);
