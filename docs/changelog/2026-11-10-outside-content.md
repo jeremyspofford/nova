@@ -1,0 +1,3 @@
+### Security
+- Once a conversation has read something from outside (a web page, an email, a file Nova didn't write, a command's output, or a reply from a connected service), anything Nova wants to remember or note from that conversation waits for your OK in the Memory view instead of being kept straight away, and the Memory view says what the conversation had read. Nova checking its own status doesn't cause this, unless the check flags what the status said.
+- Every reply from a connected service (your home, your thermostat, any service Nova acts on) is now checked as outside content before Nova reads it. Only a reply the check flags makes Nova ask before its next commands and changes; an ordinary reply doesn't.

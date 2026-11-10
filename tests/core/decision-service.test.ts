@@ -144,31 +144,48 @@ test('local-only with Jev set up but the screening opt-in off: Jev is never aske
     assert.notEqual(d.seat, 'jev');
     assert.equal(r.log.records[0]!.egress, 'local');
     assert.equal(r.receipts.length, 0);
-    assert.ok(r.log.records[0]!.failures.some((f) => f.seat === 'jev' && /keeps screening on this device unless its opt-in is on/.test(f.why)));
+    assert.ok(r.log.records[0]!.failures.some((f) => f.seat === 'jev' && /local-only keeps screening on this device; no cloud model is used/.test(f.why)));
   } finally { await r.close(); }
 });
 
-test('local-only and local-preferred with the screening opt-in on: Jev answers, and the record and receipt name the opt-in', async () => {
-  for (const mode of ['local-only', 'local-preferred'] as const) {
-    const r = await rig({ mode, settings: { opt_in: { screening: true, box: false } }, verdicts: [pass('demo-text', 'jev', 'jev-1.14.0')] });
-    try {
-      const d = (await r.service.ask('demo-text', { note: 'Receipt' }, { subsystem: 'test' }))!;
-      assert.equal(d.seat, 'jev', mode);
-      const rec = r.log.records[0]!;
-      assert.equal(rec.opt_in, 'screening');
-      assert.equal(rec.egress, 'remote:typesafe');
-      assert.equal((r.receipts[0] as { opt_in: string }).opt_in, 'screening');
-    } finally { await r.close(); }
-  }
+test('local-preferred with the screening opt-in on: Jev answers, and the record and receipt name the opt-in', async () => {
+  const r = await rig({ mode: 'local-preferred', settings: { opt_in: { screening: true, box: false } }, verdicts: [pass('demo-text', 'jev', 'jev-1.14.0')] });
+  try {
+    const d = (await r.service.ask('demo-text', { note: 'Receipt' }, { subsystem: 'test' }))!;
+    assert.equal(d.seat, 'jev');
+    const rec = r.log.records[0]!;
+    assert.equal(rec.opt_in, 'screening');
+    assert.equal(rec.egress, 'remote:typesafe');
+    assert.equal((r.receipts[0] as { opt_in: string }).opt_in, 'screening');
+  } finally { await r.close(); }
 });
 
-test('in a local mode Tev1 comes before Jev; a trusted seat comes before both', async () => {
-  const r = await rig({ mode: 'local-only', settings: { opt_in: { screening: true, box: false } } });
+// Owner ruling D4 (2026-11-10): local-only is absolute. A screening opt-in saved earlier is
+// suspended, not honoured: zero requests reach Jev, even with a passing verdict, and no receipt.
+test('local-only with the screening opt-in on: the opt-in is suspended, and nothing reaches Jev', async () => {
+  const r = await rig({ mode: 'local-only', settings: { opt_in: { screening: true, box: false } }, verdicts: [pass('demo-text', 'jev', 'jev-1.14.0')] });
+  try {
+    for (const note of ['Receipt', 'x', 'a page']) {
+      const d = (await r.service.ask('demo-text', { note }, { subsystem: 'test' }))!;
+      assert.notEqual(d.seat, 'jev');
+    }
+    assert.equal(r.jevApi.requests.length, 0, 'no request reached the cloud seat');
+    assert.equal(r.receipts.length, 0);
+    for (const rec of r.log.records) {
+      assert.equal(rec.egress, 'local');
+      assert.equal(rec.opt_in, null);
+      assert.ok(rec.failures.some((f) => f.seat === 'jev' && /screening opt-in is suspended while local-only is on/.test(f.why)));
+    }
+  } finally { await r.close(); }
+});
+
+test('in local-first Tev1 comes before Jev; a trusted seat comes before both', async () => {
+  const r = await rig({ mode: 'local-preferred', settings: { opt_in: { screening: true, box: false } } });
   try {
     await r.service.ask('demo-text', { note: 'x' }, { subsystem: 'test' });
     assert.deepEqual(r.log.records[0]!.shadows.map((s) => s.seat), ['tev1', 'jev']);
   } finally { await r.close(); }
-  const r2 = await rig({ mode: 'local-only', settings: { opt_in: { screening: true, box: false } }, verdicts: [pass('demo-text', 'jev', 'jev-1.14.0')] });
+  const r2 = await rig({ mode: 'local-preferred', settings: { opt_in: { screening: true, box: false } }, verdicts: [pass('demo-text', 'jev', 'jev-1.14.0')] });
   try {
     const d = (await r2.service.ask('demo-text', { note: 'x' }, { subsystem: 'test' }))!;
     assert.equal(d.seat, 'jev');

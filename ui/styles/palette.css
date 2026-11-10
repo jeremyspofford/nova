@@ -28,7 +28,10 @@
 .palette-ic svg { width: var(--space-5); height: var(--space-5); }
 
 .palette-list { flex: 1; min-height: 0; padding: 0 var(--space-2) var(--space-2); overflow: auto; overscroll-behavior: contain; }
-.palette-group-title { margin: var(--space-4) 0 var(--space-1); padding: 0 var(--space-3); color: var(--text-secondary); font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body); letter-spacing: 0.04em; text-transform: uppercase; }
+/* The same heading treatment as Settings' group titles (views.css): larger than the rows, primary
+   colour, a group's worth of space above. */
+.palette-group-title { margin: var(--space-5) 0 var(--space-2); padding: 0 var(--space-3); color: var(--text-primary); font: var(--type-weight-strong) var(--type-body)/var(--type-line-tight) var(--font-body); }
+.palette-group:first-child > .palette-group-title { margin-top: var(--space-2); }
 .palette-row { display: flex; align-items: center; gap: var(--space-3); min-height: var(--hit); padding: var(--space-1) var(--space-3); border-left: 2px solid transparent; border-radius: var(--radius-input); color: var(--text-primary); font: var(--type-weight-regular) var(--type-small)/var(--type-line-tight) var(--font-body); cursor: pointer; }
 .palette-row.is-on { border-left-color: var(--accent-primary); background: var(--surface-card-hover); font-weight: var(--type-weight-strong); }
 .palette-row.is-on .palette-ic { color: var(--text-primary); }

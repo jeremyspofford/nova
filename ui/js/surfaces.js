@@ -464,7 +464,7 @@ export function renderHealth(el) {
   ${p.detail ? `<details class="raw"><summary>Technical detail</summary><pre tabindex="0">${esc(p.detail)}</pre></details>` : ''}</div>
 </li>`;
   };
-  const fine = (k, c) => c.ok && !(k === 'passkeys' && !c.complete) && !(k === 'mesh' && (c.standby?.lag?.behind || c.replica?.sync?.unreachable_since || c.replica?.sync?.refused));
+  const fine = (k, c) => c.ok && !c.attention && !(k === 'passkeys' && !c.complete) && !(k === 'mesh' && (c.standby?.lag?.behind || c.replica?.sync?.unreachable_since || c.replica?.sync?.refused));
   const checks = h ? Object.entries(h.checks).map(([k, c]) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(CHECK_NAMES[k] ?? k)}</p><p class="settings-note">${esc(checkLine(k, c))}${k === 'mesh' ? ' <a class="link" href="/topology">View machines and services</a>' : ''}</p></div>${fine(k, c) ? '<span class="pill is-on">Fine</span>' : '<span class="pill is-warn">Needs a look</span>'}</li>`).join('') : '';
   const next = document.createElement('div');
   next.innerHTML = `<header class="view-head"><h2 class="view-title">Health</h2>
@@ -526,7 +526,7 @@ function keepingRunning() {
   const lastDeploy = dep && dep.outcome !== 'running' ? `${esc(dep.version)}: ${esc({ promoted: 'live', rolled_back: 'rolled back by itself', stopped: 'stopped before the switch', refused: 'going back was refused' }[dep.outcome] ?? dep.outcome)}, ${esc(ago(dep.started_at))}` : '';
   const backupLine = !b.settings.target ? 'No backup folder yet. Choose one in Settings › Backups; Nova then backs up nightly and drills weekly.'
     : b.target_present === false ? `The backup folder ${b.settings.target} isn’t there (a drive not plugged in?).${b.last_ok ? ` Last backup ${ago(b.last_ok.at)}.` : ''}`
-    : b.last_ok ? `Last backup ${ago(b.last_ok.at)}, to ${b.settings.target}. ${b.count} kept (up to ${b.settings.keep}).${b.encrypted !== null ? ` ${b.encrypted} encrypted cop${b.encrypted === 1 ? 'y' : 'ies'} in ${b.settings.encrypted_target}.` : ''}`
+    : b.last_ok ? `Last backup ${ago(b.last_ok.at)}, to ${b.settings.target} (not encrypted). ${b.count} kept (up to ${b.settings.keep}).${b.encrypted !== null ? ` ${b.encrypted} encrypted cop${b.encrypted === 1 ? 'y' : 'ies'} in ${b.settings.encrypted_target}.` : ' No encrypted copy: set an encrypted copy folder for one.'}`
     : `Nothing backed up yet to ${b.settings.target}.`;
   // Named like a backup but not made by this Nova (or changed since): never used, said once here.
   const strays = b.strays?.length ? ` ${b.strays.length} folder${b.strays.length === 1 ? '' : 's'} there look${b.strays.length === 1 ? 's' : ''} like a backup but ${b.strays.length === 1 ? 'isn’t' : 'aren’t'} one Nova made; Nova leaves ${b.strays.length === 1 ? 'it' : 'them'} alone and never restores from ${b.strays.length === 1 ? 'it' : 'them'}.` : '';
@@ -535,7 +535,7 @@ function keepingRunning() {
 <dl class="facts" data-resilience>
   <dt>Supervisor</dt><dd>${sup ? `${esc(MODE_WORDS[sup.mode] ?? sup.mode)}${sup.server?.restarts ? `; restarted ${sup.server.restarts} time${sup.server.restarts === 1 ? '' : 's'}` : ''}.${sup.safe_mode ? ` ${esc(sup.safe_mode.reason)}` : ''}` : 'Not running under the supervisor. node src/supervisor/main.ts run keeps Nova running and takes releases.'}</dd>
   ${rel ? `<dt>Release</dt><dd>${esc(releaseName(rel.current))}${rel.previous ? `; ${esc(releaseName(rel.previous))} is kept to go back to` : ''}.${lastDeploy ? ` Last deploy: ${lastDeploy}.` : ''}</dd>` : ''}
-  <dt>Backups</dt><dd>${esc(backupLine + strays)} <a class="link" href="/settings#backups">Backup settings</a></dd>
+  <dt>Backups</dt><dd>${esc(backupLine + strays)} <a class="link" href="/settings#backups">Backup settings</a> <a class="link" href="/docs/restore" data-restore-doc>How to restore a backup</a></dd>
   <dt>Restore drill</dt><dd>${esc(drillLine)}${d?.task_id ? ` <a class="link" href="/tasks" data-action="open-task" data-task="${esc(d.task_id)}">Its evidence</a>` : ''}</dd>
   ${r.clock?.held ? `<dt>Clock</dt><dd>${esc(r.clock.held)}</dd>` : ''}
 </dl>
@@ -750,7 +750,7 @@ export function bindBackups(root, changed) {
 
 const PRIVACY = [
   ['local-only', 'Local-only', 'Model calls stay on your own devices.'],
-  ['local-preferred', 'Local first', 'Local first; cloud help only when local isn’t enough, and recorded.'],
+  ['local-preferred', 'Local first', 'Nova’s own model work runs on your devices first; cloud help only when local isn’t enough, and recorded. Chat goes where its chat model sends it, below.'],
   ['cloud-allowed', 'Cloud allowed', 'Nova may use cloud services within your policy.'],
 ];
 const DIRECTNESS = [['gentle', 'Gently'], ['balanced', 'Plainly'], ['blunt', 'Bluntly']];
@@ -770,7 +770,18 @@ export function renderPrivacy() {
   return `<section class="memory-section" id="privacy" aria-labelledby="set-privacy"><h2 class="memory-heading" id="set-privacy">Privacy</h2>
 <p class="memory-lede">The default for every task. A task can be stricter, never looser.</p>
 <fieldset class="set-field"><legend class="sr-only">Privacy mode</legend><div class="choices">${PRIVACY.map(([v, l]) => `<label class="choice"><input type="radio" name="privacy" value="${v}"${privacy() === v ? ' checked' : ''}><span class="choice-name">${l}</span></label>`).join('')}</div></fieldset>
-<p class="settings-note">${esc(PRIVACY.find(([v]) => v === privacy())?.[2] ?? '')}</p></section>`;
+<p class="settings-note">${esc(PRIVACY.find(([v]) => v === privacy())?.[2] ?? '')}</p>${chatPrivacyNote()}</section>`;
+}
+
+// Where chat goes, and what a chat turn carries, said where the mode is chosen and before the first
+// send (F-025, F-027, A-006): the hub builds the words from the chat model actually chosen. Under
+// local-only, what choosing the cloud would mean for chat is said before the person chooses it.
+function chatPrivacyNote() {
+  const s = store.providers?.chat?.sends;
+  if (!s?.modes) return '';
+  const now = s.modes[privacy()] ?? '';
+  const ifCloud = privacy() === 'local-only' && s.modes['local-preferred'] !== now ? ` With Local first or Cloud allowed: ${s.modes['local-preferred']}` : '';
+  return `<p class="settings-note" data-chat-privacy>${esc(`${now}${ifCloud}`)}</p>`;
 }
 
 export async function saveProfile(section, key, value) {
@@ -1317,9 +1328,11 @@ export function renderProviders() {
     // Before the person switches: the recommended model's scorecard, or that it has none
     // (Amendment B Part 4).
     const card = better && what === 'chat' ? store.chatCard : null;
+    // A cloud chat program's line says what each turn carries (F-027).
+    const carries = what === 'chat' && data.chat.sends?.egress === 'remote' ? ` ${data.chat.sends.turn}` : '';
     return settingsRow({
       title,
-      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}${card ? ` ${card.words}` : ''}` : rec.why,
+      note: `${better ? `Nova recommends ${name(rec.id)}. ${rec.why}${card ? ` ${card.words}` : ''}` : rec.why}${carries}`,
       control: better ? `<button type="button" class="btn small${standout ? ' primary' : ''}" data-action="provider-choose" data-for="${what}" data-provider="${esc(rec.id)}">Use ${esc(name(rec.id))}</button>` : '',
     });
   };

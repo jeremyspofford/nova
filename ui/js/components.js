@@ -478,12 +478,16 @@ export function healthCard({ health = null, problems = [], reachable = true } = 
   else if (!health) body = waitingLine('Checking Nova’s health', { key: 'health' });
   else {
     const bad = Object.entries(health.checks ?? {}).filter(([, c]) => c && c.ok === false);
-    const lead = problems.length ? `${problems.length} problem${problems.length === 1 ? '' : 's'} to look at` : bad.length ? 'Something isn’t right' : 'All systems normal';
+    // Working, but not something to call normal: no backup to fall back on (F-019).
+    const look = Object.entries(health.checks ?? {}).filter(([, c]) => c && c.ok !== false && c.attention);
+    const lead = problems.length ? `${problems.length} problem${problems.length === 1 ? '' : 's'} to look at` : bad.length ? 'Something isn’t right' : look.length ? 'Something needs a look' : 'All systems normal';
     const lines = problems.length ? [problemsSummary(problems), 'What happened, and what you can do, is in Health.']
       : bad.length ? [`Needs a look: ${listWords(bad.map(([k]) => CHECK_NAMES[k] ?? 'another check'))}.`, 'The detail is in Health.']
-        : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
-    // Failed (red) only when a problem stops Nova; any other open problem needs you (amber).
-    const tone = problems.some((p) => p?.stops) || (!problems.length && bad.length) ? 'failed' : problems.length ? 'needs-you' : 'verified';
+        : look.length ? [...look.map(([k, c]) => `${CHECK_NAMES[k] ?? 'A check'}: ${typeof c.attention === 'string' ? c.attention : 'needs a look.'}`), 'The detail is in Health.']
+          : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
+    // Failed (red) only when a problem stops Nova; any other open problem, or a check that needs a
+    // look while Nova runs, needs you (amber).
+    const tone = problems.some((p) => p?.stops) || (!problems.length && bad.length) ? 'failed' : problems.length || look.length ? 'needs-you' : 'verified';
     body = `<p class="card-lead" data-status="${tone}">${esc(lead)}</p>${lines.map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
   }
   return card({ kind: 'health-card', title: 'System health', icon: 'health', body, action: '<a class="link" href="/health" data-nav="health">Health</a>' });
@@ -1159,13 +1163,14 @@ const utcWords = (iso) => `${String(iso).slice(0, 16).replace('T', ' ')} UTC`;
 export const buildTone = (v) => (v?.behind === true ? 'pending' : v?.behind === false ? 'current' : 'unknown');
 
 // The version stamp at the rail's foot (so also at the foot of a phone's navigation drawer): the
-// version and the short commit (open rail), a "v" (slim rail), amber with a dot when a redeploy is
+// version and the short commit (open rail), the short version, never a bare letter (slim rail; the
+// owner found a lone "v" reading as a stray letter, 2026-11-10), amber with a dot when a redeploy is
 // pending. A link to About. Nothing until the build is known.
 export function versionStamp(v) {
   if (!v?.version) return '';
   const pending = buildTone(v) === 'pending';
   const words = `Nova ${v.version}${v.commit_short ? `, build ${v.commit_short}` : ''}${pending ? ', redeploy pending' : ''}`;
-  return `<a class="rail-stamp" href="/about"${pending ? ' data-pending' : ''} title="${esc(words)}. About Nova"><span class="sr-only">${esc(words)}. About Nova</span><span class="rail-stamp-v" aria-hidden="true">v</span>${pending ? '<span class="rail-stamp-dot" aria-hidden="true"></span>' : ''}<span class="rail-stamp-full" aria-hidden="true">${esc(v.version)}${v.commit_short ? ` <span class="rail-stamp-commit">${esc(v.commit_short)}</span>` : ''}${pending ? ' redeploy pending' : ''}</span></a>`;
+  return `<a class="rail-stamp" href="/about"${pending ? ' data-pending' : ''} title="${esc(words)}. About Nova"><span class="sr-only">${esc(words)}. About Nova</span><span class="rail-stamp-v" aria-hidden="true">${esc(String(v.version).split('-')[0])}</span>${pending ? '<span class="rail-stamp-dot" aria-hidden="true"></span>' : ''}<span class="rail-stamp-full" aria-hidden="true">${esc(v.version)}${v.commit_short ? ` <span class="rail-stamp-commit">${esc(v.commit_short)}</span>` : ''}${pending ? ' redeploy pending' : ''}</span></a>`;
 }
 
 const ABOUT_LINE = {

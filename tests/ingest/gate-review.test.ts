@@ -139,8 +139,11 @@ test('2. the receipt is held to the live setting, not the label its caller gives
   // The caller says cloud-allowed, or names an opt-in that is off: refused, because local-only is live.
   assert.throws(() => receipts.record({ ...r, privacy_mode: 'cloud-allowed' }), /Local-only mode doesn't allow/);
   assert.throws(() => receipts.record({ ...r, privacy_mode: 'local-only', opt_in: 'screening' }), /Local-only mode doesn't allow/);
+  // Even with the opt-in on, local-only is absolute (owner ruling D4): still refused.
   screening = true;
-  assert.equal(receipts.record({ ...r, privacy_mode: 'cloud-allowed', opt_in: 'screening' }).privacy_mode, 'local-only', 'the receipt says the mode that held');
+  assert.throws(() => receipts.record({ ...r, privacy_mode: 'cloud-allowed', opt_in: 'screening' }), /Local-only mode doesn't allow/);
+  mode = 'local-preferred';
+  assert.equal(receipts.record({ ...r, privacy_mode: 'cloud-allowed', opt_in: 'screening' }).privacy_mode, 'local-preferred', 'the receipt says the mode that held');
   mode = 'cloud-allowed';
   assert.equal(receipts.record({ ...r, privacy_mode: 'cloud-allowed' }).privacy_mode, 'cloud-allowed');
 });
@@ -257,9 +260,11 @@ test('6. capture-derived text never goes to a cloud seat, in any mode, opt-in or
         assert.equal(r.model, null, `${mode} ${kind}`);
       }
       assert.equal(jev.requests.length, 0, `${mode}: Jev got no capture-derived text`);
-      // A page in the same Nova still goes to the trusted Jev where the person allows it.
+      // A page in the same Nova still goes to the trusted Jev where the person allows it; in
+      // local-only nowhere, opt-in or not (owner ruling D4).
       const page = await c.ingest.screen({ text: 'An ordinary page.', source: { kind: 'web', origin: 'www.example.org' } });
-      assert.equal(page.model, 'jev:jev-1.14.0', mode);
+      assert.equal(page.model, mode === 'local-only' ? null : 'jev:jev-1.14.0', mode);
+      if (mode === 'local-only') assert.equal(jev.requests.length, 0, 'local-only: Jev got nothing at all');
     } finally { await c.close(); await jev.close(); }
   }
 });

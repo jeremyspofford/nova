@@ -182,15 +182,27 @@ can write; from this screen or a device that may approve) starts a nightly
 backup and a weekly restore drill, both in Automations. Each backup is a
 consistent copy of the database and your home's files, with a manifest of
 hashes, readable by you only; the vault's key and this computer's private keys
-are never in it. Add `"encrypted_target"` for an AES-256-GCM copy in a second
+are never in it. **The backup folder is not encrypted**: anyone who can read
+it can read your data, so keep it on a drive only you use. Until a backup
+folder is set and the first backup is made, Home and Health say nothing is
+backed up. Add `"encrypted_target"` for an AES-256-GCM copy in a second
 folder: the reply shows its **recovery key once**. Keep it somewhere other
-than this computer: with it the copy opens anywhere; without it the copy can't
-be opened if this computer is lost. `POST /api/v1/backups/recovery-key
+than this computer: with it, `node scripts/restore-backup.js` opens the copy
+on any machine; without it the copy can't be opened if this computer is lost.
+`POST /api/v1/backups/recovery-key
 {"confirm": true}` shows it again, from this screen only. `"keep"` is how many
 to keep (7). Forgetting something is carried into Nova's backups too; a backup
 drive that is unplugged at the time gets the forget when it is back.
 Health shows the last backup and the last drill; a failed drill is a problem
 with steps.
+
+**Restoring a backup.** `node scripts/restore-backup.js <backup folder or
+.nbk file> [new home]` makes a new home from a backup folder, or from an
+encrypted copy and its recovery key, checked against the backup's manifest and
+with your forgets applied again. A backup never holds the vault's key, so on a
+new computer connectors need signing in again. The whole procedure, including
+what happens to the vault and to things you asked Nova to forget, is in
+[docs/restore.md](docs/restore.md); Health links to it.
 
 ## Your other devices
 

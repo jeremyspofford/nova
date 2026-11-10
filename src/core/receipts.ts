@@ -1,10 +1,9 @@
 // Context receipts (CONTRACTS §2, ADR-10): for every model call, what it was told (as references
 // and hashes, never the content) and where it went. The egress log is every remote receipt.
 // A remote call under local-only is a violation: it is refused and recorded as a problem, so it
-// can never sit in the log looking like an allowed call. One exception, by the owner's decision
-// (Decision Service ADR, decision 1): the person's screening opt-in lets the Decision Service send
-// outside content to Jev for screening even in local-only, and the receipt names that opt-in. Box
-// (images) is never allowed under local-only, opt-in or not.
+// can never sit in the log looking like an allowed call. There is no exception: local-only is
+// absolute (owner ruling D4, 2026-11-10), so a screening or Box opt-in saved earlier is suspended
+// while local-only is on, and a remote call naming one is refused like any other.
 import { randomUUID } from 'node:crypto';
 import { CoreError } from './errors.ts';
 import { PRIVACY_MODES, type PrivacyMode } from './envelope.ts';
@@ -109,7 +108,7 @@ export class Receipts {
       r.privacy_mode = stricter(r.privacy_mode, this.#live.mode());
       if (r.opt_in && !this.#live.optIn(r.opt_in)) r.opt_in = null;
     }
-    if (r.privacy_mode === 'local-only' && r.egress !== 'local' && !(r.opt_in === 'screening' && r.provider === 'jev')) {
+    if (r.privacy_mode === 'local-only' && r.egress !== 'local') {
       const to = r.egress.slice('remote:'.length);
       const known = r.task_id && this.#db.get('SELECT 1 FROM task WHERE id = ?', r.task_id);
       this.#log.problem('receipts', `A model call for "${r.purpose}" was going to send context to ${to} while Nova is set to local-only. It was refused.`, {

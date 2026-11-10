@@ -1,8 +1,9 @@
 // The person's choices for the Decision Service (owner decisions 1, 2 and 4 on the ADR):
 // - providers and models for each seat are the person's choice; Nova recommends, and says plainly
 //   when a choice isn't what it recommends;
-// - cloud Jev in local-first or local-only is a per-feature opt-in, off by default: "screening"
-//   (text batteries) and "box" (images and Box). Box in local-only never goes to a cloud seat;
+// - cloud Jev in local-first is a per-feature opt-in, off by default: "screening" (text batteries)
+//   and "box" (images and Box). In local-only neither goes to a cloud seat: a saved opt-in is
+//   suspended while local-only is on (owner ruling D4, 2026-11-10);
 // - no live call is made until the person has set a route up.
 // Where these are stored (the profile) and shown (Settings › Models) is wiring and UI (Track 1).
 import type { Hardware } from '../models/hardware.ts';
@@ -17,7 +18,7 @@ export interface DecisionSettings {
   jev: { base_url: string; model: string } | null;
   // Tev1 in the person's Ollama: a size, or "auto" (chosen from the hardware).
   tev1: { model: 'auto' | Size } | null;
-  // Cloud Jev in local-first / local-only, per feature. Off by default.
+  // Cloud Jev in local-first, per feature. Off by default; suspended while local-only is on.
   opt_in: Record<OptIn, boolean>;
 }
 
@@ -62,7 +63,7 @@ export function recommend(h: Hardware | null): Recommendation {
 
 // What each opt-in means, in plain words, shown beside the switch and whenever it is on.
 export const OPT_IN_WORDS: Record<OptIn, string> = {
-  screening: 'While this is on, outside content Nova screens (pages, mail, files, tool output) is sent to TypeSafe’s cloud (Jev) to be judged, even in local-first and local-only. Local-only isn’t strictly local for screening while it is on.',
+  screening: 'While this is on, outside content Nova screens (pages, mail, files, tool output) is sent to TypeSafe’s cloud (Jev) to be judged in cloud and local-first modes. In local-only it is suspended: nothing goes to Jev, and no cloud model is used.',
   box: 'While this is on, images Nova is asked to judge, including camera and screen frames from sources you have allowed, are sent to TypeSafe’s cloud (Jev) in cloud and local-first modes. In local-only they never go to a cloud provider. TypeSafe labels images and Box a preview.',
 };
 

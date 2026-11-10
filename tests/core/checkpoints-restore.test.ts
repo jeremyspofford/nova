@@ -46,6 +46,9 @@ test('a restore round trip: the data goes back; revocations, the epoch, problems
     const gone = h.core.memory.remember({ kind: 'fact', content: 'The spare key is under the blue flowerpot.', recorded_by: 'person' });
     mkdirSync(join(h.home, 'workspace'), { recursive: true });
     writeFileSync(join(h.home, 'workspace', 'notes.md'), 'As it was then.\n');
+    // F-014: a secret deleted after the checkpoint must not come back with it, nor the old key.
+    h.core.vault.put('provider/DELETED_SINCE', 'placeholder-deleted-since');
+    h.core.vault.put('provider/KEPT', 'placeholder-kept');
     const early = h.core.log.problem('test', 'A placeholder problem from before.');
     const identity = { id: h.core.mesh.identity.id, fingerprint: h.core.mesh.identity.fingerprint };
     const cp = (await h.c('POST', '/resilience/checkpoints', { name: 'Before the trip' })).body;
@@ -59,6 +62,11 @@ test('a restore round trip: the data goes back; revocations, the epoch, problems
     h.core.log.problem('test', 'A placeholder problem opened since.');
     h.core.log.resolve(early.id);
     h.core.memory.forget(gone.id);
+    assert.equal(h.core.vault.delete('provider/DELETED_SINCE'), true);
+    h.core.vault.put('provider/ADDED_SINCE', 'placeholder-added-since');
+    const keyNow = existsSync(join(h.home, 'vault', 'key')) ? readFileSync(join(h.home, 'vault', 'key'), 'utf8') : null;
+    const cpFiles = JSON.parse(readFileSync(join(h.home, 'checkpoints', cp.id, 'manifest.json'), 'utf8')).files.map((f: { path: string }) => f.path);
+    assert.ok(!cpFiles.some((p: string) => p.startsWith('vault/')), `the checkpoint holds no vault: ${cpFiles.join(', ')}`);
     const epochNow = h.core.mesh.devices.state().epoch;
     // The forget cleaned the checkpoint too: its manifest names the cleaned database now.
     const manifest = JSON.parse(readFileSync(join(h.home, 'checkpoints', cp.id, 'manifest.json'), 'utf8'));
@@ -96,6 +104,10 @@ test('a restore round trip: the data goes back; revocations, the epoch, problems
     assert.equal(existsSync(join(h.home, 'checkpoints', '.restore')), false, 'nothing staged is left behind');
     assert.deepEqual(memories(again), ['The plants get water on Sundays.'], 'the data as it was; the forgotten one stays forgotten');
     assert.equal(readFileSync(join(h.home, 'workspace', 'notes.md'), 'utf8'), 'As it was then.\n');
+    assert.equal(again.vault.get('provider/DELETED_SINCE'), null, 'a secret deleted since stays deleted');
+    assert.equal(again.vault.get('provider/KEPT'), 'placeholder-kept');
+    assert.equal(again.vault.get('provider/ADDED_SINCE'), 'placeholder-added-since', 'the vault is as it is now');
+    if (keyNow !== null) assert.equal(readFileSync(join(h.home, 'vault', 'key'), 'utf8'), keyNow, 'the key is now’s, never the old one');
     assert.equal(again.mesh.identity.id, identity.id, 'the same identity');
     assert.equal(again.mesh.identity.fingerprint, identity.fingerprint);
     const devices = again.mesh.devices;

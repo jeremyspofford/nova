@@ -3,7 +3,7 @@
 // on it and asked the smoke probes. Each check is recorded in words; any failed check fails the
 // drill, and a failed drill is a problem with its playbook. The live home is only read (for what
 // was forgotten), never written.
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Db, Migration } from '../db.ts';
@@ -11,6 +11,8 @@ import { restoreInto, sha256File, type Manifest } from './backup.ts';
 import { inert, smoke, startSandbox } from './sandbox.ts';
 import { dropScratch, makeScratch } from './scratch.ts';
 import { sha256 } from '../workspace.ts';
+import { forgottenNotes, liveNoteHashes, noteEventsSql, notesIn, unfindable, type ForgottenNotes } from '../forgotten-notes.ts';
+import { safeRel } from './archive.ts';
 
 export interface DrillCheck { name: string; ok: boolean; said: string }
 export interface DrillResult { ok: boolean; backup: string | null; source: 'folder' | 'encrypted' | null; checks: DrillCheck[] }
@@ -23,6 +25,10 @@ export interface DrillInput {
   source: 'folder' | 'encrypted';
   // This Nova's migrations: the restored database's checksums must match them.
   migrations: Migration[];
+  // The live home: a day note written again since its forget is the person's again, not a leftover.
+  liveHome?: string;
+  // The hub's note key (forgotten-notes.ts), for forgotten notes' keyed hashes; null when it can't be had.
+  noteKey?: Buffer | null;
   // The code the sandbox runs (this Nova's own, by default) and test hooks for its start.
   root?: string;
   sandboxEnv?: Record<string, string>;
@@ -79,11 +85,13 @@ export async function drill(o: DrillInput): Promise<DrillResult> {
           : !vsManifest ? 'The database’s migration record doesn’t match the manifest.' : `All ${rows.length} migration checksums match.`);
 
         // Forgotten things stay forgotten: nothing the live Nova forgot is in the backup.
-        const f = forgottenIn(restored, o.live);
-        const back = f.memories;
+        // Its files too: a forgotten day note found by its id or the hash of its words.
+        const f = forgottenIn(restored, o.live, { dir: home, paths: m.files.map((x) => x.path), ...(o.liveHome ? { liveHome: o.liveHome } : {}), noteKey: o.noteKey ?? null });
+        const back = f.memories + f.notes;
         const backCapture = f.capture;
         const forgotten = { length: f.forgotten };
-        check('forgotten', back + backCapture === 0, back + backCapture
+        if (f.unchecked) check('forgotten', false, `Nova couldn’t check the backup for every forgotten note: ${f.unchecked}.`);
+        else check('forgotten', back + backCapture === 0, back + backCapture
           ? `${back + backCapture} forgotten ${back + backCapture === 1 ? 'item is' : 'items are'} back in the backup.`
           : `None of the ${forgotten.length} forgotten ${forgotten.length === 1 ? 'memory is' : 'memories are'} in it.`);
       } catch (e) {
@@ -116,9 +124,24 @@ export async function drill(o: DrillInput): Promise<DrillResult> {
 }
 
 // How many things the live Nova forgot are in a restored database: memories by id, and capture
-// whose source key has a tombstone.
-export function forgottenIn(restored: DatabaseSync, live: Db): { memories: number; capture: number; forgotten: number } {
+// whose source key has a tombstone. With `files` (the backup's files, laid out as in a home, and the
+// paths its manifest lists), its files too: every entry of a forgotten day note, or of a forgotten
+// memory, by its id or the keyed hash of its words (`noteKey`: the hub's note key, from its vault).
+// A note the live home shows again isn't counted. `unchecked` says what couldn't be checked: notes
+// only their keyed hash finds, when the key can't be had. The caller fails the check on it.
+export function forgottenIn(restored: DatabaseSync, live: Db, files?: { dir: string; paths: string[]; liveHome?: string; noteKey: Buffer | null }): { memories: number; capture: number; notes: number; forgotten: number; unchecked: string | null } {
   const forgotten = live.all<{ memory_id: string }>(`SELECT DISTINCT memory_id FROM memory_event WHERE kind = 'forgotten'`).map((r) => r.memory_id);
+  let notes = 0;
+  let noteCount = 0;
+  let unchecked: string | null = null;
+  if (files) {
+    const n = forgottenNotes(live.all<{ kind: string; memory_id: string }>(noteEventsSql), files.noteKey);
+    noteCount = n.count;
+    unchecked = unfindable(n);
+    if (files.liveHome) for (const h of liveNoteHashes(files.liveHome, files.noteKey)) n.hashes.delete(h);
+    for (const id of forgotten) n.ids.add(id);
+    notes = leftoverNotes(files.dir, files.paths, { ...n, count: n.ids.size + n.hashes.size });
+  }
   const has = (table: string) => !!restored.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
   let memories = 0;
   if (has('memory')) {
@@ -134,7 +157,26 @@ export function forgottenIn(restored: DatabaseSync, live: Db): { memories: numbe
       }
     }
   }
-  return { memories, capture, forgotten: forgotten.length };
+  return { memories, capture, notes, forgotten: forgotten.length + noteCount, unchecked };
+}
+
+// Entries of forgotten notes (or memories) in a backup's text files. Anything that isn't text, or is
+// too big to be a memory file, is left to the database checks.
+function leftoverNotes(dir: string, paths: string[], notes: ForgottenNotes): number {
+  if (!notes.count) return 0;
+  let n = 0;
+  for (const rel of paths) {
+    let p: string;
+    try { p = join(dir, safeRel(rel)); } catch { continue; }
+    try {
+      const st = lstatSync(p);
+      if (!st.isFile() || st.size > 8 * 1024 * 1024) continue;
+      const raw = readFileSync(p);
+      if (raw.includes(0)) continue;
+      n += notesIn(raw.toString('utf8'), notes);
+    } catch { /* gone: the content check says so */ }
+  }
+  return n;
 }
 
 function safeCount(db: DatabaseSync): number | null {

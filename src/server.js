@@ -23,14 +23,19 @@ import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
 import { toolTier } from '../ui/js/status.js';
-import { APPROVER_ONLY, BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, allows, createCore, ensureMark, finishReset, fromBrowserTask, htmlSecurityHeaders, ipcBroker, ipcLink, nonceStyles, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
+import { APPROVER_ONLY, BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, UpgradeError, allows, createCore, ensureMark, finishReset, fromBrowserTask, htmlSecurityHeaders, ipcBroker, ipcLink, nonceStyles, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 import { shellHash, withShellHash } from './sw-version.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
+  '.md': 'text/plain; charset=utf-8',
 };
+
+// Documents Nova serves as they are written, by a fixed address (never a path from the request):
+// Health links to how to restore a backup.
+export const DOCS = { '/docs/restore': 'docs/restore.md' };
 
 // The paths the app page (ui/index.html) answers, besides a conversation's /c/<id>.
 export const APP_PAGES = ['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture', '/topology', '/about', '/changelog', '/pipeline'];
@@ -127,7 +132,10 @@ export function createNova(config = loadConfig(), deps = {}) {
   // cloud seat only in cloud mode, never in local-first or local-only, whatever opt-in is on; and the
   // run's own mode, when stricter, wins (privacy_mode). deps.memoryGate: tests only.
   const memoryGate = deps.memoryGate ?? ((fields, o) => core.decisionService.ask('memory-gate', fields, { ...o, subsystem: 'memory' }));
-  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault, ingest: core.ingest, decisions: deps.decisionAsk ?? core.decisionService.ask, memoryGate });
+  // A forgotten day note goes to the core too: every backup and checkpoint, and a note of it that
+  // a restore keeps (no words).
+  const notes = { forget: (n, by) => core.memory.forgetNotes(n, by), restored: (n, by) => core.memory.notesRestored(n, by) };
+  const runner = new Runner(config, store, { ...deps, records: core.memory, notes, vault: core.vault, ingest: core.ingest, decisions: deps.decisionAsk ?? core.decisionService.ask, memoryGate });
   // Era 2's Gmail as a connector: its secrets in the vault, Settings › Connections, mail events.
   core.connectors.register(gmailConnector(runner.gmail));
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.
@@ -356,6 +364,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     const statusBar = (html) => { try { return html.replace(STATUS_BAR_TAG, statusBarTag(core.design.active(appearance))); } catch { return html; } };
     if (APP_PAGES.includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie), statusBar);
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
+    if (Object.hasOwn(DOCS, path)) return serveFile(res, join(config.root, DOCS[path]));
     if (path === '/sw.js') return serveFile(res, join(ui, 'sw.js'), {}, (js) => withShellHash(js, config.dev ? shellHash(ui) : shellVersion));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
@@ -692,7 +701,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const context = await ipcBroker(process);
     nova = createNova(undefined, { broker: context ? new BrokerClient(context) : null });
   } catch (e) {
-    if (!(e instanceof ConfigError)) throw e;
+    // A setting that can't work, or a database upgrade that couldn't finish: said in one plain line.
+    if (!(e instanceof ConfigError) && !(e instanceof UpgradeError)) throw e;
     console.error(`Nova didn't start: ${e.message}`);
     process.exit(1);
   }

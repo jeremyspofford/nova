@@ -43,7 +43,7 @@ test('GET /models/decisions: the seats, the choices (never the key), recommendat
     assert.deepEqual(body.recommendation.jev, { base_url: 'https://api.typesafe.ai', model: 'jev-1.14.0' });
     assert.equal(body.recommendation.tev1.model, 'tev1:4b');
     assert.deepEqual(body.opt_in_words, OPT_IN_WORDS);
-    assert.match(body.opt_in_words.screening, /Local-only isn’t strictly local for screening while it is on/);
+    assert.match(body.opt_in_words.screening, /In local-only it is suspended: nothing goes to Jev, and no cloud model is used/);
     assert.match(body.opt_in_words.box, /preview/);
     assert.match(body.jev.why, /isn’t set up/);
     assert.equal(body.legacy.wired, true);

@@ -147,6 +147,13 @@ test('health and memory cards say what is true', () => {
   const badCheck = healthCard({ health: { ok: false, checks: { backups: { ok: false, detail: '/mnt/backup: ENOENT' } } } });
   assert.match(badCheck, /Something isn’t right[\s\S]*Needs a look: Backups\./);
   assert.doesNotMatch(badCheck, /ENOENT|\/mnt/);
+  // No backup to fall back on (F-019): not "All systems normal", amber, never red, in plain words.
+  for (const attention of ['nothing is backed up: no backup folder is set.', 'nothing is backed up yet.']) {
+    const none = healthCard({ health: { ok: true, checks: { ...ok.checks, backups: { ok: true, attention, detail: 'see Health' } } } });
+    assert.doesNotMatch(none, /All systems normal/);
+    assert.match(none, /data-status="needs-you">Something needs a look[\s\S]*Backups: nothing is backed up/);
+    assert.doesNotMatch(none, /data-status="failed"/);
+  }
   assert.match(memoryHighlightCard({ records: [] }), /Nothing kept yet/);
   assert.match(memoryHighlightCard({ records: [{ active: true, user_state: 'active', content: 'Prefers tea.', kind: 'preference', created_at: '2026-10-29T08:00:00Z' }] }), /Prefers tea\./);
 });

@@ -26,6 +26,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Db } from '../db.ts';
 import { SKILL, cleanDbFile, skillDirs } from '../backups.ts';
 import { CoreError } from '../errors.ts';
+import { needles, scrubWords } from '../forgotten-notes.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
@@ -86,6 +87,9 @@ export class CheckpointError extends CoreError {
 const SKIP_TOP: Record<string, string> = {
   checkpoints: 'checkpoints are never inside each other',
   broker: 'the Credential Broker keeps its own store; a restore never brings back a deleted credential',
+  // F-014: deleting a secret rotates the vault's key; a checkpoint holding the old key and secrets
+  // would bring both back. Restore keeps the vault as it is now (restore.ts), as the backups do.
+  vault: 'your saved secrets stay as they are now; a restore never brings back a deleted secret or an old key',
   backups: 'the pre-upgrade copies are kept separately',
   exports: 'exports are copies made on request',
   logs: 'Nova’s logs are for diagnosing this machine',
@@ -368,7 +372,8 @@ export function forgetInCheckpoints(home: string, table: string, ids: string[], 
   const destroyed: string[] = [];
   // A half-taken checkpoint holds a whole copy of the database and no manifest to clean by: it goes.
   dropPartials(home);
-  if (!ids.length) return { cleaned, destroyed };
+  // A forget of a day note has words and no rows.
+  if (!ids.length && !needles(words).length) return { cleaned, destroyed };
   const key = sealKey(home, false);
   const { found, strays } = scanCheckpoints(home);
   for (const f of found) {
@@ -401,17 +406,13 @@ export function forgetInCheckpoints(home: string, table: string, ids: string[], 
 }
 
 // Lines carrying the words go from every text file under `dir` (a staged restore's files).
+// Matched as written or with whitespace collapsed, as in a backup (backup.ts, cleanBackup).
 function cleanTextTree(dir: string, words: string[]): void {
-  const ws = words.map((w) => w.trim()).filter((w) => w.length >= 3);
-  if (!ws.length) return;
+  if (!needles(words).length) return;
   for (const rel of checkpointFiles(dir)) {
     const p = join(dir, rel);
-    const raw = readFileSync(p);
-    if (!ws.some((w) => raw.includes(Buffer.from(w)))) continue;
-    if (raw.includes(0)) throw new Error(`${rel} holds forgotten words and isn’t text.`);
-    let text = raw.toString('utf8').split('\n').filter((line) => !ws.some((w) => line.includes(w))).join('\n');
-    for (const w of ws) text = text.split(w).join('');
-    writeFileSync(p, text);
+    const text = scrubWords(readFileSync(p), words, rel);
+    if (text !== null) writeFileSync(p, text);
   }
 }
 
@@ -432,7 +433,10 @@ export const RESTORE_DIR = '.restore';
 const MARKER = 'marker.json';
 const DROPPED = /^\.restore-dropped-/;
 // What a restore never swaps: they stay as they are now (the checkpoints themselves among them).
-const STAYS = new Set(Object.keys(SKIP_TOP));
+// The vault is not among them although checkpoints never hold it: a checkpoint restore stages now's
+// vault itself (restore.ts carryOver, F-014), and an emergency promotion from a backup stages its own
+// (applyCold: connectors sign in again), so each swaps in the vault its rule decided.
+const STAYS = new Set(Object.keys(SKIP_TOP).filter((n) => n !== 'vault'));
 
 export interface StagedFile { path: string; sha256: string }
 
@@ -468,7 +472,8 @@ export interface Carried {
   epoch: { now: number; checkpoint: number; restored: number };
   standby_resync: boolean;
   problems: { carried: number; resolved: number };
-  forgotten: { memories: number; capture: number };
+  // notes: forgotten day-note entries taken out of the staged MEMORY.md and day notes.
+  forgotten: { memories: number; capture: number; notes?: number };
   sessions_ended: number;
   backup_records: number;
   identity: string;
@@ -710,7 +715,9 @@ function carryNow(home: string, staged: string, o: FinishOptions, node: string |
     // An emergency promotion: this node becomes the hub, so its own record is the one kept from now.
     let hubId = node ?? live.get<{ hub_id: string | null }>('SELECT hub_id FROM mesh_state WHERE id = 1')?.hub_id ?? null;
     if (!hubId) { try { hubId = (JSON.parse(readFileSync(join(home, 'mesh', 'identity.json'), 'utf8')) as { id: string }).id; } catch { hubId = ''; } }
-    return carryOver({ home, staged, live, hubId, now: o.now?.() ?? new Date(), vault: vaultAt(home), vaultAt });
+    // An emergency promotion from a backup (node set) has its own vault rule (applyCold: the backup
+    // never held the key, so connectors sign in again); a checkpoint restore keeps now’s vault.
+    return carryOver({ home, staged, live, hubId, now: o.now?.() ?? new Date(), vault: vaultAt(home), vaultAt, keepVault: node === null });
   } finally {
     live.close();
   }

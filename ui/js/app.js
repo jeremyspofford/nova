@@ -1955,7 +1955,7 @@ el.settings.addEventListener('keydown', (e) => {
 });
 window.addEventListener('nova:appearance', () => { if (state.view === 'settings') renderSettingsView({ only: 'look' }); });
 window.addEventListener('nova:installable', () => { if (state.view === 'settings') renderSettingsView({ only: 'devices' }); });
-window.addEventListener('nova:providers', () => { if (state.view === 'settings') renderSettingsView({ only: 'providers' }); });
+window.addEventListener('nova:providers', () => { if (state.view === 'settings') { renderSettingsView({ only: 'providers' }); renderSettingsView({ only: 'privacy' }); } });
 
 // ---- voice: dictation into the composer, off in local-only --------------------------------
 

@@ -17,8 +17,9 @@ import type { Backups } from '../backups.ts';
 import { reporter, type Brief } from '../envelope.ts';
 import type { Route, Who } from '../api.ts';
 import { CoreError } from '../errors.ts';
-import { BackupError, DEFAULT_KEEP, KEY_NAME, NightlyBackups, SEAL_NAME, folderProblem, inside, formatRecoveryKey, keyFingerprint, newKey, parseRecoveryKey, sha256File, type BackupSettings, type FailureKind, type FolderKind } from './backup.ts';
+import { BackupError, DEFAULT_KEEP, KEY_NAME, NightlyBackups, SEAL_NAME, folderProblem, inside, formatRecoveryKey, keyFingerprint, newKey, parseRecoveryKey, sha256File, type BackupSettings, type FailureKind, type FolderKind, type Manifest } from './backup.ts';
 import { drill, forgottenIn, type DrillCheck, type DrillResult } from './drill.ts';
+import { noteKeyOf } from '../forgotten-notes.ts';
 import { dropScratch, freeScratch, makeScratch } from './scratch.ts';
 import { ClockWatch, duration, type Jump } from './clock.ts';
 import { Playbooks } from './playbooks.ts';
@@ -259,7 +260,7 @@ export class Resilience {
         }
       } else dir = this.nightly.complete()[0]?.path ?? null;
       const r = await drill({
-        live: this.#o.db, backupDir: dir, source: o.source ?? 'folder', migrations: this.#o.migrations(),
+        live: this.#o.db, liveHome: this.#o.home, noteKey: noteKeyOf(this.#o.vault), backupDir: dir, source: o.source ?? 'folder', migrations: this.#o.migrations(),
         ...(this.#o.drill?.root ? { root: this.#o.drill.root } : {}), ...(this.#o.drill?.env ? { sandboxEnv: this.#o.drill.env } : {}), ...(this.#o.drill?.timeoutMs ? { timeoutMs: this.#o.drill.timeoutMs } : {}),
       });
       if (o.source === 'encrypted' && r.backup) r.backup = this.nightly.encrypted()[0]?.path ?? r.backup;
@@ -290,12 +291,18 @@ export class Resilience {
   #forgottenEverywhere(key: Buffer | null): DrillCheck {
     const bad: string[] = [];
     let n = 0;
-    const look = (name: string, db: string) => {
+    // The database and the files: a forgotten day note has no row, only lines in a file, found by its
+    // keyed hash under the hub's note key. Without the key the check fails and says why.
+    const noteKey = noteKeyOf(this.#o.vault);
+    let unchecked: string | null = null;
+    const look = (name: string, dir: string, m: Manifest) => {
       n++;
-      const d = new DatabaseSync(db, { readOnly: true });
+      const d = new DatabaseSync(join(dir, 'nova.db'), { readOnly: true });
       try {
-        const f = forgottenIn(d, this.#o.db);
-        if (f.memories + f.capture) bad.push(`${name} holds ${f.memories + f.capture} forgotten ${f.memories + f.capture === 1 ? 'item' : 'items'}`);
+        const f = forgottenIn(d, this.#o.db, { dir: join(dir, 'files'), paths: m.files.map((x) => x.path), liveHome: this.#o.home, noteKey });
+        unchecked ??= f.unchecked;
+        const k = f.memories + f.capture + f.notes;
+        if (k) bad.push(`${name} holds ${k} forgotten ${k === 1 ? 'item' : 'items'}`);
       } finally {
         d.close();
       }
@@ -305,18 +312,19 @@ export class Resilience {
         for (const c of this.nightly.encrypted()) {
           const scratch = makeScratch('drill-open');
           try {
-            this.nightly.decrypt(c.path, join(scratch, 'backup'), key);
-            look(c.path, join(scratch, 'backup', 'nova.db'));
+            const m = this.nightly.decrypt(c.path, join(scratch, 'backup'), key);
+            look(c.path, join(scratch, 'backup'), m);
           } catch (e) {
             bad.push(`${c.path} couldn’t be opened to check (${(e as Error).message})`);
           } finally {
             dropScratch(scratch);
           }
         }
-      } else for (const b of this.nightly.complete()) look(b.path, join(b.path, 'nova.db'));
+      } else for (const b of this.nightly.complete()) look(b.path, b.path, b.manifest);
     } catch (e) {
       bad.push(`Nova couldn’t read a kept backup: ${(e as Error).message}`);
     }
+    if (unchecked) bad.push(`Nova couldn’t check the backups for every forgotten note: ${unchecked}`);
     return { name: 'forgotten-everywhere', ok: !bad.length, said: bad.length ? `${bad.join('; ')}.` : `None of the ${n} kept ${key ? 'encrypted copies' : 'backups'} holds anything you asked Nova to forget.` };
   }
 
@@ -480,15 +488,22 @@ export class Resilience {
     };
   }
 
-  health(): { ok: boolean; detail: string } {
+  // `attention`: nothing is broken and Nova runs, but there is no backup to fall back on (no folder
+  // set, or none made yet), so this check isn't "fine" (F-019). It never makes health fail: that is
+  // for what stops Nova. `encrypted`: whether the backups have an encrypted copy (the folder backup
+  // itself is never encrypted).
+  health(): { ok: boolean; attention?: string; encrypted?: boolean; detail: string } {
     const s = this.settings();
-    if (!s.target) return { ok: true, detail: 'No backup folder set yet.' };
+    if (!s.target) return { ok: true, attention: 'nothing is backed up: no backup folder is set.', detail: 'No backup folder is set, so nothing is backed up. Choose one in Settings › Backups.' };
     if (!existsSync(s.target)) return { ok: false, detail: `The backup folder ${s.target} isn’t there.` };
     const last = this.nightly.runs(1)[0];
     if (last && !last.ok) return { ok: false, detail: `The last backup didn’t finish: ${last.error}` };
     const d = this.drills(1)[0];
     if (d && !d.ok) return { ok: false, detail: 'The last restore drill failed.' };
-    return { ok: true, detail: last ? `Last backup ${last.at}.` : 'No backup yet.' };
+    const encrypted = !!s.encrypted_target;
+    const [mm = '0', hh = '0'] = NIGHTLY.cron.split(' ');
+    if (!last) return { ok: true, attention: 'nothing is backed up yet.', encrypted, detail: `No backup yet: the first runs at ${hh.padStart(2, '0')}:${mm.padStart(2, '0')}, or choose Back up now in Health.` };
+    return { ok: true, encrypted, detail: `Last backup ${last.at}${encrypted ? ', with an encrypted copy' : ', not encrypted'}.` };
   }
 
   routes(console: (who: Who) => void): Route[] {

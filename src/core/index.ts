@@ -25,6 +25,7 @@ import { PARTS, TRIAGE, Triggers, triageRule, type Policy, type RuleInput } from
 import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInput, type UserState } from './memory.ts';
 import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
+import { noteKeyOf } from './forgotten-notes.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { egressOf, info, permits, stricter, type Egress } from './workers.ts';
 import { BrokerClient } from './broker/client.ts';
@@ -158,12 +159,15 @@ export { Build, readLatest, words as buildWords, LATEST_MAX_BYTES } from './buil
 export type { BuildIdentity, Latest, VersionView } from './build.ts';
 export type { Sandbox } from './resilience/sandbox.ts';
 export { restoreInto, backupFiles, sha256File, openEncrypted } from './resilience/backup.ts';
+// Restoring a nightly backup or an encrypted copy into a new home (scripts/restore-backup.js).
+export { restoreFromBackup } from './resilience/restore-backup.ts';
+export type { RestoreBackupOptions, RestoreBackupResult } from './resilience/restore-backup.ts';
 // Factory reset (M7 amendment §2): finished at start, before the database opens (server.js too).
 export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries, supervisorResetPending } from './resilience/reset.ts';
 export { HOME_MARK, ensureMark, unsafeHome } from './resilience/home-mark.ts';
 export { alive, makeScratch, dropScratch } from './resilience/scratch.ts';
 export { freePort } from './coding/preview.ts';
-export { restoreBackup, loadMigrations } from './db.ts';
+export { restoreBackup, loadMigrations, UpgradeError } from './db.ts';
 // Checkpoints (M7 amendment §1): the supervisor takes one before a release switch on the stopped
 // home; the server applies a staged restore before anything opens the home.
 export { takeCheckpoint, listCheckpoints, finishStaged, stagedPending, KEEP_AUTO } from './resilience/checkpoints.ts';
@@ -307,10 +311,17 @@ export function createCore(o: CoreOptions) {
   const db = new Db(join(o.home, 'nova.db'));
   // An automatic checkpoint before a database upgrade, beside the pre-upgrade copy: one that can't
   // be taken stops the upgrade (and so the start), with the reason.
-  const migration = db.migrate({
-    backupDir: join(o.home, 'backups'), now,
-    ...(o.sandbox ? {} : { before: (from: number) => { takeCheckpoint({ home: o.home, db, kind: 'auto', reason: `Before upgrading the database from version ${from}`, version: o.version, now, ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}) }); } }),
-  });
+  let migration: ReturnType<Db['migrate']>;
+  try {
+    migration = db.migrate({
+      backupDir: join(o.home, 'backups'), now,
+      ...(o.sandbox ? {} : { before: (from: number) => { takeCheckpoint({ home: o.home, db, kind: 'auto', reason: `Before upgrading the database from version ${from}`, version: o.version, now, ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}) }); } }),
+    });
+  } catch (e) {
+    // A failed upgrade left the database as it was (db.ts): nothing else opens it.
+    db.close();
+    throw e;
+  }
   const log = new Log(db, join(o.home, 'logs', 'nova.log'), now);
   // What a staged restore couldn't do (or did, with a full disk) is the person's to know.
   for (const p of staged?.problems ?? []) log.problem('resilience', p);
@@ -391,7 +402,15 @@ export function createCore(o: CoreOptions) {
   });
   const design = new Design({ extensions, profile });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
-  const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)), problem: (m) => log.problem('memory', m) });
+  // A day note's forget (forgetNotes) has no records, only its words.
+  // Its tombstone is a keyed hash under the hub's note key, one of Nova's own keys in the vault (the
+  // vault is made below; the key is read only when a note is forgotten). The vault's key is never in
+  // a nightly backup, so a backup alone can't test a guessed note against a tombstone.
+  const memory = new Memory({
+    db, home: o.home, now, afterForget: (ids, records, words = []) => backups.forget('memory', ids, [...records.map((r) => r.content), ...words]),
+    noteKey: (create) => noteKeyOf(vault, create),
+    problem: (m) => log.problem('memory', m),
+  });
   // A decision model's receipt is checked against the person's settings as they are at the send.
   // A capture source's own opt-in doesn't exist yet, so it is never on here either.
   const liveDecisionOptIn = (f: 'screening' | 'box' | 'capture'): boolean => { if (f === 'capture') return false; const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {}); return v.ok && v.settings.opt_in[f]; };
@@ -588,6 +607,7 @@ export function createCore(o: CoreOptions) {
   // Hub, standby and sync (M4 plan §3).
   const sync = new SyncLog({ db, log, home: o.home, node: meshIdentity.id, now });
   memory.onForgetDone((records) => sync.forgotten(records.map((r) => r.content)));
+  memory.onNotesForgotten((texts) => sync.forgotten(texts));
   // A standby gets the vault sealed through sync.
   sync.vault = vault;
   vault.on('change', () => {
@@ -706,6 +726,8 @@ export function createCore(o: CoreOptions) {
     removed: (ids) => captureSync?.forgetRaw(ids),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
+    // A forget owed to a backup folder that isn't there: "deleted everywhere" waits for it.
+    owedForgets: (table, ids) => resilience?.nightly.owing(table, ids) ?? [],
     secrets: vault,
     ...(o.capture?.fetch ? { fetch: o.capture.fetch } : {}),
   });
@@ -866,7 +888,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     pause: (k) => ledger.pause(k),
     vaultNames: () => (vault.status().ok ? vault.list() : []),
     cold: {
-      drill: (dir) => runDrill({ live: db, backupDir: dir, source: 'folder', migrations: loadMigrations(), ...(o.resilience?.drill?.root ? { root: o.resilience.drill.root } : {}), ...(o.resilience?.drill?.env ? { sandboxEnv: o.resilience.drill.env } : {}), ...(o.resilience?.drill?.timeoutMs ? { timeoutMs: o.resilience.drill.timeoutMs } : {}) }),
+      drill: (dir) => runDrill({ live: db, noteKey: noteKeyOf(vault), backupDir: dir, source: 'folder', migrations: loadMigrations(), ...(o.resilience?.drill?.root ? { root: o.resilience.drill.root } : {}), ...(o.resilience?.drill?.env ? { sandboxEnv: o.resilience.drill.env } : {}), ...(o.resilience?.drill?.timeoutMs ? { timeoutMs: o.resilience.drill.timeoutMs } : {}) }),
       stage: (dir, c) => checkpoints.stageCold(dir, { node: c.node, floor: c.floor, promotion: c.promotion, backup: { id: c.backup.id, seq: c.backup.seq, at: c.backup.at, path: c.backup.path }, by: c.by }),
       restart: (why, failed) => checkpoints.restartStaged(why, failed),
       seal: () => { try { const k = vault.get(SEAL_NAME); return k ? Buffer.from(k, 'base64') : null; } catch { return null; } },
