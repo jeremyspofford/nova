@@ -205,3 +205,27 @@ test('the name and platform a device joins with are one plain line: no bidi over
     await h.stop();
   }
 });
+
+// X-004: a refused request's reason can quote what the device sent. It is stored, answered back and
+// put into a problem, so it is cleaned like every device text, however it was refused.
+test('a refused task request’s reason, quoting what the device sent, is kept, answered and said clean', async () => {
+  const { h, token } = await computer();
+  try {
+    const body = { title: HOSTILE, owner: `nobody${HOSTILE}`, goal: HOSTILE, evidence_required: [{ kind: 'confirmation', note: HOSTILE }] };
+    const r = await call(h.mesh, 'POST', '/api/v1/mesh/inbox', { items: [{ key: 'dev-task-hostile', kind: 'task_request', body }] }, bearer(token));
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const res = r.body.results[0];
+    assert.equal(res.status, 'refused', JSON.stringify(res));
+    clean(res.reason, 600, 'the answered reason');
+    const row = h.core.db.get<{ reason: string }>('SELECT reason FROM device_inbox WHERE key = ?', 'dev-task-hostile')!;
+    clean(row.reason, 600, 'the stored reason');
+    const p = (await h.c('GET', '/problems')).body.find((x: { message: string }) => /wasn’t created/.test(x.message));
+    assert.ok(p, 'the refusal is said as a problem');
+    clean(p.message, 900, 'the problem');
+    // Asked again, the duplicate answer is the same clean reason.
+    const again = await call(h.mesh, 'POST', '/api/v1/mesh/inbox', { items: [{ key: 'dev-task-hostile', kind: 'task_request', body }] }, bearer(token));
+    assert.equal(again.body.results[0].reason, res.reason);
+  } finally {
+    await h.stop();
+  }
+});
