@@ -688,7 +688,10 @@ export class Models extends EventEmitter {
       throw new CoreError('validation', req.role === 'embedder' ? 'input is the text to embed.' : 'messages is the conversation to answer.');
     }
     // A caller's mode can only tighten the person's setting, never loosen it.
-    const mode = req.privacy_mode ? stricter(req.privacy_mode, this.#privacy()) : this.#privacy();
+    // The mode is read again right before any remote send (A-001): the person may tighten it while a
+    // local attempt is in flight, and a fallback must never go out on the mode the request started with.
+    const modeNow = (): PrivacyMode => (req.privacy_mode ? stricter(req.privacy_mode, this.#privacy()) : this.#privacy());
+    let mode = modeNow();
     const cloud = req.role === 'embedder' ? null : this.cloud();
     const order: ('local' | 'cloud')[] = mode === 'local-only' || !cloud ? ['local'] : mode === 'local-preferred' ? ['local', 'cloud'] : ['cloud', 'local'];
     const notes: string[] = [];
@@ -702,6 +705,11 @@ export class Models extends EventEmitter {
     let asked: WakeDown | null = null;
     for (const where of order) {
       if (where === 'cloud' && asked) break;
+      if (where === 'cloud') {
+        // Nothing awaits between this check and the receipt in #cloud, so this is the send-time mode.
+        mode = modeNow();
+        if (mode === 'local-only') continue;
+      }
       try {
         const r = where === 'local' ? await this.#local(call, mode, notes) : await this.#cloud(cloud!, call, mode);
         const local = failed.find((f) => f.where === 'local');

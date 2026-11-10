@@ -174,6 +174,50 @@ test('local reasoner down, task local-preferred: the cloud serves, the receipt s
   }
 });
 
+// A-001: the privacy mode is read again at the moment of a remote send. A request that starts local
+// first, while the person switches to local-only and the local model then fails, refuses exactly as
+// steady-state local-only does: it waits on local capacity and the cloud gets nothing.
+test('privacy tightened to local-only while the local model is answering: the fallback never reaches the cloud', async () => {
+  let entered!: () => void;
+  const inChat = new Promise<void>((r) => { entered = r; });
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  const ollama = await startFakeOllama({ models: INSTALLED, reply: async () => { entered(); await held; return 'too late'; } });
+  const cloud = await cloudStandIn();
+  const { core } = modelsCore(ollama.url, { privacy: 'local-preferred' });
+  try {
+    await core.models.accept();
+    setCloud(core, cloud.url, false);
+    const pending = core.models.infer({ role: 'reasoner', messages: say('Summarize my day') });
+    await inChat;
+    core.profile.set('privacy', 'default', 'local-only', 'settings');
+    await ollama.close();
+    release();
+    await assert.rejects(pending, (e: Error) => e instanceof ModelsWaiting && /This is local-only, so it stays on your devices/.test(e.message));
+    assert.equal(cloud.requests.length, 0, 'nothing was sent to the cloud on the stale mode');
+    assert.equal(core.receipts.list({ egress: 'remote' }).length, 0, 'no remote receipt was written');
+  } finally {
+    release();
+    await core.close();
+    await cloud.close();
+  }
+});
+
+// The receipts wall: every remote receipt, not only a decision model's, is held to the live mode.
+test('receipts: a remote receipt naming a stale cloud-allowed mode is refused under live local-only', async () => {
+  const ollama = await startFakeOllama({ models: INSTALLED });
+  const { core } = modelsCore(ollama.url, { privacy: 'local-only' });
+  try {
+    assert.throws(() => core.receipts.record({ provider: 'cloud:example-cloud', model: 'cloud-model', purpose: 'reasoner', privacy_mode: 'cloud-allowed', egress: 'remote:example-cloud', context_items: [] }), /Local-only mode doesn't allow sending context to example-cloud/);
+    assert.equal(core.receipts.list({ egress: 'remote' }).length, 0);
+    // A local receipt is unaffected.
+    core.receipts.record({ provider: 'ollama', model: 'example-deep:32b', purpose: 'reasoner', privacy_mode: 'cloud-allowed', egress: 'local', context_items: [] });
+  } finally {
+    await core.close();
+    await ollama.close();
+  }
+});
+
 test('cloud unreachable, task cloud-allowed: the local reasoner serves and says the answer may be less thorough', async () => {
   const ollama = await startFakeOllama({ models: INSTALLED });
   const cloud = await cloudStandIn();

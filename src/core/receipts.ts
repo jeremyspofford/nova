@@ -102,9 +102,10 @@ export class Receipts {
       return { kind: c.kind, ref: redactText(c.ref), sha256: c.sha256 };
     });
 
-    // A decision model's receipt (or one naming an opt-in) is held to the person's settings NOW: the
-    // stricter of the mode it names and the live one, and an opt-in only while it is on.
-    if (this.#live && (r.provider === 'jev' || r.opt_in)) {
+    // Every remote receipt, and a decision model's or one naming an opt-in, is held to the person's
+    // settings NOW: the stricter of the mode it names and the live one, and an opt-in only while it is
+    // on. A caller that read the mode before a slow step can't send on that stale read (A-001).
+    if (this.#live && (r.egress !== 'local' || r.provider === 'jev' || r.opt_in)) {
       r.privacy_mode = stricter(r.privacy_mode, this.#live.mode());
       if (r.opt_in && !this.#live.optIn(r.opt_in)) r.opt_in = null;
     }
