@@ -87,6 +87,10 @@ test('forgetting over the API leaves no trace anywhere under the home: database,
 
 test('receipts are listed by task, session and egress; the egress log is the remote ones', async () => {
   const { nova, call, stop } = await boot();
+  try {
+  // A remote call is allowed only while the person's live setting allows it (A-001: every remote
+  // receipt is held to the live mode), so the allowed one is recorded under cloud-allowed.
+  nova.core.profile.set('privacy', 'default', 'cloud-allowed', 'settings');
   const item = { kind: 'session', ref: 'session-1', sha256: sha256('hello') } as const;
   const local = nova.core.receipts.record({ session_id: 'session-1', provider: 'local-runner', model: 'small', purpose: 'chat reply', privacy_mode: 'local-only', egress: 'local', context_items: [item] });
   const remote = nova.core.receipts.record({ task_id: 't1', provider: 'cloud', model: 'large', purpose: 'summary', privacy_mode: 'cloud-allowed', egress: 'remote:example-cloud', context_items: [] });
@@ -99,5 +103,11 @@ test('receipts are listed by task, session and egress; the egress log is the rem
   assert.equal((await call('GET', '/receipts?egress=remote')).body.length, 1, 'the refused call is not in the egress log');
   const problems = (await call('GET', '/problems?open=1')).body;
   assert.ok(problems.some((p: { source: string }) => p.source === 'receipts'));
-  await stop();
+  // And a remote receipt naming a looser mode is refused once the live setting is local-only.
+  nova.core.profile.set('privacy', 'default', 'local-only', 'settings');
+  assert.throws(() => nova.core.receipts.record({ provider: 'cloud', model: 'large', purpose: 'summary', privacy_mode: 'cloud-allowed', egress: 'remote:example-cloud', context_items: [] }), /local-only/i);
+  } finally {
+    // Stopped whatever failed, so a failure is reported instead of leaving the server open (#468).
+    await stop();
+  }
 });

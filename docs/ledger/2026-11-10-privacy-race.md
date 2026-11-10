@@ -1,0 +1,5 @@
+**2026-11-10 · Privacy · Local-only is checked again at the moment of a cloud send (A-001)**
+- What changed: a request read the privacy setting once, when it started. If it started local first, you then switched to local-only, and the local model failed, the cloud fallback went out on the old setting. Now the setting is read again right before any cloud send, and a local-only setting refuses the fallback exactly as steady-state local-only does (the work waits on your devices, the cloud gets nothing). The receipts wall behind it now holds every remote receipt to your live setting, not only the decision model's.
+- What you can now do: tighten privacy mid-request and trust that nothing leaves afterwards.
+- Still unfinished: the screening opt-in still sends to Jev under local-only; that is D4, in Batch 5.
+- Checked: a regression test through the real core (a local model held mid-answer then failing, a counting cloud stand-in) sent 1 request on the old code and 0 now, with the local-only waiting message; a second test refuses a stale-mode remote receipt. The models and receipts tests and the full suite pass.
