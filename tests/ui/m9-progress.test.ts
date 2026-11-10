@@ -1,6 +1,7 @@
 // M9 gate, progress (DESIGN-SYSTEM §1 "Progress and waiting", binding): in the real PWA, against the
 // real server, with the waits made real (a held request, a model that thinks before it speaks):
 //   under 1 s no indicator · from 1 s an indicator · after 10 s real units and an estimate ·
+//   a read with no answer shows those words before the page says Nova is out of reach ·
 //   a finished answer appears whole · streamed text arrives only as the server's pieces ·
 //   a failed send puts the words back with the reason · "Sending" only for a send that is slow ·
 //   an edit says "Saved" only when the server does, and a failed one keeps what was typed.
@@ -12,8 +13,18 @@ import type { Page, Route } from 'playwright-core';
 import { ROOT, stop } from '../acceptance/support.ts';
 import { browser, device, shoot } from './support.ts';
 import { CHAT, DESKTOP, m9Shots, seeded, settled } from './m9-support.ts';
+import { LONG_MS, NO_ANSWER_MS, TICK_MS } from '../../ui/js/wait.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// The page's clock, stopped before the page loads: from then on only runFor moves it, so a wait's
+// age, its words and the no-answer deadline (wait.js NO_ANSWER_MS) are where the test puts them,
+// however slow the machine is. (Left running, the clock also moved with real time: a slow machine
+// carried the held reads past their deadline before the test let them go.)
+async function pausedClock(page: Page) {
+  const t0 = Date.now();
+  await page.clock.install({ time: t0 });
+  await page.clock.pauseAt(t0 + 10_000);
+}
 // What a waiting indicator looks like right now: on screen and seen, and what it says.
 const indicator = (page: Page, sel: string) => page.evaluate((s) => [...document.querySelectorAll(s)].map((e) => ({
   seen: Number(getComputedStyle(e).opacity) > 0.5 && (e as HTMLElement).checkVisibility(),
@@ -47,7 +58,7 @@ test('M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real 
     // installs and claims the page while /setup is answered; when it wins that race, boot's Core
     // GETs went through it unheld and Tasks drew its data before the first look.
     const d = await device(b, { ...DESKTOP, serviceWorkers: 'block' });
-    await d.page.clock.install();
+    await pausedClock(d.page);
     // Hold current and future Core GETs, including Caps. Setup precedes boot; events is the
     // live transport. Neither is a counted data part, and both must remain live.
     const h = hold(d.page, /\/api\/v1\/(?!setup(?:[/?]|$)|events(?:[/?]|$))/);
@@ -108,6 +119,41 @@ test('M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real 
     await settled(q.page, 'tasks');
     assert.equal(await q.page.evaluate(() => (window as any).__seen), 0, 'a quick load: no indicator was ever seen');
     await q.ctx.close();
+
+    // A read Nova takes and never answers. The no-answer deadline comes after the last band (wait.js
+    // NO_ANSWER_MS): the over-10 s words show first, and only at the deadline does the page say Nova
+    // is out of reach. Both run on the page's clock, so the fake clock moves them together.
+    // No service worker, as above: the hold is a page route, and the worker's requests go past it.
+    const n = await device(b, { ...DESKTOP, serviceWorkers: 'block' });
+    await pausedClock(n.page);
+    const never = hold(n.page, /\/api\/v1\/(?!setup(?:[/?]|$)|events(?:[/?]|$))/);
+    await never.ready;
+    const given: string[] = [];
+    n.page.on('requestfailed', (r) => { if (new URL(r.url()).pathname.startsWith('/api/v1/')) given.push(new URL(r.url()).pathname); });
+    const outOfReach = () => n.page.evaluate(() => { const el = document.getElementById('banner'); return !!el && !el.hidden && /isn’t answering/.test(el.textContent ?? ''); });
+    await n.page.goto(`${m.base}/tasks`);
+    await n.page.waitForSelector('html[data-ready]');
+    assert.ok(never.paths().includes('/api/v1/caps'), 'the reads are out');
+    // The clock's first tick past the last band: the over-10 s words, and Nova not out of reach.
+    await n.page.clock.runFor(LONG_MS + TICK_MS);
+    w = await indicator(n.page, '#tasks-view [data-waiting]');
+    assert.equal(w.length, 1, 'no answer: the view is still waiting');
+    assert.equal(w[0]!.seen, true);
+    assert.match(w[0]!.text, /^Loading Tasks… · 0 of \d+ parts · 11 s so far · it usually takes under a second$/, `no answer, after 10 s: its words (${w[0]!.text})`);
+    assert.equal(await outOfReach(), false, 'no answer, after 10 s: Nova is not said to be out of reach');
+    // Just before the deadline: still the words, no read given up, Nova not out of reach.
+    await n.page.clock.runFor(NO_ANSWER_MS - LONG_MS - TICK_MS - 1);
+    w = await indicator(n.page, '#tasks-view [data-waiting]');
+    assert.equal(w[0]?.seen, true, 'no answer: the words stay on screen up to the deadline');
+    assert.match(w[0]!.text, /· 1\d s so far · it usually takes under a second$/, `(${w[0]!.text})`);
+    assert.equal(given.length, 0, `no answer: no read is given up before the deadline (${given.join(', ')})`);
+    assert.equal(await outOfReach(), false, 'no answer: Nova is not out of reach before the deadline');
+    // At the deadline, on the page's clock (not real time): the reads are given up and the page says so.
+    await n.page.clock.runFor(1);
+    await n.page.waitForFunction(() => { const el = document.getElementById('banner'); return !!el && !el.hidden && /isn’t answering/.test(el.textContent ?? ''); }, null, { timeout: 5000 });
+    assert.ok(given.includes('/api/v1/caps'), `no answer: the held reads were given up at the deadline (${given.join(', ')})`);
+    console.log(`M9 no-answer: given up ${JSON.stringify(given)}; banner ${JSON.stringify(await n.page.locator('#banner').innerText())}`);
+    await n.ctx.close();
   } finally {
     await b.close();
     await stop(nova);

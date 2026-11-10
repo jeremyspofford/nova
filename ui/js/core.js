@@ -3,6 +3,7 @@
 
 import { renew, sessionEnds } from './device-key.js';
 import { approvalFor, show } from './passkey.js';
+import { NO_ANSWER_MS } from './wait.js';
 
 export const V1 = '/api/v1';
 
@@ -51,34 +52,44 @@ export function refused(res, data) {
 
 // The answer and whether it came from the offline cache, kept together so concurrent requests
 // can't mix up whose answer was stale.
-// A read the hub hasn't answered in this long is no answer: the page says Nova is out of reach
+// A read the hub hasn't answered in NO_ANSWER_MS is no answer: the page says Nova is out of reach
 // instead of waiting forever (M9 review of #234). Changes (POST, PUT, DELETE) wait for their answer.
-export const NO_ANSWER_MS = 10_000;
+// The deadline lives beside the progress bands in wait.js, after the last of them.
+export { NO_ANSWER_MS };
 export async function request(method, path, body, retried = false) {
   // Tier 3 on the hub's own screen: approved with a passkey first (passkey.js). Rolling a change
   // back by hand takes confirm: true at tier 2, so it asks once (src/core/index.ts TIER2_CONFIRM).
   const bare = path.split('?')[0];
   const signed = body?.confirm === true && !body.passkey_approval && !/^\/changes\/[^/]+\/rollback$/.test(bare) ? await approvalFor(api, method, bare, body) : null;
   if (signed) body = { ...body, passkey_approval: signed };
-  const signal = method === 'GET' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(NO_ANSWER_MS) : undefined;
-  const res = await reach(`${V1}${path}`, { method, headers: NOVA_HEADERS, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), ...(signal ? { signal } : {}) });
-  // Only a paired device ever hears 401 (the hub's own screen never does): its session ended, so
-  // it signs in again once with its key, or goes back to /pair.
-  if (res.status === 401 && !retried) {
-    if (sessionEnds() && (await renew())) return request(method, path, body, true);
-    location.assign('/pair');
+  // The read's deadline runs on the page's own timers, as wait.js's clock does, so the words a slow
+  // read shows and the moment it is given up follow one clock. It covers the whole answer, body too.
+  const ctl = method === 'GET' ? new AbortController() : null;
+  const deadline = ctl ? setTimeout(() => ctl.abort(), NO_ANSWER_MS) : null; // wait: expiry: a read with no answer is given up
+  let res;
+  let data;
+  try {
+    res = await reach(`${V1}${path}`, { method, headers: NOVA_HEADERS, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), ...(ctl ? { signal: ctl.signal } : {}) });
+    // Only a paired device ever hears 401 (the hub's own screen never does): its session ended, so
+    // it signs in again once with its key, or goes back to /pair.
+    if (res.status === 401 && !retried) {
+      if (sessionEnds() && (await renew())) return request(method, path, body, true);
+      location.assign('/pair');
+    }
+    if (res.status === 503 && fromCache(res)) throw new Unreachable('Nova’s server didn’t answer.');
+    const json = res.headers.get('content-type')?.startsWith('application/json');
+    const CUT = Symbol('cut');
+    data = json ? await res.json().catch(() => CUT) : await res.text();
+    // An answer cut off part-way (a page left, a dropped connection) is no answer: the page keeps
+    // what it had instead of taking null for its tasks or requests.
+    if (data === CUT) {
+      if (res.ok) throw new Unreachable('Nova’s answer was cut off.');
+      data = null;
+    }
+  } finally {
+    clearTimeout(deadline);
   }
   const stale = fromCache(res);
-  if (res.status === 503 && stale) throw new Unreachable('Nova’s server didn’t answer.');
-  const json = res.headers.get('content-type')?.startsWith('application/json');
-  const CUT = Symbol('cut');
-  let data = json ? await res.json().catch(() => CUT) : await res.text();
-  // An answer cut off part-way (a page left, a dropped connection) is no answer: the page keeps
-  // what it had instead of taking null for its tasks or requests.
-  if (data === CUT) {
-    if (res.ok) throw new Unreachable('Nova’s answer was cut off.');
-    data = null;
-  }
   if (signed) show(res.ok ? 'confirmed' : res.status === 403 && /passkey/i.test(data?.error ?? '') ? (/expired/.test(data.error) ? 'expired' : 'failed') : 'ready');
   if (!res.ok) throw refused(res, data);
   return { data, stale };
