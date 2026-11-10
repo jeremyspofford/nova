@@ -18,6 +18,7 @@ import type { MeshIdentity } from './identity.ts';
 import { helloProofMessage, hubResetMessage, rosterDigest } from './wire.ts';
 import { runtimeBundle, type RuntimeBundle } from './agent.ts';
 import { deviceReport } from './device-text.ts';
+import { ReportThrottle } from './limiter.ts';
 
 // Its tables, device_inbox and device_heartbeat, are migration 0007's.
 
@@ -68,7 +69,9 @@ export class Spokes extends EventEmitter {
   #version: string;
   #effects: InboxEffects;
   #bundle: RuntimeBundle | null = null;
-  #reported = new Map<string, number>();
+  // A problem a device's own messages raise (a report, a refused task, a stale setting, safe mode)
+  // is raised once per device and kind every ten minutes, so a compromised device can't flood them.
+  #reported: ReportThrottle;
   #restart = new Set<string>();
 
   constructor(o: { db: Db; log: Log; devices: Devices; identity: MeshIdentity; now: () => Date; version: string; effects: InboxEffects }) {
@@ -80,6 +83,15 @@ export class Spokes extends EventEmitter {
     this.#now = o.now;
     this.#version = o.version;
     this.#effects = o.effects;
+    this.#reported = new ReportThrottle({ everyMs: REPORT_EVERY_MS, now: () => o.now().getTime() });
+  }
+
+  // Raises `message` unless one of this kind from this device was raised in the last ten minutes;
+  // the next one says how many were held back (`more`). Keyed by the authenticated device and a
+  // fixed kind, never by anything the device wrote.
+  #problemOnce(device: Device, kind: string, message: string, more: (n: number) => string): void {
+    const held = this.#reported.due(`${device.id}|${kind}`);
+    if (held !== null) this.#log.problem('mesh', held ? `${message} ${more(held)}` : message);
   }
 
   // ---- heartbeat -------------------------------------------------------------------------------
@@ -114,7 +126,8 @@ export class Spokes extends EventEmitter {
       );
     });
     if (safe && !before?.safe_mode) {
-      this.#log.problem('mesh', `The device agent on “${device.name}” stopped its runtime after it crashed three times in a minute, and is in safe mode. It will try again when a new runtime arrives, or when you run its recover command.`);
+      this.#problemOnce(device, 'safe_mode', `The device agent on “${device.name}” stopped its runtime after it crashed three times in a minute, and is in safe mode. It will try again when a new runtime arrives, or when you run its recover command.`,
+        (n) => `It said it went into safe mode ${n} more ${n === 1 ? 'time' : 'times'} since the last report.`);
     }
     if (!before || before.safe_mode !== safe || caps) this.emit('change', this.#devices.get(device.id));
     // What it can run models on (M6b): the model manager checks and keeps it.
@@ -166,12 +179,7 @@ export class Spokes extends EventEmitter {
     };
     const message = messages[what];
     if (!message) throw new CoreError('validation', `problem must be one of ${Object.keys(messages).join(', ')}.`);
-    const k = `${device.id}|${what}`;
-    const now = this.#now().getTime();
-    if (now - (this.#reported.get(k) ?? -Infinity) >= REPORT_EVERY_MS) {
-      this.#reported.set(k, now);
-      this.#log.problem('mesh', message);
-    }
+    this.#problemOnce(device, `report:${what}`, message, (n) => `It reported this ${n} more ${n === 1 ? 'time' : 'times'} since the last report.`);
     return { ok: true };
   }
 
@@ -226,7 +234,8 @@ export class Spokes extends EventEmitter {
             return keep('accepted', { ref: this.#db.tx(() => this.#effects.task(device, key, body)).id });
           } catch (e) {
             const reason = refusal(e);
-            this.#log.problem('mesh', `A task asked for by “${device.name}” wasn’t created: ${reason}`);
+            this.#problemOnce(device, 'task_request', `A task asked for by “${device.name}” wasn’t created: ${reason}`,
+              (n) => `${n} more ${n === 1 ? 'was' : 'were'} refused since the last report; each is kept with its reason among the device’s refusals.`);
             return keep('refused', { reason, body });
           }
         }
@@ -266,7 +275,8 @@ export class Spokes extends EventEmitter {
           // the stale one.
           if ((current?.version ?? null) !== base) {
             const reason = `${ref} changed on the hub after this device read it, so the hub’s value stands.`;
-            this.#log.problem('mesh', `A settings change from “${device.name}” to ${ref} was older than the hub’s and wasn’t applied. The hub’s value stands; change it again if you still want to.`);
+            this.#problemOnce(device, 'config_change', `A settings change from “${device.name}” to ${ref} was older than the hub’s and wasn’t applied. The hub’s value stands; change it again if you still want to.`,
+              (n) => `${n} more ${n === 1 ? 'was' : 'were'} rejected since the last report; each is kept with its reason among the device’s refusals.`);
             return keep('rejected', { reason, ref, version: current?.version ?? null });
           }
           try {

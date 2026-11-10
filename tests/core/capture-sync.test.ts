@@ -122,6 +122,43 @@ test('manifest refusal: an unknown device, a revoked one, another device’s, a 
   } finally { await r.h.stop(); }
 });
 
+test('a compromised device can’t flood the problems or the log: one report per kind of refusal per ten minutes, whatever it claims', async () => {
+  const r = await rig();
+  try {
+    await r.enable(r.mac.id, 'screen');
+    r.h.tick(5000);
+    const ours = () => r.h.core.log.problems().filter((p) => /refused capture sent over Test Mac’s connection/.test(p.message));
+    const logged = () => (existsSync(r.h.core.log.file!) ? readFileSync(r.h.core.log.file!, 'utf8').split('\n').filter((l) => l.includes('A capture transfer was refused')).length : 0);
+    // Its key is the attacker's too: each batch names a different made-up device.
+    for (let i = 0; i < 40; i++) {
+      const res = await r.send(r.mac.token, r.signed([r.item({ text: 'FLOOD-WORDS', s: 6 })], r.mac.keys, { id: `ghost-${i}`, name: 'Ghost' }));
+      assert.equal(res.status, 403);
+      assert.match(res.body.error, new RegExp(`names a device Nova doesn’t know \\(ghost-${i}\\)`), 'the device is still told exactly why');
+    }
+    // Its own manifests, signed, each carrying a count of items it picks.
+    for (let n = 2; n < 22; n++) {
+      const b = r.signed([r.item({ text: 'FLOOD-WORDS', s: 6 })], r.mac.keys, r.mac);
+      const res = await r.send(r.mac.token, { ...b, items: Array.from({ length: n }, () => b.items[0]) });
+      assert.equal(res.status, 403);
+      assert.match(res.body.error, new RegExp(`it lists 1 items and carries ${n}`));
+    }
+    let p = ours();
+    assert.equal(p.length, 2, p.map((x) => x.message).join('\n'));
+    // The first of each kind says exactly what happened.
+    assert.ok(p.some((x) => /names a device Nova doesn’t know \(ghost-0\)/.test(x.message)));
+    assert.ok(p.some((x) => /it lists 1 items and carries 2 /.test(x.message)));
+    assert.equal(logged(), 2, 'one log line per report, not one per request');
+    assert.ok(!JSON.stringify(await r.events()).includes('FLOOD-WORDS'), 'nothing refused was kept');
+    // Ten minutes on, the next one is reported again, with how many were held back.
+    r.h.tick(10 * 60_000);
+    assert.equal((await r.send(r.mac.token, r.signed([r.item({ text: 'FLOOD-WORDS', s: 700 })], r.mac.keys, { id: 'ghost-late', name: 'Ghost' }))).status, 403);
+    p = ours();
+    assert.equal(p.length, 3);
+    assert.ok(p.some((x) => /\(ghost-late\)\. 39 more of this kind were refused since the last report\./.test(x.message)), p.map((x) => x.message).join('\n'));
+    assert.equal(logged(), 3);
+  } finally { await r.h.stop(); }
+});
+
 test('local-only with a cloud hub: the plan says it waits, and a batch is refused; local-preferred takes it', async () => {
   const r = await rig({ site: () => 'cloud' });
   try {

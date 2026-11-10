@@ -121,7 +121,7 @@ export type { Worker, Egress } from './workers.ts';
 export type { LanedWorker, Task } from './ledger.ts';
 // The mesh's wire format and the limiter, shared with the device agent (src/device) and sync.
 export * from './mesh/wire.ts';
-export { SlidingWindowLimiter } from './mesh/limiter.ts';
+export { ReportThrottle, SlidingWindowLimiter } from './mesh/limiter.ts';
 export { rateKey } from './mesh/enroll.ts';
 export { PURPOSE_WORDS, WORKLOAD_PURPOSES, checkPurposes, purposeChange } from './mesh/purposes.ts';
 export { BROWSER_TASK_HEADER, SESSION_COOKIE, allows, fromBrowserTask, loopbackAddress } from './mesh/access.ts';

@@ -55,3 +55,53 @@ export class SlidingWindowLimiter {
     return this.#hits.size;
   }
 }
+
+// At most one report per key every `everyMs`: a problem raised by what another machine sends (a
+// paired device that may be compromised, a client of the public routes) is raised once, then held
+// back and counted, however often it is sent. The key is what the sender can't vary (its
+// authenticated device, or its address, and the kind of report), never text it chose. A key is kept
+// while it holds back the next report or has a count to give; at most `maxKeys` (the oldest go
+// first), so a flood of keys can't grow it without end.
+export interface ReportThrottleOptions {
+  everyMs: number;
+  // Keys remembered at most. Default 1,000.
+  maxKeys?: number;
+  now?: () => number;
+}
+
+export class ReportThrottle {
+  readonly everyMs: number;
+  readonly #maxKeys: number;
+  readonly #now: () => number;
+  readonly #last = new Map<string, { at: number; held: number }>();
+
+  constructor(opts: ReportThrottleOptions) {
+    this.everyMs = opts.everyMs;
+    this.#maxKeys = opts.maxKeys ?? 1_000;
+    this.#now = opts.now ?? (() => Date.now());
+  }
+
+  // null while a report for `key` was made within the window (this one is counted as held back);
+  // otherwise the report is due, and this is how many were held back since the last one.
+  due(key: string): number | null {
+    const now = this.#now();
+    const last = this.#last.get(key);
+    if (last && now - last.at < this.everyMs) {
+      last.held++;
+      return null;
+    }
+    this.#last.delete(key);
+    for (const [k, v] of this.#last) if (!v.held && now - v.at >= this.everyMs) this.#last.delete(k);
+    this.#last.set(key, { at: now, held: 0 });
+    while (this.#last.size > this.#maxKeys) {
+      const oldest = this.#last.keys().next().value;
+      if (oldest === undefined) break;
+      this.#last.delete(oldest);
+    }
+    return last?.held ?? 0;
+  }
+
+  get size(): number {
+    return this.#last.size;
+  }
+}
