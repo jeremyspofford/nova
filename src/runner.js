@@ -63,6 +63,11 @@ const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
 // Nova's own status tools can relay outside text (a coding agent's failure reason, a capture
 // error carrying page text), so their output is screened and marked like a command's (T3).
 const STATUS_TOOLS = new Set(['nova_capture', 'code_status', 'infra_status', 'network_status', 'nova_schedules', 'nova_settings', 'nova_instance']);
+// A connected service's reply (service_call, and home_call, its older name): screened as outside
+// content every time, tainting the run only when a check flags it (owner ruling D6, option b).
+const SERVICE_TOOLS = new Set(['service_call', 'home_call']);
+// Where tool output came from, as the Memory view says it ("a conversation that read …").
+const outputWords = (name) => (SERVICE_TOOLS.has(name) ? 'a connected service’s reply' : 'a tool’s output');
 const STANDING = new Set([...STANDING_EXACT].map((n) => n.normalize('NFC').toLowerCase()));
 // Addresses in text, and an address as compared: no fragment, the URL parser's own spelling.
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'`)\]}]+/gi;
@@ -349,6 +354,11 @@ export class Runner extends EventEmitter {
     // Outside content read anywhere in this conversation is still in its context, so the run
     // starts with that taint (and a helper's report brings its run's).
     run.taint = this.taintOf(before);
+    // So is any tool output or service reply (F-033): what the conversation has seen, said as
+    // where it came from. From then on a memory change waits for the person (keep) and a
+    // standing-file change asks (T3), in this turn and every later one.
+    run.seen = this.outputSeen(before);
+    run.toolOutput = run.seen.size > 0;
     // Interstitial Research (flag on, in a conversation that followed the skill): the person's next
     // message disputing its answer counts as a correction (a pattern; recorded as a heuristic).
     if (this.irEnabled() && before.turns.some((t) => t.id !== turn && t.items.some((i) => i.kind === 'interstitial' && i.phase === 'record')) && CORRECTION.test(question)) {
@@ -529,8 +539,10 @@ export class Runner extends EventEmitter {
       let hints = null;
       let ok = true;
       const taintedBefore = run.taint.length > 0;
-      // From here on this run has seen tool output: a standing-file change asks (T3).
+      // From here on this run has seen tool output: a standing-file change asks (T3), and a memory
+      // change waits for the person (F-033).
       run.toolOutput = true;
+      (run.seen ??= new Set()).add(outputWords(call.name));
       try {
         output = await tool.run(call.args, ctx);
         if (output && typeof output === 'object') ({ output, summary, link, ingest: hints = null } = output);
@@ -650,16 +662,20 @@ export class Runner extends EventEmitter {
   // changed by id only; the words live in the core's memory and the day notes.
   // In a run that read outside content, memory isn't written: each block becomes a candidate,
   // held with where it came from, out of every prompt until the person keeps it (a forget too).
-  // In a run that read nothing from outside, with features.memoryGate on, a remember asks the memory
-  // gate first (gated()). said: the reply's visible text, the gate's context only.
+  // The same once the conversation has seen any tool output or service reply (F-033): taint can
+  // arrive unmarked (a paraphrase no check matches), so the candidate names what it saw instead.
+  // In a run that saw neither, with features.memoryGate on, a remember asks the memory gate first
+  // (gated()). said: the reply's visible text, the gate's context only.
   async keep(sessionId, tag, ops, run = { taint: [] }, { said = '', task = null, mode = null } = {}) {
     const from = `${sessionId}/${tag.turn}`;
-    const held = run.taint.length > 0;
+    const seen = [...(run.seen ?? [])].map((origin) => ({ screen: null, kind: 'tool', origin, verdict: 'pass', max: null }));
+    const held = run.taint.length > 0 || seen.length > 0;
+    const taint = [...run.taint, ...seen];
     const results = [];
     for (const o of ops) {
       try {
         if (held) {
-          const id = this.ingest.candidate({ op: o.op, ...(o.kind ? { kind: o.kind } : {}), ...(o.text ? { content: o.text } : {}), ...(o.op === 'forget' ? { target: o.id } : {}), ...(o.replaces ? { replaces: o.replaces } : {}), source: from, taint: run.taint });
+          const id = this.ingest.candidate({ op: o.op, ...(o.kind ? { kind: o.kind } : {}), ...(o.text ? { content: o.text } : {}), ...(o.op === 'forget' ? { target: o.id } : {}), ...(o.replaces ? { replaces: o.replaces } : {}), source: from, taint });
           results.push({ op: o.op, ok: true, held: true, id });
         } else if (o.op === 'remember') results.push(await this.gated(o, { from, run, said, task, mode }));
         else if (o.op === 'note') results.push(this.memory.note({ ...o, from }));
@@ -752,6 +768,17 @@ export class Runner extends EventEmitter {
     }
     const seen = new Set();
     return out.filter((x) => { const k = x.screen ?? `${x.kind}:${x.origin}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+
+  // The tool output a conversation has seen (F-033), as where each came from: every
+  // tool that returned something, screened or not, flagged or not. A report handed in brings its run's
+  // taint (taintOf), not this.
+  outputSeen(session) {
+    const out = new Set();
+    for (const t of session.turns) {
+      for (const i of t.items) if (i.kind === 'tool' && i.result) out.add(outputWords(i.name));
+    }
+    return out;
   }
 
   // The conversation a run belongs to: a helper's is its parent's; a scheduled run's is the one its
@@ -912,15 +939,22 @@ export class Runner extends EventEmitter {
     // A command's output, in every run (Amendment 2026-10-30-C Part 3: tool output).
     if (call.name === 'exec') return { text: output, source: { kind: 'tool', origin: 'a command', ref: String(a.command ?? '').slice(0, 200) } };
     if (STATUS_TOOLS.has(call.name)) return { text: output, source: { kind: 'tool', origin: `Nova’s ${call.name} tool` } };
+    // A connected service's reply carries the service's own words (its task's result, an error),
+    // done or failed (F-037).
+    if (SERVICE_TOOLS.has(call.name)) {
+      const service = call.name === 'home_call' ? 'home-assistant' : String(a.service ?? 'a service');
+      return { text: output, source: { kind: 'connector', origin: `the ${service} service`, ...(call.name === 'service_call' && a.action ? { ref: String(a.action).slice(0, 200) } : {}) } };
+    }
     return null;
   }
 
-  // Whether a read taints the run. Every outside read does, except a command's output: that taints
-  // when the screen found something (a check flagged it, or the model wasn't sure), so ordinary
-  // commands the person allowed keep running on their own. Without a model, a paraphrased
-  // injection in command output that no check matches is passed on as held-back data, untainted.
+  // Whether a read taints the run. Every outside read does, except a command's output and a
+  // connected service's reply (D6, option b): those taint when the screen found something (a check
+  // flagged it, or the model wasn't sure), so ordinary commands and service calls the person
+  // allowed keep running on their own. Without a model, a paraphrased injection in their output
+  // that no check matches is passed on as held-back data, untainted.
   taints(call, screen) {
-    if (call.name !== 'exec' && !STATUS_TOOLS.has(call.name)) return true;
+    if (call.name !== 'exec' && !STATUS_TOOLS.has(call.name) && !SERVICE_TOOLS.has(call.name)) return true;
     return screen.verdict === 'block' || screen.flags.some((f) => f.level !== 'note') || (!!screen.model && screen.verdict !== 'pass');
   }
 
