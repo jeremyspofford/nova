@@ -76,9 +76,9 @@ test('kill the hub, promote the standby: nothing lost, the running task recovere
     // The standby starts from nothing and catches up.
     standbyProc = await standby.start(s.env(s.standbyMesh));
     assert.match(standbyProc.out.join(''), /This is the standby; .* is the hub\./);
-    const health = await until(() => hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_seq > 0 && h.checks.mesh.standby.lag.rows === 0, 400);
+    const health = await until(() => hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_seq > 0 && h.checks.mesh.standby.lag.rows === 0);
     assert.equal(health.checks.mesh.standby.id, s.standbyId);
-    await until(() => standby.get('/api/v1/memory'), (m: any) => m.some((x: any) => x.id === fixed.id), 400);
+    await until(() => standby.get('/api/v1/memory'), (m: any) => m.some((x: any) => x.id === fixed.id));
     assert.equal((await standby.send('POST', '/api/v1/memory', { kind: 'fact', content: 'x' })).status, 409, 'the standby refuses changes');
     assert.equal((await standby.send('POST', '/api/sessions', { text: 'hi' })).status, 409, 'Era 2’s changes too');
 
@@ -86,15 +86,15 @@ test('kill the hub, promote the standby: nothing lost, the running task recovere
     const words = 'Locker combination 7319 behind the quartz panel';
     const secret = (await hub.send('POST', '/api/v1/memory', { kind: 'fact', content: words })).body;
     await hub.get('/api/memory');
-    await until(() => standby.get('/api/v1/memory'), (m: any) => m.some((x: any) => x.id === secret.id), 400);
-    await until(async () => readFileSync(join(standby.home, 'MEMORY.md'), 'utf8'), (t) => t.includes(words), 400);
+    await until(() => standby.get('/api/v1/memory'), (m: any) => m.some((x: any) => x.id === secret.id));
+    await until(async () => readFileSync(join(standby.home, 'MEMORY.md'), 'utf8'), (t) => t.includes(words));
     mkdirSync(join(standby.home, 'backups'), { recursive: true });
     const backup = join(standby.home, 'backups', 'nova-2026-10-29T09-00-00-000Z-v5.db');
     new DatabaseSync(join(standby.home, 'nova.db')).exec(`VACUUM INTO '${backup}'`);
     assert.ok(readFileSync(backup).toString('latin1').includes(words), 'the backup holds the words before');
     assert.equal((await hub.send('DELETE', `/api/v1/memory/${secret.id}`)).status, 200);
-    await until(() => standby.get('/api/v1/memory'), (m: any) => !m.some((x: any) => x.id === secret.id), 400);
-    await until(async () => readFileSync(join(standby.home, 'MEMORY.md'), 'utf8'), (t) => !t.includes(words), 400);
+    await until(() => standby.get('/api/v1/memory'), (m: any) => !m.some((x: any) => x.id === secret.id));
+    await until(async () => readFileSync(join(standby.home, 'MEMORY.md'), 'utf8'), (t) => !t.includes(words));
     for (const node of [standby.home, hub.home]) {
       const held = everything(node).filter((f) => f.text.includes(words) || f.text.includes('quartz panel')).map((f) => f.path);
       assert.deepEqual(held, [], `nothing under ${node} still holds the words`);
@@ -102,12 +102,12 @@ test('kill the hub, promote the standby: nothing lost, the running task recovere
 
     // Work that is running when the hub dies.
     assert.ok([200, 202].includes((await hub.send('POST', '/api/schedules/slow-review/run', {})).status));
-    const running = await until<any[]>(() => hub.get('/api/v1/tasks'), (ts) => ts.some((t) => t.owner === 'chat-run' && t.state === 'active'), 400);
+    const running = await until<any[]>(() => hub.get('/api/v1/tasks'), (ts) => ts.some((t) => t.owner === 'chat-run' && t.state === 'active'));
     const slow = running.find((t) => t.owner === 'chat-run' && t.state === 'active');
     assert.ok(slow, 'a scheduled run is active');
-    await until(() => standby.get(`/api/v1/tasks/${slow.id}`), (t: any) => t?.state === 'active', 400);
+    await until(() => standby.get(`/api/v1/tasks/${slow.id}`), (t: any) => t?.state === 'active');
     // Everything from before, by content hash, and the hub's files, as the hub has them now.
-    await until(() => hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby.lag.rows === 0, 400);
+    await until(() => hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby.lag.rows === 0);
     const memIds = [mem.id, fixed.id];
     const snapshot = (home: string) => ({
       profile: rows(home, 'SELECT * FROM profile', 'key'),
@@ -149,7 +149,7 @@ test('kill the hub, promote the standby: nothing lost, the running task recovere
     // The task that was running when the hub died is recovered by the new hub and settled the way
     // a restart settles it: a chat run that was under way isn't run again (its steps may have
     // changed things); it ends saying so. If the crash came before the run had started, it runs.
-    const after = await until(() => standby.get(`/api/v1/tasks/${slow.id}`), (t: any) => ['done', 'failed', 'cancelled'].includes(t.state), 1200);
+    const after = await until(() => standby.get(`/api/v1/tasks/${slow.id}`), (t: any) => ['done', 'failed', 'cancelled'].includes(t.state));
     assert.ok(after.state === 'done' || /stopped before it was done/.test(after.reason), `${after.state}: ${after.reason}`);
     const events = await standby.get(`/api/v1/tasks/${slow.id}/events`);
     assert.ok(events.some((e: any) => e.kind === 'recovered'), 'recovered after the failover');
@@ -186,14 +186,14 @@ test('automatic failover, when turned on: the standby takes over by itself once 
   try {
     assert.equal((await s.hub.send('PUT', '/api/v1/profile/mesh/auto_failover_after_s', { value: 2, confirm: true })).status, 200);
     standbyProc = await s.standby.start(s.env(s.standbyMesh));
-    await until(() => s.standby.get('/api/v1/profile'), (p: any) => p.mesh?.auto_failover_after_s === 2, 400);
+    await until(() => s.standby.get('/api/v1/profile'), (p: any) => p.mesh?.auto_failover_after_s === 2);
     assert.equal((await s.standby.get('/api/v1/mesh/status')).role, 'standby');
     await kill(hubProc);
     hubProc = null;
-    const st = await until(() => s.standby.get('/api/v1/mesh/status'), (v: any) => v.role === 'hub', 600);
+    const st = await until(() => s.standby.get('/api/v1/mesh/status'), (v: any) => v.role === 'hub');
     assert.equal(st.role, 'hub');
     assert.equal(st.epoch, 2);
-    const t = await until<any[]>(() => s.standby.get('/api/v1/tasks'), (ts) => ts.some((x) => x.title === 'Standby promoted to hub' && x.state === 'done'), 400);
+    const t = await until<any[]>(() => s.standby.get('/api/v1/tasks'), (ts) => ts.some((x) => x.title === 'Standby promoted to hub' && x.state === 'done'));
     assert.deepEqual(t.find((x) => x.title === 'Standby promoted to hub').origin, { kind: 'trigger', ref: 'mesh:auto-failover' });
   } finally {
     if (hubProc) await stop(hubProc);

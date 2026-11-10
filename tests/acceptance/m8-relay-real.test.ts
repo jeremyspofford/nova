@@ -120,15 +120,14 @@ async function brief(relay: Relay, o: { title: string; part: 'fake' | 'model'; e
     const id = created.body.id as string;
     let t: any;
     let asked = '';
-    const tries = Math.ceil(o.waitMs / 25);
     for (;;) {
-      t = await until<any>(() => m.get(api(`/tasks/${id}`)), (x) => ['done', 'failed', 'cancelled'].includes(x.state) || (x.state === 'waiting' && /OK/.test(x.reason ?? '')), tries);
+      t = await until<any>(() => m.get(api(`/tasks/${id}`)), (x) => ['done', 'failed', 'cancelled'].includes(x.state) || (x.state === 'waiting' && /OK/.test(x.reason ?? '')), o.waitMs);
       if (t.state !== 'waiting') break;
       const ask = await m.send('GET', api(`/providers/tasks/${id}/test-run`));
       assert.equal(ask.status, 200, `waiting, but not for the test run: ${t.reason}`);
       asked = `${ask.body.files.map((f: { path: string }) => f.path).join(', ') || '(no files changed)'} — “${ask.body.words}”`;
       await m.send('POST', api(`/providers/tasks/${id}/test-run`), {});
-      await until<any>(() => m.get(api(`/tasks/${id}`)), (x) => x.state !== 'waiting', 400);
+      await until<any>(() => m.get(api(`/tasks/${id}`)), (x) => x.state !== 'waiting');
     }
     const seconds = Math.round((Date.now() - started) / 1000);
     const receipts = await m.get(api(`/receipts?task_id=${id}`));

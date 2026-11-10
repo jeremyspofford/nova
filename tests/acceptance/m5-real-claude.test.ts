@@ -32,13 +32,13 @@ test('M5 evidence: the calc/ brief done by real Claude Code through the envelope
     let t: any;
     let asked = '';
     for (;;) {
-      t = await until<any>(() => m.get(api(`/tasks/${id}`)), (x) => ['done', 'failed', 'cancelled', 'waiting'].includes(x.state), 32_000);
+      t = await until<any>(() => m.get(api(`/tasks/${id}`)), (x) => ['done', 'failed', 'cancelled', 'waiting'].includes(x.state), 800_000);
       if (t.state !== 'waiting') break;
       const ask = await m.send('GET', api(`/providers/tasks/${id}/test-run`));
       assert.equal(ask.status, 200, `waiting, but not for the test run: ${t.reason}`);
       asked = `${ask.body.files.map((f: { path: string }) => f.path).join(', ')} — “${ask.body.words}”`;
       await m.send('POST', api(`/providers/tasks/${id}/test-run`), {});
-      await until<any>(() => m.get(api(`/tasks/${id}`)), (x) => x.state !== 'waiting', 400);
+      await until<any>(() => m.get(api(`/tasks/${id}`)), (x) => x.state !== 'waiting');
     }
     const receipts = await m.get(api(`/receipts?task_id=${id}`));
     const events = await m.get(api(`/tasks/${id}/events`));

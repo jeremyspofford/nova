@@ -26,7 +26,7 @@ test('M10g: “Promote to hub” on the hub’s Devices page: the pre-checks fir
   try {
     await finishSetup(s.hub);
     standbyProc = await s.standby.start({ ...s.env(s.standbyMesh), ...fast });
-    await until(() => s.hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_at && h.checks.mesh.standby.lag.rows === 0, 400);
+    await until(() => s.hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_at && h.checks.mesh.standby.lag.rows === 0);
 
     const hub = await device(b, { width: 1280, height: 900 });
     await hub.page.goto(`${s.hub.base}/settings#devices`);
@@ -47,10 +47,10 @@ test('M10g: “Promote to hub” on the hub’s Devices page: the pre-checks fir
     for (const path of ['/api/v1/backups', '/api/v1/backups/drill']) {
       const r = await s.hub.send('POST', path, {});
       assert.equal(r.status, 202);
-      const done = await until(() => s.hub.get(`/api/v1/tasks/${r.body.id}`), (x: any) => ['done', 'failed'].includes(x.state), 2400);
+      const done = await until(() => s.hub.get(`/api/v1/tasks/${r.body.id}`), (x: any) => ['done', 'failed'].includes(x.state), 60_000);
       assert.equal(done.state, 'done', done.reason);
     }
-    await until(() => s.hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.rows === 0, 400);
+    await until(() => s.hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.rows === 0);
 
     await row.locator('[data-action="promote-device"]').click();
     sheet = hub.page.locator('#sheet .approval-sheet[data-promotion]');
@@ -67,8 +67,8 @@ test('M10g: “Promote to hub” on the hub’s Devices page: the pre-checks fir
     const banner = hub.page.locator('#banner');
     await banner.waitFor({ state: 'visible', timeout: 60_000 });
     assert.match((await banner.textContent()) ?? '', /^This is the standby; “Standby” at http:\/\/127\.0\.0\.1:\d+ is the hub\./);
-    await until(() => s.standby.get('/api/v1/mesh/status'), (v: any) => v.role === 'hub' && v.epoch === 2, 400);
-    await until(() => s.hub.get('/api/v1/mesh/promotion'), (v: any) => v.promotion?.state === 'verified', 1200);
+    await until(() => s.standby.get('/api/v1/mesh/status'), (v: any) => v.role === 'hub' && v.epoch === 2);
+    await until(() => s.hub.get('/api/v1/mesh/promotion'), (v: any) => v.promotion?.state === 'verified');
     await hub.page.reload();
     await ready(hub.page);
     await hub.page.locator('#promotion-row').getByText(/passed every check for 4 seconds: the promotion is verified/).waitFor();

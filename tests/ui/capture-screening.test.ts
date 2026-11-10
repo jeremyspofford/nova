@@ -50,7 +50,7 @@ test('the capture timeline shows each verdict with its reason; held and excluded
   if (shots) mkdirSync(shots, { recursive: true });
   try {
     await capturing(m, sp);
-    const evs = await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length === 4 && l.every((e) => !['unscreened', 'held'].includes(e.sensitivity.state)), 400);
+    const evs = await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length === 4 && l.every((e) => !['unscreened', 'held'].includes(e.sensitivity.state)));
     assert.deepEqual(Object.fromEntries(evs.map((e: any) => [e.window_title ?? e.app, e.sensitivity.state])), { 'plan.md': 'index', card: 'redact', clinic: 'hold', Chat: 'exclude' });
 
     const { page, errors } = await device(b, { width: 1280, height: 900 });
@@ -113,7 +113,7 @@ test('the capture timeline shows each verdict with its reason; held and excluded
     db.prepare(`UPDATE memory SET content = ? WHERE id = ?`).run(`Draft the plan; key ${AWS}`, made.body.memory.id);
     db.prepare(`UPDATE capture_event SET text = ?, sensitivity = 'unscreened', sensitivity_detail = NULL WHERE id = ?`).run(`Draft the plan; key ${AWS}`, planEvent.id);
     db.close();
-    await until(() => m.get('/api/v1/capture/memory-review'), (l: any[]) => l.length === 1, 400);
+    await until(() => m.get('/api/v1/capture/memory-review'), (l: any[]) => l.length === 1);
     await page.goto(`${m.base}/capture`);
     await ready(page);
     const review = page.locator('#capture-view .capture-review');
@@ -156,7 +156,7 @@ test('option B: with no model on the device, the holding area shows the notice, 
   if (shots) mkdirSync(shots, { recursive: true });
   try {
     await capturing(m, sp);
-    await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length === 4 && l.every((e) => e.sensitivity.state === 'held'), 400);
+    await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length === 4 && l.every((e) => e.sensitivity.state === 'held'));
     for (const width of [1280, 375]) {
       const { page, errors, ctx } = await device(b, { width, height: 900 });
       await page.goto(`${m.base}/capture`);

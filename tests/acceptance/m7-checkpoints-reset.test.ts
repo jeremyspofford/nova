@@ -9,15 +9,10 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { openEncrypted } from '../../src/core/index.ts';
-import { blank, sleep, stop, until } from './support.ts';
+import { RESTART_MS, blank, saidTimes, sleep, stop, until } from './support.ts';
 
 const KEEP = 'The plants get water on Sundays.';
 const LATER = 'Added during the experiment.';
-
-// A restart in place under a loaded machine (other suites running beside it) has been seen to take
-// over ten seconds to answer again; each wait allows a minute (2400 polls of 25 ms). Only the wait
-// is longer: what is checked once it answers is unchanged.
-const SLOW = 2400;
 
 test('M7 amendment: checkpoint, change, restore, export, factory reset, first run, the export opens — no manual restart, nothing leaves the machine', { timeout: 150_000 }, async () => {
   const m = blank('nova-m7-cpr-');
@@ -41,10 +36,10 @@ test('M7 amendment: checkpoint, change, restore, export, factory reset, first ru
     // 3. Restore, and Nova comes back by itself: the same process, the same port.
     const r = await m.send('POST', `/api/v1/resilience/checkpoints/${cp.body.id}/restore`, { confirm: true });
     assert.equal(r.status, 202, JSON.stringify(r.body));
-    await until(async () => ready(), (n) => n >= 2, SLOW);
+    await saidTimes(nova, /Nova is ready at/, 2, RESTART_MS, 'Nova did not say it was ready again after the restore');
     assert.equal(ready(), 2, `ready again:\n${nova.out.join('')}`);
     assert.equal(nova.proc.exitCode, null, 'the process the person started is still the one running');
-    const back = await until(async () => { try { return await memories(); } catch { return null; } }, (x) => !!x && x.length === 1, SLOW);
+    const back = await until(async () => { try { return await memories(); } catch { return null; } }, (x) => !!x && x.length === 1);
     assert.deepEqual(back, [KEEP]);
     assert.match(nova.out.join(''), new RegExp(`Nova is ready at http://localhost:${port}`));
     assert.equal(egress(), '');
@@ -63,12 +58,12 @@ test('M7 amendment: checkpoint, change, restore, export, factory reset, first ru
     const reset = await m.send('POST', '/api/v1/reset', { confirm: true });
     assert.equal(reset.status, 202, JSON.stringify(reset.body));
     assert.equal(reset.body.restart, 'in-place');
-    await until(async () => ready(), (n) => n >= 3, SLOW);
+    await saidTimes(nova, /Nova is ready at/, 3, RESTART_MS, 'Nova did not say it was ready again after the factory reset');
     assert.equal(ready(), 3, `ready a third time:\n${nova.out.join('')}`);
     assert.equal(nova.proc.exitCode, null, 'still the same process');
 
     // 6. First-run setup, with the reset's result for that screen.
-    const report = await until(async () => { try { return await m.get('/api/v1/reset/report'); } catch { return null; } }, (x) => !!x?.id, SLOW);
+    const report = await until(async () => { try { return await m.get('/api/v1/reset/report'); } catch { return null; } }, (x) => !!x?.id);
     assert.equal(report.id, reset.body.id);
     assert.match(report.said, /Nova was erased on this machine and started over\./);
     assert.equal((await m.get('/api/v1/setup')).done, false);

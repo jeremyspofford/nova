@@ -126,7 +126,7 @@ test('M4 gate: phone by QR and computer by command; revoke one; kill the hub, pr
     const sSaid: string[] = [];
     sJoin.stdout!.on('data', (d) => sSaid.push(String(d)));
     sJoin.stderr!.on('data', (d) => sSaid.push(String(d)));
-    const sDigits = (await until(async () => sSaid.join(''), (s) => /\b\d{3} ?\d{3}\b/.test(s), 400)).match(/\b(\d{3}) ?(\d{3})\b/);
+    const sDigits = (await until(async () => sSaid.join(''), (s) => /\b\d{3} ?\d{3}\b/.test(s))).match(/\b(\d{3}) ?(\d{3})\b/);
     assert.ok(sDigits, `the standby's command shows six digits:\n${sSaid.join('')}`);
     await approveOnHub(hubPage, sDigits[1]! + sDigits[2]!);
     for (let i = 0; i < 400 && sJoin.exitCode === null; i++) await sleep(25);
@@ -170,14 +170,14 @@ test('M4 gate: phone by QR and computer by command; revoke one; kill the hub, pr
     const cSaid: string[] = [];
     cJoin.stdout!.on('data', (d) => cSaid.push(String(d)));
     cJoin.stderr!.on('data', (d) => cSaid.push(String(d)));
-    const cDigits = (await until(async () => cSaid.join(''), (s) => /\b\d{3} ?\d{3}\b/.test(s), 600)).match(/\b(\d{3}) ?(\d{3})\b/);
+    const cDigits = (await until(async () => cSaid.join(''), (s) => /\b\d{3} ?\d{3}\b/.test(s))).match(/\b(\d{3}) ?(\d{3})\b/);
     assert.ok(cDigits, `the command shows six digits:\n${cSaid.join('')}`);
     await approveOnHub(hubPage, cDigits[1]! + cDigits[2]!);
     type Dev = { id: string; kind: string; role: string; trust: string; online: boolean; last_seen: string | null; agent?: { safe_mode: boolean } };
     const devices = (node: typeof hub) => node.get('/api/v1/mesh/devices') as Promise<Dev[]>;
     // The joined computer, not the hub's own row (the hub is a computer too).
     const isComputer = (d: Dev) => d.kind === 'computer' && d.role !== 'hub';
-    const computer = (await until(() => devices(hub), (ds) => ds.some((d) => isComputer(d) && d.online && d.agent), 2400)).find(isComputer);
+    const computer = (await until(() => devices(hub), (ds) => ds.some((d) => isComputer(d) && d.online && d.agent), 60_000)).find(isComputer);
     const agentLog = () => { try { return readFileSync(join(cEnv.NOVA_DEVICE_HOME, 'agent.log'), 'utf8'); } catch { return '(no agent.log)'; } };
     assert.ok(computer?.online && computer.agent, `the computer shows Online with its runtime:\n${JSON.stringify(computer)}\n${cSaid.join('')}\n${agentLog()}`);
     assert.equal(computer.agent!.safe_mode, false);
@@ -216,9 +216,9 @@ test('M4 gate: phone by QR and computer by command; revoke one; kill the hub, pr
 
     // ---- catch up, snapshot, kill the hub ---------------------------------------------------------------
     const caughtUp = (h: any) => h.checks.mesh.standby?.lag?.acked_seq > 0 && h.checks.mesh.standby.lag.rows === 0;
-    assert.ok(caughtUp(await until(() => hub.get('/api/v1/health'), caughtUp, 2400)), 'the standby has everything');
+    assert.ok(caughtUp(await until(() => hub.get('/api/v1/health'), caughtUp, 60_000)), 'the standby has everything');
     await sleep(4000); // the file journal scans every 3 s
-    const lag = (await until(() => hub.get('/api/v1/health'), caughtUp, 2400)).checks.mesh.standby.lag;
+    const lag = (await until(() => hub.get('/api/v1/health'), caughtUp, 60_000)).checks.mesh.standby.lag;
     assert.equal(lag.rows, 0, `the standby has the files too: ${JSON.stringify(lag)}`);
     const memIds = [mem.id, phoneMemory.id];
     const snapshot = (home: string) => ({
@@ -269,12 +269,12 @@ test('M4 gate: phone by QR and computer by command; revoke one; kill the hub, pr
     step('No data loss: profile, the task and its events, both memories, receipts, device trust and the files match the dead hub by content hash.');
 
     // ---- the computer moves to the new hub; its offline work arrives exactly once -------------------------
-    const moved = await until(() => devices(standby), (ds) => ds.some((d) => isComputer(d) && d.online && !!d.last_seen && Date.parse(d.last_seen) > Date.parse(promoted.created_at)), 1200);
+    const moved = await until(() => devices(standby), (ds) => ds.some((d) => isComputer(d) && d.online && !!d.last_seen && Date.parse(d.last_seen) > Date.parse(promoted.created_at)));
     assert.ok(moved.find(isComputer)?.online, 'the computer found the new hub by itself');
-    const arrived = await until(() => standby.get('/api/v1/tasks') as Promise<any[]>, (ts) => ts.some((x) => x.title === offlineTask.title), 1200);
+    const arrived = await until(() => standby.get('/api/v1/tasks') as Promise<any[]>, (ts) => ts.some((x) => x.title === offlineTask.title));
     assert.equal(arrived.filter((x) => x.title === offlineTask.title).length, 1, 'the queued task arrived once');
     // A device's note waits for the person's OK (the ingest gate), once, with its provenance.
-    const notes = await until(async () => (await standby.get('/api/v1/ingest/candidates') as any[]).filter((m) => m.content === 'Written down while the hub was unreachable.'), (x) => x.length > 0, 400);
+    const notes = await until(async () => (await standby.get('/api/v1/ingest/candidates') as any[]).filter((m) => m.content === 'Written down while the hub was unreachable.'), (x) => x.length > 0);
     assert.equal(notes.length, 1, 'the queued note arrived once');
     assert.match(notes[0].source, /^device:/, 'with its provenance');
     assert.match(agentCli('status', '--json').stdout, new RegExp(`"epoch":\\s*2`));

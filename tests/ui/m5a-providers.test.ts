@@ -65,7 +65,7 @@ test('M5a: Settings › Providers recommends one chat model; set up, turned on w
 
     // Chat goes through it.
     const { body } = await m.send('POST', '/api/sessions', { text: 'hello' });
-    const s = await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null && x.session.turns[0]?.state !== 'open', 400);
+    const s = await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null && x.session.turns[0]?.state !== 'open');
     assert.match(JSON.stringify(s.session.turns[0].items), /Hello from the local model\./);
     assert.ok(fake.requests.some((r) => r.url === '/v1/chat/completions' && r.headers.authorization === 'Bearer example-key-0000'), 'the key from the vault went with the call');
 
@@ -74,7 +74,7 @@ test('M5a: Settings › Providers recommends one chat model; set up, turned on w
     writeCalc(join(m.home, 'workspace'));
     const made = await m.send('POST', '/api/v1/tasks', calcTask('openai-compatible', { privacy_mode: 'local-only' }));
     assert.equal(made.status, 201, JSON.stringify(made.body));
-    await until<any>(() => m.get(`/api/v1/tasks/${made.body.id}`), (x) => x.state === 'waiting', 400);
+    await until<any>(() => m.get(`/api/v1/tasks/${made.body.id}`), (x) => x.state === 'waiting');
     await page.goto(`${m.base}/tasks`);
     await ready(page);
     await page.locator(`[data-action="open-task"][data-task="${made.body.id}"]`).first().click();
@@ -87,7 +87,7 @@ test('M5a: Settings › Providers recommends one chat model; set up, turned on w
     if (shots) await shoot(page, join(shots, 'm5a-test-run-approval.png'));
     await ask.locator('[data-action="approve"]').click();
     await page.locator('.toast', { hasText: 'Nova runs the test' }).waitFor();
-    const done = await until<any>(() => m.get(`/api/v1/tasks/${made.body.id}`), (x) => ['done', 'failed'].includes(x.state), 400);
+    const done = await until<any>(() => m.get(`/api/v1/tasks/${made.body.id}`), (x) => ['done', 'failed'].includes(x.state));
     assert.equal(done.state, 'done', done.reason);
     assert.deepEqual(errors, [], 'no errors in the page');
   } finally {

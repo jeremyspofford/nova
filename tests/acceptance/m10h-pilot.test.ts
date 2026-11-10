@@ -19,7 +19,12 @@ import { Boot, joinHub } from '../../src/device/boot.ts';
 import { STAND_IN, STAND_IN_NAME, freePort, getJson, postJson, standInBytes, standInSha, standInUrl } from '../support/workloads.ts';
 import { call } from '../core/mesh-support.ts';
 
+// wait: poll. What the hub and the agents report, read every 100 ms: nothing here announces it.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// wait: expiry. Each wait's own `ms` bounds a state that never comes. Beside 40 busy loops on 20
+// CPUs the slowest wait measured was 5.8 s (the failing update going back by itself, of 60 s), and
+// the stand-in answering its health after capture was turned on took 0.36–0.97 s alone and
+// 0.37–0.90 s with the whole acceptance suite running (of 30 s).
 async function until<T>(read: () => T | Promise<T>, done: (v: T) => boolean, ms = 30_000): Promise<T> {
   const end = Date.now() + ms;
   let v = await read();
@@ -137,7 +142,7 @@ test('M10h pilot: Screenpipe (stand-in) on Linux, macOS and Windows stand-ins: c
     //    capture syncs: private windows and audio never leave the Mac.
     assert.equal((await h.c('POST', `/capture/sources/${encodeURIComponent(`device:${mac.id}:screen`)}/enable`)).status, 200);
     const sp = `http://127.0.0.1:${ports[mac.id]}`;
-    assert.equal((await until(() => getJson(`${sp}/health`), (r) => r.status === 200, 30_000)).body.version, '1.0.0', mac.lines.join('\n'));
+    assert.equal((await until(() => getJson(`${sp}/health`), (r) => r.status === 200, 30_000)).body?.version, '1.0.0', mac.lines.join('\n'));
     await sleep(300);
     const now = () => new Date().toISOString();
     await postJson(`${sp}/__items`, { items: [

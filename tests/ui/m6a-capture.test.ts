@@ -75,7 +75,7 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
       { at: new Date(now + 120_000).toISOString(), app: 'Notes', window: 'list', text: 'Buy a new kettle before the weekend' },
       { at: new Date(now + 180_000).toISOString(), app: 'Browser', window: 'New Incognito Tab - Browser', text: 'PRIVATE-UI-SENTINEL' },
     );
-    await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length === 2 && l.every((e) => e.sensitivity.state === 'index'), 400);
+    await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length === 2 && l.every((e) => e.sensitivity.state === 'index'));
 
     // The indicator is on every page, in every layout.
     for (const path of ['/', '/chat', '/tasks', '/memory', '/automations', '/skills', '/activity', '/health', '/settings']) {
@@ -128,7 +128,7 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
     await sheet.locator('textarea[name="content"]').fill('Buy a new kettle before the weekend.');
     if (shots) await shoot(page, join(shots, 'capture-remember.png'));
     await sheet.locator('button[type="submit"]').click();
-    const mems = await until(() => m.get('/api/v1/memory'), (l: any[]) => l.length === 1, 400);
+    const mems = await until(() => m.get('/api/v1/memory'), (l: any[]) => l.length === 1);
     assert.deepEqual([mems[0].content, mems[0].source, mems[0].scope], ['Buy a new kettle before the weekend.', `capture:${kettle.id}`, 'personal']);
     await view.locator(`.capture-item[data-event="${kettle.id}"] .pill.is-on`).waitFor();
 
@@ -141,7 +141,7 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
 
     // A suggestion for something with no space: accepting it asks which space, never a silent one.
     sp.add({ at: new Date(now + 240_000).toISOString(), app: 'Reader', window: 'article', text: 'The library closes early on Fridays' });
-    const library = (await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.some((e: any) => /library/.test(e.text) && e.sensitivity.state === 'index'), 400)).find((e: any) => /library/.test(e.text));
+    const library = (await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.some((e: any) => /library/.test(e.text) && e.sensitivity.state === 'index'))).find((e: any) => /library/.test(e.text));
     assert.equal(library.space, null);
     // A proposal, as a triage decision with a provider would leave it (no model runs in this test).
     const db = new DatabaseSync(join(m.home, 'nova.db'));
@@ -156,7 +156,7 @@ test('M6a: the capture indicator on every page, Settings › Capture, and the Ca
     assert.equal(await ask.locator('input[name="scope"]').inputValue(), '', 'no space chosen for the person');
     await ask.locator('input[name="scope"]').fill('work');
     await ask.locator('button[type="submit"]').click();
-    const accepted = await until(() => m.get('/api/v1/memory'), (l: any[]) => l.some((x: any) => /library/.test(x.content)), 400);
+    const accepted = await until(() => m.get('/api/v1/memory'), (l: any[]) => l.some((x: any) => /library/.test(x.content)));
     assert.equal(accepted.find((x: any) => /library/.test(x.content)).scope, 'work');
 
     // Pause everything: the indicator goes, and the page says Screenpipe itself keeps recording.

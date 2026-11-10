@@ -40,7 +40,7 @@ test('M6a: edit a Screenpipe source’s address and lookback, and give it the AP
     await form.locator('input[name="url"]').fill(`${sp.base}/`);
     await form.locator('input[name="lookback_minutes"]').fill('20');
     await form.locator('button[type="submit"]').click();
-    const source = (await until(() => m.get('/api/v1/capture'), (c: any) => c.sources[0].url === sp.base, 100)).sources[0];
+    const source = (await until(() => m.get('/api/v1/capture'), (c: any) => c.sources[0].url === sp.base)).sources[0];
     assert.deepEqual([source.url, source.lookback_minutes], [sp.base, 20], 'the edit reached Nova');
     await page.waitForFunction((b) => (document.querySelector('#capture form[data-form="screenpipe-edit"] input[name="url"]') as HTMLInputElement | null)?.value === b, sp.base);
 
@@ -61,7 +61,7 @@ test('M6a: edit a Screenpipe source’s address and lookback, and give it the AP
     const details = row.locator('details.capture-edit');
     if (!(await details.evaluate((d) => (d as HTMLDetailsElement).open))) await details.locator('summary').click();
     await row.locator('[data-action="capture-key-remove"]').click();
-    await until(() => m.get('/api/v1/capture'), (c: any) => c.sources[0].has_api_key === false, 100);
+    await until(() => m.get('/api/v1/capture'), (c: any) => c.sources[0].has_api_key === false);
     assert.deepEqual(errors.filter((e) => !/ERR_INCOMPLETE_CHUNKED_ENCODING|Failed to load resource/.test(e)), []);
   } finally {
     await b.close();
