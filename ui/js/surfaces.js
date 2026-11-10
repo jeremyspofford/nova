@@ -464,7 +464,7 @@ export function renderHealth(el) {
   ${p.detail ? `<details class="raw"><summary>Technical detail</summary><pre tabindex="0">${esc(p.detail)}</pre></details>` : ''}</div>
 </li>`;
   };
-  const fine = (k, c) => c.ok && !(k === 'passkeys' && !c.complete) && !(k === 'mesh' && (c.standby?.lag?.behind || c.replica?.sync?.unreachable_since || c.replica?.sync?.refused));
+  const fine = (k, c) => c.ok && !c.attention && !(k === 'passkeys' && !c.complete) && !(k === 'mesh' && (c.standby?.lag?.behind || c.replica?.sync?.unreachable_since || c.replica?.sync?.refused));
   const checks = h ? Object.entries(h.checks).map(([k, c]) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(CHECK_NAMES[k] ?? k)}</p><p class="settings-note">${esc(checkLine(k, c))}${k === 'mesh' ? ' <a class="link" href="/topology">View machines and services</a>' : ''}</p></div>${fine(k, c) ? '<span class="pill is-on">Fine</span>' : '<span class="pill is-warn">Needs a look</span>'}</li>`).join('') : '';
   const next = document.createElement('div');
   next.innerHTML = `<header class="view-head"><h2 class="view-title">Health</h2>
@@ -526,7 +526,7 @@ function keepingRunning() {
   const lastDeploy = dep && dep.outcome !== 'running' ? `${esc(dep.version)}: ${esc({ promoted: 'live', rolled_back: 'rolled back by itself', stopped: 'stopped before the switch', refused: 'going back was refused' }[dep.outcome] ?? dep.outcome)}, ${esc(ago(dep.started_at))}` : '';
   const backupLine = !b.settings.target ? 'No backup folder yet. Choose one in Settings › Backups; Nova then backs up nightly and drills weekly.'
     : b.target_present === false ? `The backup folder ${b.settings.target} isn’t there (a drive not plugged in?).${b.last_ok ? ` Last backup ${ago(b.last_ok.at)}.` : ''}`
-    : b.last_ok ? `Last backup ${ago(b.last_ok.at)}, to ${b.settings.target}. ${b.count} kept (up to ${b.settings.keep}).${b.encrypted !== null ? ` ${b.encrypted} encrypted cop${b.encrypted === 1 ? 'y' : 'ies'} in ${b.settings.encrypted_target}.` : ''}`
+    : b.last_ok ? `Last backup ${ago(b.last_ok.at)}, to ${b.settings.target} (not encrypted). ${b.count} kept (up to ${b.settings.keep}).${b.encrypted !== null ? ` ${b.encrypted} encrypted cop${b.encrypted === 1 ? 'y' : 'ies'} in ${b.settings.encrypted_target}.` : ' No encrypted copy: set an encrypted copy folder for one.'}`
     : `Nothing backed up yet to ${b.settings.target}.`;
   // Named like a backup but not made by this Nova (or changed since): never used, said once here.
   const strays = b.strays?.length ? ` ${b.strays.length} folder${b.strays.length === 1 ? '' : 's'} there look${b.strays.length === 1 ? 's' : ''} like a backup but ${b.strays.length === 1 ? 'isn’t' : 'aren’t'} one Nova made; Nova leaves ${b.strays.length === 1 ? 'it' : 'them'} alone and never restores from ${b.strays.length === 1 ? 'it' : 'them'}.` : '';

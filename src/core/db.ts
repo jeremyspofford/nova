@@ -2,8 +2,9 @@
 // Migrations are forward-only and checksummed; a file database is backed up before any upgrade,
 // and "rolling back" means restoring that backup, never running down-SQL. Ported from Era 1's
 // storage package (6e2cf142, packages/storage/src/migrations.ts) without its ORM.
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CoreError } from './errors.ts';
@@ -103,6 +104,12 @@ export class Db {
 
   // `before(from, to)`: called once an upgrade is certain and before anything changes (the core takes
   // an automatic checkpoint there); if it throws, nothing is upgraded.
+  //
+  // A failed upgrade (F-020) leaves the database exactly as it was: every pending migration runs in
+  // one transaction, so a step that fails undoes the steps before it too. It throws an UpgradeError
+  // in plain words, naming the copy from before. What failed is written down beside that copy
+  // (UPGRADE_FAILED); a later start that tries the same upgrade on the same, unchanged database uses
+  // that copy again and takes no new checkpoint, so failed starts don't pile up copies.
   migrate(opts: { migrations?: Migration[]; backupDir?: string; now?: () => Date; before?: (from: number, to: number) => void } = {}): MigrateResult {
     const migrations = opts.migrations ?? loadMigrations();
     const now = opts.now ?? (() => new Date());
@@ -111,28 +118,66 @@ export class Db {
     const known = new Map(migrations.map((m) => [m.version, m]));
     for (const row of applied) {
       const m = known.get(row.version);
-      if (!m) throw new CoreError('conflict', `The database is at migration ${row.version}, newer than this version of Nova knows. Refusing to run.`);
-      if (m.checksum !== row.checksum) throw new CoreError('conflict', `Migration ${row.version} (${row.name}) was edited after it was applied.`);
+      if (!m) throw new UpgradeError(`The database is at migration ${row.version}, newer than this version of Nova knows. Refusing to run. Start the newer version of Nova that upgraded it.`);
+      if (m.checksum !== row.checksum) throw new UpgradeError(`Migration ${row.version} (${row.name}) was edited after it was applied.`);
     }
     const from = applied.at(-1)?.version ?? 0;
     const pending = migrations.filter((m) => m.version > from);
     if (!pending.length) return { from, to: from, applied: [], backup: null };
+    const to = pending.at(-1)!.version;
 
-    if (this.path !== ':memory:' && from > 0) opts.before?.(from, pending.at(-1)!.version);
+    const file = this.path !== ':memory:' && from > 0;
     let backup: string | null = null;
-    if (this.path !== ':memory:' && from > 0) {
+    let tried: FailedUpgrade | null = null;
+    let fingerprint: string | null = null;
+    if (file) {
       if (!opts.backupDir) throw new CoreError('validation', 'A backup folder is required to upgrade a database file.');
-      mkdirSync(opts.backupDir, { recursive: true });
-      backup = join(opts.backupDir, `nova-${now().toISOString().replace(/[:.]/g, '-')}-v${from}.db`);
-      this.raw.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
+      tried = readFailed(opts.backupDir);
+      if (tried) fingerprint = this.#fingerprint();
+      // The same upgrade failed on this same database before: its copy is still the one from before.
+      if (tried && tried.from === from && tried.to === to && tried.db === fingerprint && existsSync(tried.backup)) {
+        backup = tried.backup;
+        const t = now();
+        utimesSync(backup, t, t);
+      } else {
+        opts.before?.(from, to);
+        mkdirSync(opts.backupDir, { recursive: true });
+        backup = join(opts.backupDir, `nova-${now().toISOString().replace(/[:.]/g, '-')}-v${from}.db`);
+        this.raw.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
+      }
     }
-    for (const m of pending) {
+    let at: Migration | null = null;
+    try {
       this.tx(() => {
-        this.raw.exec(m.sql);
-        this.run('INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)', m.version, m.name, m.checksum, now().toISOString());
+        for (const m of pending) {
+          at = m;
+          this.raw.exec(m.sql);
+          this.run('INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)', m.version, m.name, m.checksum, now().toISOString());
+        }
       });
+    } catch (e) {
+      const step = at as Migration | null;
+      const why = `migration ${step?.version ?? '?'} (${step?.name ?? 'unknown'}) failed: ${(e as Error).message}`;
+      if (!file || !backup || !opts.backupDir) throw new UpgradeError(`Nova couldn’t upgrade its database from version ${from} to ${to}: ${why}. Nothing was changed.`);
+      writeFailed(opts.backupDir, { from, to, at: now().toISOString(), backup, error: why, db: fingerprint ?? this.#fingerprint() });
+      throw new UpgradeError(`Nova couldn’t upgrade its database from version ${from} to ${to}: ${why}. Nothing was changed: your data is as it was before the upgrade, and a copy of it is at ${backup}. Run the version of Nova you had before, or report this; starting this version again tries once more without making another copy.`);
     }
-    return { from, to: pending.at(-1)?.version ?? from, applied: pending.map((m) => m.version), backup };
+    if (opts.backupDir) rmSync(join(opts.backupDir, UPGRADE_FAILED), { force: true });
+    return { from, to, applied: pending.map((m) => m.version), backup };
+  }
+
+  // What the database holds, as a hash of its file with everything written folded in.
+  #fingerprint(): string {
+    this.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    const h = createHash('sha256');
+    const fd = openSync(this.path, 'r');
+    try {
+      const buf = Buffer.alloc(1 << 20);
+      for (let pos = 0, n = 0; (n = readSync(fd, buf, 0, buf.length, pos)) > 0; pos += n) h.update(buf.subarray(0, n));
+    } finally {
+      closeSync(fd);
+    }
+    return h.digest('hex');
   }
 
   close(): void {
@@ -142,6 +187,21 @@ export class Db {
   #ensureLedger(): void {
     this.raw.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)');
   }
+}
+
+// A database upgrade that couldn't finish, said in plain words: the start line prints it as it is.
+export class UpgradeError extends CoreError {
+  constructor(message: string) { super('conflict', message); }
+}
+
+// The record of a failed upgrade, beside the pre-upgrade copies (never in a backup or checkpoint).
+export const UPGRADE_FAILED = 'upgrade-failed.json';
+interface FailedUpgrade { from: number; to: number; at: string; backup: string; error: string; db: string }
+function readFailed(dir: string): FailedUpgrade | null {
+  try { return JSON.parse(readFileSync(join(dir, UPGRADE_FAILED), 'utf8')) as FailedUpgrade; } catch { return null; }
+}
+function writeFailed(dir: string, f: FailedUpgrade): void {
+  try { writeFileSync(join(dir, UPGRADE_FAILED), `${JSON.stringify(f, null, 2)}\n`, { mode: 0o600 }); } catch { /* a full disk: the next start makes a copy again */ }
 }
 
 // Replace a closed database file with a backup. WAL side files go, so the restore is self-contained.

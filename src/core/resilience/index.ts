@@ -480,15 +480,22 @@ export class Resilience {
     };
   }
 
-  health(): { ok: boolean; detail: string } {
+  // `attention`: nothing is broken and Nova runs, but there is no backup to fall back on (no folder
+  // set, or none made yet), so this check isn't "fine" (F-019). It never makes health fail: that is
+  // for what stops Nova. `encrypted`: whether the backups have an encrypted copy (the folder backup
+  // itself is never encrypted).
+  health(): { ok: boolean; attention?: string; encrypted?: boolean; detail: string } {
     const s = this.settings();
-    if (!s.target) return { ok: true, detail: 'No backup folder set yet.' };
+    if (!s.target) return { ok: true, attention: 'nothing is backed up: no backup folder is set.', detail: 'No backup folder is set, so nothing is backed up. Choose one in Settings › Backups.' };
     if (!existsSync(s.target)) return { ok: false, detail: `The backup folder ${s.target} isn’t there.` };
     const last = this.nightly.runs(1)[0];
     if (last && !last.ok) return { ok: false, detail: `The last backup didn’t finish: ${last.error}` };
     const d = this.drills(1)[0];
     if (d && !d.ok) return { ok: false, detail: 'The last restore drill failed.' };
-    return { ok: true, detail: last ? `Last backup ${last.at}.` : 'No backup yet.' };
+    const encrypted = !!s.encrypted_target;
+    const [mm = '0', hh = '0'] = NIGHTLY.cron.split(' ');
+    if (!last) return { ok: true, attention: 'nothing is backed up yet.', encrypted, detail: `No backup yet: the first runs at ${hh.padStart(2, '0')}:${mm.padStart(2, '0')}, or choose Back up now in Health.` };
+    return { ok: true, encrypted, detail: `Last backup ${last.at}${encrypted ? ', with an encrypted copy' : ', not encrypted'}.` };
   }
 
   routes(console: (who: Who) => void): Route[] {
