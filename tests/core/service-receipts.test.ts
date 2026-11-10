@@ -42,8 +42,8 @@ test('a remote and a local service, each called once in local-first: both receip
     n.core.profile.set('privacy', 'default', 'local-preferred', 'settings');
     n.core.connectors.register(service('example-cloud', 'remote', seen.cloud));
     n.core.connectors.register(service('example-lan', 'local', seen.lan));
-    const a = n.core.connectors.act('example-cloud', 'set', { value: 21 });
-    const b = n.core.connectors.act('example-lan', 'set', { value: 7 });
+    const a = n.core.connectors.act('example-cloud', 'set', { value: 'PLANTED-SERVICE-INPUT-7f3a' });
+    const b = n.core.connectors.act('example-lan', 'set', { value: 'PLANTED-LAN-INPUT-91c4' });
     for (const t of [a, b]) assert.equal((await until(() => n.core.ledger.get(t.id).state, (s) => s === 'done')), 'done');
 
     const remote = n.core.receipts.list({ egress: 'remote' });
@@ -52,7 +52,8 @@ test('a remote and a local service, each called once in local-first: both receip
     ]);
     assert.deepEqual(remote[0]!.context_items.map((c) => [c.kind, c.ref]), [['file', `brief:${a.id}`]]);
     assert.match(remote[0]!.context_items[0]!.sha256, /^[0-9a-f]{64}$/);
-    assert.doesNotMatch(JSON.stringify(remote), /"value"|21/, 'a fingerprint of what it was given, never the text');
+    // The planted input never appears in a receipt, only its fingerprint; nor does the inputs field name.
+    assert.doesNotMatch(JSON.stringify(n.core.receipts.list()), /PLANTED-(SERVICE|LAN)-INPUT|"value"/, 'a fingerprint of what it was given, never the text');
     // The local one has its receipt too, and stays out of the remote list.
     const local = n.core.receipts.list({ egress: 'local' }).filter((r) => r.provider.startsWith('service:'));
     assert.deepEqual(local.map((r) => [r.provider, r.egress, r.task_id]), [['service:example-lan', 'local', b.id]]);
@@ -70,7 +71,7 @@ test('local-only: a call to a remote service is refused, and no "sent" receipt i
     n.core.profile.set('privacy', 'default', 'local-only', 'settings');
     n.core.connectors.register(service('example-cloud', 'remote', seen));
     let task = null;
-    try { task = n.core.connectors.act('example-cloud', 'set', { value: 21 }); } catch { task = null; }
+    try { task = n.core.connectors.act('example-cloud', 'set', { value: 'PLANTED-SERVICE-INPUT-7f3a' }); } catch { task = null; }
     if (task) await until(() => n.core.ledger.get(task!.id).state, (s) => ['failed', 'done', 'cancelled', 'blocked'].includes(s));
     assert.deepEqual(n.core.receipts.list({ egress: 'remote' }), []);
     assert.deepEqual(seen, [], 'the service was never called');
