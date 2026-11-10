@@ -15,6 +15,7 @@ import { reduce } from '../ui/js/reduce.js';
 import { createNova } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { ensureMark } from '../src/core/index.ts';
+import { UNTIL_MS } from './acceptance/support.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 const LA = 'America/Los_Angeles';
@@ -168,8 +169,11 @@ after(() => nova.server.close());
 
 const post = (path, body = {}) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify(body) });
 const get = async (path) => (await fetch(base + path)).json();
-const wait = async (check) => {
-  for (let i = 0; i < 300; i++) {
+// Bounded by time, not a count of tries (the pipeline rule; issue #462): a turn that spawns the
+// agent several times takes longer on a loaded machine, and a count of 25 ms sleeps is a hidden
+// ~5-10 s ceiling. UNTIL_MS is the suites' shared ceiling (tests/acceptance/support.ts).
+const wait = async (check, ms = UNTIL_MS) => {
+  for (const end = Date.now() + ms; Date.now() < end;) {
     const v = await check();
     if (v) return v;
     await new Promise((r) => setTimeout(r, 25));

@@ -286,6 +286,25 @@ back, it sees that it was replaced and steps down rather than act as a second
 hub. Connector sign-ins (Gmail) stay on the machine where you made them;
 connect them again on the new hub.
 
+### Captured originals in old history
+
+What Nova captures from your devices (`<home>/capture/`) is never saved in
+the home's git history. A home made before that rule saved the originals in
+its history with each turn, where forgetting them or letting them expire
+doesn't reach. To remove them, with Nova stopped:
+
+```sh
+node scripts/scrub-capture-history.js ~/Nova
+```
+
+It says how many captured files the history holds and what it will do, and
+asks you to type `remove` before it changes anything. It then rewrites every
+commit so none holds `capture/`, deletes git's own old copies (the history
+before the rewrite and the reflog), checks, and lists what it removed. It
+can't be undone. Your files on disk are not touched. A copy of the home's
+`.git` made elsewhere (a clone, a backup of the folder) still holds them:
+delete or replace those yourself. Nova never does this on its own.
+
 ### If the hub's keys were exposed
 
 The hub's private keys live in `<home>/mesh/identity.json`, readable only by

@@ -21,6 +21,7 @@
 // whatever the tier (src/runner.js GUARDED, and every registered capability's chat tool through
 // guardWords below). Both apply at any effective tier.
 import { CoreError } from '../errors.ts';
+import { APPROVER_ONLY } from '../mesh/access.ts';
 import type { Tier } from '../envelope.ts';
 import type { Log } from '../log.ts';
 import type { Profile } from '../profile.ts';
@@ -328,13 +329,16 @@ export class Approvals implements Tiers {
 
   // tier: a tier, or null for the default. Raising is free; lowering loosens a gate, so it needs
   // {confirm: true} (on Nova's own screen the approval hook asks for the passkey with it).
-  set(id: string, tier: unknown, o: { confirm?: boolean; by?: string } = {}): CapabilityView {
+  // `approver` is whether the caller may loosen a gate (the hub's screen or an approver device, D1);
+  // false refuses any lowering. Nova's own code leaves it out.
+  set(id: string, tier: unknown, o: { confirm?: boolean; by?: string; approver?: boolean } = {}): CapabilityView {
     const c = this.capability(id);
     if (tier !== null && !isTier(tier)) throw new CoreError('validation', 'A tier is 0, 1, 2 or 3 (or null for the default): 1 does it and tells you, 2 asks first, 3 confirms every time.');
     if (tier !== null && tier < c.floor) throw new CoreError('validation', `“${c.name}” can’t go below tier ${c.floor} (${TIER_WORDS[c.floor].toLowerCase()}): ${c.floor_why}.`);
     if (tier !== null && !c.tiers.includes(tier)) throw new CoreError('validation', `“${c.name}” is ${c.tiers.join(' or ')}.`);
     const from = this.effective(c.id);
     const to = effectiveOf(c, tier);
+    if (to < from && o.approver === false) throw new CoreError('forbidden', `Lowering “${c.name}” loosens a gate. ${APPROVER_ONLY}`);
     if (to < from && o.confirm !== true) throw new CoreError('validation', `Lowering “${c.name}” from tier ${from} to ${to} (${TIER_WORDS[to].toLowerCase()}) loosens a gate: send confirm: true to do that.`);
     this.#write(c.id, tier);
     this.#log.info('approvals', `${c.name}: tier ${from} → ${to}${tier === null ? ' (the default)' : ''}.`, { capability: c.id, from, to, override: tier, confirmed: o.confirm === true, by: o.by ?? 'core' });

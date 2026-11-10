@@ -116,3 +116,50 @@ test('the home’s mark, a reset’s marker and report, and checkpoints never re
     assert.ok(!tracked.some((f) => f.startsWith(name)), `${name} isn’t tracked: ${tracked.join(' ')}`);
   }
 });
+
+// F-013: originals a device sent (capture/raw/) were committed to the home's history with every turn.
+// capture/ is kept out from now on, and a home that already tracks it stops, keeping the files.
+// Old commits still hold them: rewriting history waits on the owner's ruling (the PR says so).
+test('capture files never go into the home’s history; a home that tracked them stops, and the files stay', async () => {
+  const h = home();
+  mkdirSync(join(h, 'capture', 'raw'), { recursive: true });
+  writeFileSync(join(h, 'capture', 'raw', 'evt-1'), 'PLANTED-CAPTURE-ORIGINAL');
+  await ensureGit(h);
+  writeFileSync(join(h, 'capture', 'raw', 'evt-2'), 'PLANTED-CAPTURE-SECOND');
+  await commitHome(h, 'Nova: turn');
+  assert.doesNotMatch(git(h, 'ls-files'), /^capture\//m);
+  assert.doesNotMatch(git(h, 'log', '--all', '-p'), /PLANTED-CAPTURE/);
+
+  // A home from before: capture/ went in with everything else.
+  const old = home();
+  mkdirSync(join(old, 'capture', 'raw'), { recursive: true });
+  writeFileSync(join(old, 'capture', 'raw', 'evt-1'), 'PLANTED-CAPTURE-ORIGINAL');
+  git(old, 'init', '-q');
+  writeFileSync(join(old, '.gitignore'), '# Nova: kept out of history, so forgetting and removing are final.\nMEMORY.md\nmesh/\n');
+  git(old, 'add', '-A');
+  git(old, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'old');
+  assert.match(git(old, 'ls-files'), /^capture\/raw\/evt-1$/m);
+  await ensureGit(old);
+  assert.doesNotMatch(git(old, 'ls-files'), /^capture\//m, 'no longer tracked');
+  assert.match(readFileSync(join(old, '.gitignore'), 'utf8'), /^capture\/$/m);
+  assert.equal(readFileSync(join(old, 'capture', 'raw', 'evt-1'), 'utf8'), 'PLANTED-CAPTURE-ORIGINAL', 'capture keeps working: the file stays');
+  writeFileSync(join(old, 'capture', 'raw', 'evt-2'), 'PLANTED-CAPTURE-NEW');
+  await commitHome(old, 'Nova: turn');
+  assert.doesNotMatch(git(old, 'log', '--all', '-p'), /PLANTED-CAPTURE-NEW/, 'nothing new reaches history');
+
+  // The owner's ruling (2026-11-10): the person removes the old copies, deliberately, with
+  // scripts/scrub-capture-history.js. What it uses: the count, then the rewrite, then the check.
+  writeFileSync(join(old, 'USER.md'), '# USER.md\nkept history\n');
+  await commitHome(old, 'Nova: a later turn');
+  const found = await home$.captureInHistory(old);
+  // Two commits: the one that saved it, and the one that stopped tracking it.
+  assert.deepEqual([found.commits, found.paths], [2, ['capture/raw/evt-1']]);
+  const done = await home$.scrubCaptureHistory(old);
+  assert.deepEqual([done.rewritten, done.paths], [true, ['capture/raw/evt-1']]);
+  const all = execFileSync('sh', ['-c', `git -C "${old}" log --all --reflog -p; git -C "${old}" count-objects -v; git -C "${old}" fsck --unreachable --no-reflogs 2>/dev/null; for o in $(git -C "${old}" rev-list --all --objects | cut -d' ' -f1); do git -C "${old}" cat-file -p $o 2>/dev/null; done`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.doesNotMatch(all, /PLANTED-CAPTURE/, 'no commit, reflog or kept object holds a captured original');
+  assert.match(git(old, 'log', '--all', '-p'), /kept history/, 'the rest of the history stays');
+  assert.equal(readFileSync(join(old, 'capture', 'raw', 'evt-1'), 'utf8'), 'PLANTED-CAPTURE-ORIGINAL', 'the file on disk is untouched');
+  assert.deepEqual((await home$.captureInHistory(old)).commits, 0);
+  assert.equal((await home$.scrubCaptureHistory(old)).rewritten, false, 'run again: nothing to do');
+});

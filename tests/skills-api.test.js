@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { createNova } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { sampleMail, startFakeGoogle, startFakeImap } from '../scripts/fake-google.js';
+import { UNTIL_MS } from './acceptance/support.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 const CLIENT = JSON.stringify({ installed: { client_id: '123-abc.apps.googleusercontent.com', client_secret: 'shh' } });
@@ -36,8 +37,11 @@ after(async () => { nova.server.close(); await google.close(); await imap.close(
 
 const post = (path, body = {}) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-nova': '1' }, body: JSON.stringify(body) });
 const get = async (path) => (await fetch(base + path)).json();
-async function settle(id, until = (s) => s.live === null) {
-  for (let i = 0; i < 200; i++) {
+// Bounded by time, not a count of tries (the pipeline rule; issue #462): a turn that spawns the
+// agent several times takes longer on a loaded machine, and a count of 25 ms sleeps is a hidden
+// ~5-10 s ceiling. UNTIL_MS is the suites' shared ceiling (tests/acceptance/support.ts).
+async function settle(id, until = (s) => s.live === null, ms = UNTIL_MS) {
+  for (const end = Date.now() + ms; Date.now() < end;) {
     const s = await get(`/api/sessions/${id}`);
     if (until(s)) return s;
     await new Promise((r) => setTimeout(r, 25));

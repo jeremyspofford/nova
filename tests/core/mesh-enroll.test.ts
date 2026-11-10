@@ -250,6 +250,29 @@ test('rate limits group an IPv6 client by its /64, cap wrong codes for the whole
   }
 });
 
+// X-003: #447 made a flood from one address one problem, but every new address still raised its own.
+// Refusals are now reported once per kind of refusal; the ones held back, and from how many
+// addresses, are counted in the next report.
+test('rate limits hit from many addresses are one problem, then one with a count', async () => {
+  const h = await hub();
+  try {
+    const e = h.core.mesh.enroll;
+    const status = (fn: () => unknown) => { try { fn(); return 200; } catch (x) { return (x as { status: number }).status; } };
+    const flood = (net: number) => { for (let a = 1; a <= 40; a++) for (let i = 0; i < 31; i++) status(() => e.limit('calls', `198.51.${net}.${a}`)); };
+    const turned = () => h.core.log.problems().filter((p) => /turned away a device/.test(p.message));
+    flood(100);
+    assert.equal(turned().length, 1, `forty addresses, one problem: ${turned().map((p) => p.message).join(' / ')}`);
+    assert.match(turned()[0]!.message, /198\.51\.100\.1 /);
+    h.tick(11 * 60_000);
+    flood(101);
+    const all = turned();
+    assert.equal(all.length, 2, 'the next report, ten minutes on');
+    assert.match(all.map((p) => p.message).join(' '), /39 more were turned away since the last report, from 39 addresses\./);
+  } finally {
+    await h.stop();
+  }
+});
+
 test('joining and sessions only over the mesh listener; no mesh address means no codes', async () => {
   const h = await hub();
   try {

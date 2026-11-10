@@ -67,6 +67,20 @@ const STANDING_EXACT = new Set([...WRITABLE, 'MEMORY.md']);
 // Nova's own status tools can relay outside text (a coding agent's failure reason, a capture
 // error carrying page text), so their output is screened and marked like a command's (T3).
 const STATUS_TOOLS = new Set(['nova_capture', 'code_status', 'infra_status', 'network_status', 'nova_schedules', 'nova_settings', 'nova_instance']);
+// A connected service's reply (service_call, and home_call, its older name): screened as outside
+// content every time, tainting the run only when a check flags it (owner ruling D6, option b).
+const SERVICE_TOOLS = new Set(['service_call', 'home_call']);
+// F-033, as the owner narrowed it (2026-11-10): whether a screened tool result holds the
+// conversation's memory changes for review, and if so what it was, as the Memory view says it ("a
+// conversation that read …"). Outside content always does; one of Nova's own read-only status tools
+// only when its screen flagged the output (it tainted). Null: it doesn't.
+const SEEN_WORDS = { web: 'a web page', search: 'web search results', email: 'an email', file: 'a file from outside', connector: 'a connected service’s reply' };
+function holdsMemory(name, kind, tainted) {
+  if (STATUS_TOOLS.has(name)) return tainted ? `Nova’s ${name} tool, which a check flagged` : null;
+  if (SERVICE_TOOLS.has(name)) return SEEN_WORDS.connector;
+  if (name === 'exec') return 'a command’s output';
+  return SEEN_WORDS[kind] ?? 'something from outside';
+}
 const STANDING = new Set([...STANDING_EXACT].map((n) => n.normalize('NFC').toLowerCase()));
 // Addresses in text, and an address as compared: no fragment, the URL parser's own spelling.
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'`)\]}]+/gi;
@@ -354,6 +368,12 @@ export class Runner extends EventEmitter {
     // Outside content read anywhere in this conversation is still in its context, so the run
     // starts with that taint (and a helper's report brings its run's).
     run.taint = this.taintOf(before);
+    // So is outside content that didn't taint, such as a command's output or a service's reply,
+    // and a status tool's output only when its screen flagged it (F-033, narrowed by the owner's
+    // ruling of 2026-11-10): what the conversation has seen, said as where it came from. From then on a memory change waits for the person (keep) and a
+    // standing-file change asks (T3), in this turn and every later one.
+    run.seen = this.outputSeen(before);
+    run.toolOutput = run.seen.size > 0;
     // Interstitial Research (flag on, in a conversation that followed the skill): the person's next
     // message disputing its answer counts as a correction (a pattern; recorded as a heuristic).
     if (this.irEnabled() && before.turns.some((t) => t.id !== turn && t.items.some((i) => i.kind === 'interstitial' && i.phase === 'record')) && CORRECTION.test(question)) {
@@ -366,7 +386,7 @@ export class Runner extends EventEmitter {
     // The log keeps where each note came from, not its words: what is
     // forgotten later stays gone from the conversation view too. A helper's
     // context is scoped to its brief, so it recalls nothing.
-    const recall = run.helper ? [] : this.memory.search(question);
+    let recall = run.helper ? [] : this.memory.search(question);
     if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall.map(({ id, source }) => ({ id, source })) });
     run.recall = recall;
     run.question = question;
@@ -403,6 +423,9 @@ export class Runner extends EventEmitter {
       // Memories made from capture are screened before this call uses them (once each, cached).
       const captured = run.helper ? null : await this.screenMemory(sessionId, tag, run);
       const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, briefing, approvals: this.approvals, services: this.services, captured, ...(this.identity ? { identity: this.identity.persona() } : {}) });
+      // The recalled notes as they are now: one forgotten (or edited) since the turn began, or since
+      // the last step, never reaches this prompt as it was (A-023).
+      if (recall.length) { recall = this.memory.current(recall); run.recall = recall; }
       const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
       // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
       // hash, and where it went. Written before the call, so it exists even if the call fails.
@@ -565,6 +588,10 @@ export class Runner extends EventEmitter {
         screen = await this.ingest.screen({ ...read, ...this.screenScope(sessionId, run) });
         taints = this.taints(call, screen);
         if (taints) run.taint.push(screen.taint);
+        // Outside content holds memory changes from now on (F-033); a status tool's only when the
+        // screen flagged it (the owner's ruling, 2026-11-10).
+        const seen = holdsMemory(call.name, screen.taint.kind, taints);
+        if (seen) (run.seen ??= new Set()).add(seen);
       }
       // Interstitial Research: a page fetched in this run is one a claim may cite.
       if (run.ir && ok && screen && call.name === 'web_fetch') {
@@ -657,16 +684,20 @@ export class Runner extends EventEmitter {
   // changed by id only; the words live in the core's memory and the day notes.
   // In a run that read outside content, memory isn't written: each block becomes a candidate,
   // held with where it came from, out of every prompt until the person keeps it (a forget too).
-  // In a run that read nothing from outside, with features.memoryGate on, a remember asks the memory
-  // gate first (gated()). said: the reply's visible text, the gate's context only.
+  // The same once the conversation has seen any tool output or service reply (F-033): taint can
+  // arrive unmarked (a paraphrase no check matches), so the candidate names what it saw instead.
+  // In a run that saw neither, with features.memoryGate on, a remember asks the memory gate first
+  // (gated()). said: the reply's visible text, the gate's context only.
   async keep(sessionId, tag, ops, run = { taint: [] }, { said = '', task = null, mode = null } = {}) {
     const from = `${sessionId}/${tag.turn}`;
-    const held = run.taint.length > 0;
+    const seen = [...(run.seen ?? [])].map((origin) => ({ screen: null, kind: 'tool', origin, verdict: 'pass', max: null }));
+    const held = run.taint.length > 0 || seen.length > 0;
+    const taint = [...run.taint, ...seen];
     const results = [];
     for (const o of ops) {
       try {
         if (held) {
-          const id = this.ingest.candidate({ op: o.op, ...(o.kind ? { kind: o.kind } : {}), ...(o.text ? { content: o.text } : {}), ...(o.op === 'forget' ? { target: o.id } : {}), ...(o.replaces ? { replaces: o.replaces } : {}), source: from, taint: run.taint });
+          const id = this.ingest.candidate({ op: o.op, ...(o.kind ? { kind: o.kind } : {}), ...(o.text ? { content: o.text } : {}), ...(o.op === 'forget' ? { target: o.id } : {}), ...(o.replaces ? { replaces: o.replaces } : {}), source: from, taint });
           results.push({ op: o.op, ok: true, held: true, id });
         } else if (o.op === 'remember') results.push(await this.gated(o, { from, run, said, task, mode }));
         else if (o.op === 'note') results.push(this.memory.note({ ...o, from }));
@@ -759,6 +790,24 @@ export class Runner extends EventEmitter {
     }
     const seen = new Set();
     return out.filter((x) => { const k = x.screen ?? `${x.kind}:${x.origin}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  }
+
+  // The outside content a conversation has seen that holds memory (F-033, narrowed by the owner's
+  // ruling of 2026-11-10), as where each came from: every screened read of outside content (a web
+  // page, a search, mail, a file Nova didn't write, a command's output, a service's reply), and a
+  // status tool's output only when its screen flagged it. Nova's own tools that aren't screened
+  // (the person's own files, schedules, skills, helpers) never hold it. A report handed in brings
+  // its run's taint (taintOf), not this.
+  outputSeen(session) {
+    const out = new Set();
+    for (const t of session.turns) {
+      for (const i of t.items) {
+        if (i.kind !== 'tool' || !i.result?.screen) continue;
+        const seen = holdsMemory(i.name, i.result.screen.kind, i.result.taints !== false);
+        if (seen) out.add(seen);
+      }
+    }
+    return out;
   }
 
   // The conversation a run belongs to: a helper's is its parent's; a scheduled run's is the one its
@@ -919,15 +968,22 @@ export class Runner extends EventEmitter {
     // A command's output, in every run (Amendment 2026-10-30-C Part 3: tool output).
     if (call.name === 'exec') return { text: output, source: { kind: 'tool', origin: 'a command', ref: String(a.command ?? '').slice(0, 200) } };
     if (STATUS_TOOLS.has(call.name)) return { text: output, source: { kind: 'tool', origin: `Nova’s ${call.name} tool` } };
+    // A connected service's reply carries the service's own words (its task's result, an error),
+    // done or failed (F-037).
+    if (SERVICE_TOOLS.has(call.name)) {
+      const service = call.name === 'home_call' ? 'home-assistant' : String(a.service ?? 'a service');
+      return { text: output, source: { kind: 'connector', origin: `the ${service} service`, ...(call.name === 'service_call' && a.action ? { ref: String(a.action).slice(0, 200) } : {}) } };
+    }
     return null;
   }
 
-  // Whether a read taints the run. Every outside read does, except a command's output: that taints
-  // when the screen found something (a check flagged it, or the model wasn't sure), so ordinary
-  // commands the person allowed keep running on their own. Without a model, a paraphrased
-  // injection in command output that no check matches is passed on as held-back data, untainted.
+  // Whether a read taints the run. Every outside read does, except a command's output and a
+  // connected service's reply (D6, option b): those taint when the screen found something (a check
+  // flagged it, or the model wasn't sure), so ordinary commands and service calls the person
+  // allowed keep running on their own. Without a model, a paraphrased injection in their output
+  // that no check matches is passed on as held-back data, untainted.
   taints(call, screen) {
-    if (call.name !== 'exec' && !STATUS_TOOLS.has(call.name)) return true;
+    if (call.name !== 'exec' && !STATUS_TOOLS.has(call.name) && !SERVICE_TOOLS.has(call.name)) return true;
     return screen.verdict === 'block' || screen.flags.some((f) => f.level !== 'note') || (!!screen.model && screen.verdict !== 'pass');
   }
 

@@ -23,7 +23,7 @@ import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
 import { toolTier } from '../ui/js/status.js';
-import { BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, createCore, ensureMark, finishReset, fromBrowserTask, htmlSecurityHeaders, ipcBroker, ipcLink, nonceStyles, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
+import { APPROVER_ONLY, BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, allows, createCore, ensureMark, finishReset, fromBrowserTask, htmlSecurityHeaders, ipcBroker, ipcLink, nonceStyles, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 import { shellHash, withShellHash } from './sw-version.js';
 
@@ -523,6 +523,9 @@ export function createNova(config = loadConfig(), deps = {}) {
       if (req.method === 'GET' && !id) return json(res, 200, { permissions: permissions.list() });
       if (req.method !== 'POST' || !id || !['allow', 'ask'].includes(action)) return json(res, 405, { error: 'Method not allowed' });
       if (!permissions.list().some((p) => p.id === id)) return json(res, 404, { error: "That permission doesn't exist any more." });
+      // Allowing a permission ("Run commands", among them) loosens a gate: only the hub's own screen
+      // or an approver device may (owner ruling 2026-11-10, D2). Back to "ask" is free.
+      if (action === 'allow' && allows('approver', principal) !== 'ok') return json(res, 403, { error: APPROVER_ONLY });
       const list = permissions.set(id, action === 'allow');
       announce('permissions');
       return json(res, 200, { permissions: list });

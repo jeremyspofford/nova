@@ -262,23 +262,24 @@ test('the vault’s routes still need confirm, whatever is asked', async () => {
 });
 
 // Over real HTTP, with the core's own approval hook: who is asking is set by the test (the console,
-// or a paired phone not allowed to approve).
+// a paired phone not allowed to approve, or one that is).
 async function serve(core: Core) {
   const phone = { kind: 'device', device: { id: 'dev-phone', name: 'Phone', kind: 'phone', can_approve: false } } as never;
+  const approver = { kind: 'device', device: { id: 'dev-approver', name: 'Approver phone', kind: 'phone', can_approve: true } } as never;
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url!, 'http://nova.local');
-    void core.handle(req, res, url, req.headers['x-test-who'] === 'phone' ? phone : { kind: 'console' }, 'console').then((done) => { if (!done) { res.writeHead(404); res.end(); } });
+    void core.handle(req, res, url, req.headers['x-test-who'] === 'phone' ? phone : req.headers['x-test-who'] === 'approver' ? approver : { kind: 'console' }, 'console').then((done) => { if (!done) { res.writeHead(404); res.end(); } });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const send = async (who: 'console' | 'phone', method: string, path: string, body?: unknown) => {
+  const send = async (who: 'console' | 'phone' | 'approver', method: string, path: string, body?: unknown) => {
     const res = await fetch(`${base}/api/v1${path}`, { method, headers: { 'content-type': 'application/json', 'x-nova': '1', 'x-test-who': who }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: res.status, body: await res.json() as any };
   };
   return { send, close: () => new Promise<void>((r) => { server.closeAllConnections(); server.close(() => r()); }) };
 }
 
-test('routes: GET /approvals lists what is registered; PUT raises freely, lowers with confirm (a passkey on Nova’s own screen, the confirm alone from any paired device), and refuses below the floor', { timeout: 30_000 }, async () => {
+test('routes: GET /approvals lists what is registered; PUT raises freely, lowers with confirm (a passkey on Nova’s own screen, the confirm alone from an approver device, never from one not allowed to approve), and refuses below the floor', { timeout: 30_000 }, async () => {
   const { core } = boot();
   const h = await serve(core);
   try {
@@ -294,8 +295,8 @@ test('routes: GET /approvals lists what is registered; PUT raises freely, lowers
     assert.equal((await h.send('console', 'PUT', '/approvals/coding.write', { tier: 2 })).status, 200);
     assert.equal((await h.send('phone', 'PUT', '/approvals/infra.plan', { tier: 2 })).status, 200);
 
-    // Lowering without confirm: refused, from either.
-    const bare = await h.send('phone', 'PUT', '/approvals/coding.merge', { tier: 1 });
+    // Lowering without confirm: refused.
+    const bare = await h.send('approver', 'PUT', '/approvals/coding.merge', { tier: 1 });
     assert.equal(bare.status, 400);
     assert.match(bare.body.error, /confirm: true/);
     // On Nova's own screen, confirm needs a passkey: the existing approval hook asks.
@@ -303,14 +304,19 @@ test('routes: GET /approvals lists what is registered; PUT raises freely, lowers
     assert.equal(screen.status, 403);
     assert.match(screen.body.error, /passkey/);
     assert.equal(core.approvals.effective('coding.merge'), 3, 'nothing changed');
-    // A paired device, even one not allowed to approve, confirms with the confirm alone.
+    // A paired device not allowed to approve can't lower a gate, confirm or not (owner ruling D1).
     const phone = await h.send('phone', 'PUT', '/approvals/coding.merge', { tier: 1, confirm: true });
-    assert.equal(phone.status, 200, JSON.stringify(phone.body));
-    assert.equal(phone.body.effective, 1);
+    assert.equal(phone.status, 403);
+    assert.match(phone.body.error, /allowed to approve/);
+    assert.equal(core.approvals.effective('coding.merge'), 3, 'a body flag is never the authorization');
+    // An approver device confirms with the confirm alone.
+    const ok = await h.send('approver', 'PUT', '/approvals/coding.merge', { tier: 1, confirm: true });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.effective, 1);
     assert.equal(core.approvals.effective('coding.merge'), 1);
 
     // The floor, by name and reason.
-    const vault = await h.send('phone', 'PUT', '/approvals/vault.delete', { tier: 1, confirm: true });
+    const vault = await h.send('approver', 'PUT', '/approvals/vault.delete', { tier: 1, confirm: true });
     assert.equal(vault.status, 400);
     assert.match(vault.body.error, /can’t go below tier 3/);
     assert.equal((await h.send('phone', 'PUT', '/approvals/nothing', { tier: 1 })).status, 404);
