@@ -633,8 +633,10 @@ let backupsEpoch = 0;
 let backupsRevision = 0;
 let backupsPending = false;
 let backupsLoading = null;
-// A successful background read does not resolve an unsuccessful save of the retained draft.
+// A successful background read does not resolve an unsuccessful save of the retained draft, nor
+// erase what a finished save said: a read the save itself set off can answer after it (#484).
 let backupsSaveFailure = '';
+let backupsSaved = '';
 const backupSettingsOnly = (s) => ({ target: s.target ?? null, keep: s.keep ?? 7, encrypted_target: s.encrypted_target ?? null });
 function backupsPermissions() {
   const m = store.mesh;
@@ -676,7 +678,7 @@ export function loadBackups({ again = false } = {}) {
     if (!backupsPending) {
       const live = backups.fresh && store.meshFresh;
       backups.state = live && !backupsSaveFailure ? 'ready' : 'error';
-      backups.notice = live ? backupsSaveFailure : 'Backup settings or device permissions could not be refreshed. Try again.';
+      backups.notice = live ? backupsSaveFailure || backupsSaved : 'Backup settings or device permissions could not be refreshed. Try again.';
     }
   }).catch(() => {
     backups.fresh = false;
@@ -736,9 +738,9 @@ async function saveBackups(clear = null) {
   if (body.encrypted_target && !body.target) errors.encrypted_target = 'Choose a backup folder first.';
   if (body.encrypted_target && body.encrypted_target === body.target) errors.encrypted_target = 'Choose a different folder for encrypted copies.';
   backups.errors = errors;
-  if (Object.keys(errors).length) { backups.state = 'error'; backupsSaveFailure = backups.notice = 'Check the backup settings below.'; backupsChanged(); return; }
+  if (Object.keys(errors).length) { backups.state = 'error'; backupsSaved = ''; backupsSaveFailure = backups.notice = 'Check the backup settings below.'; backupsChanged(); return; }
   backupsPending = true;
-  backups.state = 'saving'; backupsSaveFailure = backups.notice = '';
+  backups.state = 'saving'; backupsSaved = backupsSaveFailure = backups.notice = '';
   const epoch = backupsEpoch, revision = backupsRevision;
   backupsChanged();
   try {
@@ -747,7 +749,7 @@ async function saveBackups(clear = null) {
     backups.settings = backupSettingsOnly(result);
     if (revision === backupsRevision) backups.draft = { ...backups.settings };
     if (result.recovery_key && epoch === backupsEpoch && backupsActive && backupsPermissions().canEdit) backups.recovery = { state: 'first-shown', key: result.recovery_key };
-    backups.state = 'ready'; backups.notice = 'Backup settings saved.';
+    backups.state = 'ready'; backupsSaved = backups.notice = 'Backup settings saved.';
     // GET never populates recovery state. Refresh shared Health facts and shown metadata only.
     await load(['profile', 'resilience']);
   } catch (e) {
