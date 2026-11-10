@@ -4,7 +4,8 @@
 // the scripted model and a stand-in search engine.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { TOOLS } from '../src/tools.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runAgent } from '../src/agent.js';
@@ -149,6 +150,31 @@ test('briefs and files are checked before a helper starts', () => {
   assert.throws(spawn({ files: ['../outside.md'] }), /outside Nova's home/);
   assert.throws(spawn({ files: Array(6).fill('workspace/bikes.md') }), /up to 5 files/);
   assert.throws(spawn({ task: 'x'.repeat(9000) }), /too long/);
+});
+
+// F-039: Delegate used a weaker check than read_file, and passed what it let through into the
+// helper's prompt. One guard now: every path read_file refuses, Delegate refuses for the same reason,
+// and nothing of the file reaches a helper.
+test('read_file and Delegate refuse the same protected files, for the same reason', async () => {
+  const home = nova.runner.config.home;
+  mkdirSync(join(home, 'vault'), { recursive: true });
+  writeFileSync(join(home, 'vault', 'key'), 'PLANTED-VAULT-KEY-0000');
+  mkdirSync(join(home, 'checkpoints', 'c1'), { recursive: true });
+  writeFileSync(join(home, 'checkpoints', 'c1', 'vault-key'), 'PLANTED-CHECKPOINT-0000');
+  mkdirSync(join(home, 'workspace'), { recursive: true });
+  try { symlinkSync(join(home, 'vault', 'key'), join(home, 'workspace', 'innocent.md')); } catch { /* already there */ }
+  const protectedPaths = ['nova.db', 'NOVA.DB', 'checkpoints/c1/vault-key', 'Checkpoints/c1/vault-key', 'vault/key', 'VAULT/key', 'workspace/innocent.md', '.git/config', 'backups/x'];
+  const before = nova.helpers.tasks().length;
+  for (const p of protectedPaths) {
+    let readWhy = null;
+    try { await TOOLS.read_file.run({ path: p }, { home }); } catch (e) { readWhy = e.message; }
+    assert.ok(readWhy, `read_file refuses ${p}`);
+    assert.throws(() => nova.helpers.spawn({ parent: asked, task: 'Look into it.', files: [p] }), (e) => e.message.includes(readWhy), `Delegate refuses ${p} with read_file's reason (${readWhy})`);
+  }
+  assert.equal(nova.helpers.tasks().length, before, 'no helper started');
+  assert.ok(!JSON.stringify(nova.core.ledger.list({ limit: 200 })).includes('PLANTED-'), 'nothing protected reached a brief');
+  // What read_file allows, Delegate passes.
+  assert.equal(nova.helpers.readFile('workspace/bikes.md').path, 'workspace/bikes.md');
 });
 
 test('three helpers work at once and a fourth waits; stopping one, working or waiting, says so in the conversation; Try again starts it fresh', async () => {
