@@ -503,31 +503,62 @@ export function memoryMatch(query, text) {
 export const MEMORY_FILTER_SCOPE = 'Looked in memories and day notes. Did not look inside conversations.';
 export const memoryFilterCount = (shown, total) => `${shown} of ${total} shown.`;
 
-function memorySource(e, titles, now) {
+// Where a memory came from, in plain words, and true in every case (F-038; ADR §5): only what a
+// record Nova keeps says. `o` is what the view was sent beside the rows: conversation titles, device
+// names from the registry, and capture's promotion rows per memory (src/memory.js, originsOf).
+const NO_SOURCE = 'Nova cannot show where this came from yet.';
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const deviceWords = (o, id) => (o.devices?.[id] ? `“${esc(clip(o.devices[id], 40))}”` : null);
+
+export function memoryOrigin(e, o = {}) {
+  const from = typeof e.from === 'string' ? e.from : '';
+  if (e.by === 'hand') return { kind: 'hand', words: 'written into MEMORY.md by hand' };
+  if (from.startsWith('capture:')) {
+    const c = o.captured?.[e.id];
+    const on = (c?.devices ?? []).map((d) => deviceWords(o, d)).filter(Boolean);
+    const what = c?.count ? `from ${plural(c.count, 'captured item', 'captured items')}` : 'from captured items';
+    return { kind: 'capture', words: `${what}${on.length ? ` on ${on.join(' and ')}` : ''}` };
+  }
+  const device = from.startsWith('device:') ? from.slice(7) : e.device;
+  if (device) {
+    const name = deviceWords(o, device);
+    return { kind: 'device', words: name ? `sent by your device ${name}` : 'sent by a device that is no longer paired' };
+  }
+  if (from.startsWith('imported from ')) return { kind: 'import', words: esc(clip(from, 120)) };
+  if (from) {
+    const [sid, turn] = from.split('/');
+    const title = o.titles?.[sid];
+    if (title) return { kind: 'conversation', words: `from <a class="memory-from" href="/c/${esc(sid)}${turn ? `#t-${esc(turn)}` : ''}">“${esc(clip(title, 48))}”</a>`, dated: true };
+    return { kind: 'unknown', words: NO_SOURCE };
+  }
+  // The person's own edit with no source says so below; a write of Nova's with none can't be traced.
+  if (e.by === 'nova') return { kind: 'unknown', words: NO_SOURCE };
+  return { kind: 'none', words: '' };
+}
+
+// F-038: a memory Nova wrote that the person hasn't checked says so, quietly, on its own row. No
+// count, badge or prompt anywhere else (owner ruling on F-034: review surfaces in Memory and the digest).
+export const unchecked = (e) => e.state === 'unreviewed' && e.by !== 'hand' && e.by !== 'you';
+
+function memorySource(e, o, now) {
   const when = (iso) => shortDay(new Date(iso), now).replace(/^(Today|Yesterday)$/, (w) => w.toLowerCase());
   const bits = [];
   if (e.time) bits.push(esc(e.time));
-  if (e.by === 'hand') bits.push('written into MEMORY.md by hand');
-  else if (e.from) {
-    const [sid, turn] = e.from.split('/');
-    const title = titles?.[sid];
-    // Only a matched conversation is named. Anything else (captured items, a device, a conversation
-    // Nova has no title for) is not guessed at (F-062, F-038): the sentence is about this screen.
-    bits.push(title
-      ? `from <a class="memory-from" href="/c/${esc(sid)}${turn ? `#t-${esc(turn)}` : ''}">“${esc(clip(title, 48))}”</a>${e.at && !e.time ? `, ${esc(when(e.at))}` : ''}`
-      : 'Nova cannot show where this came from yet.');
-  }
+  const origin = memoryOrigin(e, o);
+  if (origin.words) bits.push(`${origin.words}${origin.dated && e.at && !e.time ? `, ${esc(when(e.at))}` : ''}`);
   if (e.by === 'you' && e.updated) bits.push(`edited by you ${esc(when(e.updated))}`);
   else if (e.updated) bits.push(`corrected ${esc(when(e.updated))}`);
+  if (unchecked(e)) bits.push('<span class="memory-unchecked">Not yet checked</span>');
   return bits.join(' · ');
 }
 
-function memoryItem(e, titles, now) {
+function memoryItem(e, o, now) {
+  const confirm = unchecked(e) ? '<button type="button" class="act" data-action="confirm-memory" aria-label="Confirm this is right">Confirm</button>' : '';
   return `<li class="memory-item" id="m-${esc(e.id)}" data-id="${esc(e.id)}" tabindex="0">
   <p class="memory-text">${esc(e.text)}</p>
-  <p class="memory-source">${memorySource(e, titles, now)}</p>
+  <p class="memory-source">${memorySource(e, o, now)}</p>
   <div class="memory-actions">
-    <button type="button" class="act" data-action="edit-memory" aria-label="Edit">Edit</button>
+    ${confirm}<button type="button" class="act" data-action="edit-memory" aria-label="Edit">Edit</button>
     <button type="button" class="act" data-action="forget-memory" aria-label="Forget">Forget</button>
   </div>
 </li>`;
@@ -565,7 +596,7 @@ export function renderMemory(data, now = new Date()) {
     return `<div class="empty memory-empty"><p class="empty-date">What Nova knows</p><p class="empty-line">Nothing kept yet.</p>
 <p class="memory-lede">As you talk, Nova keeps what lasts here: facts about you, your preferences, decisions and commitments. You can change or forget any of it.</p>${act}</div>${held}`;
   }
-  const titles = data.titles ?? {};
+  const origins = { titles: data.titles ?? {}, devices: data.devices ?? {}, captured: data.captured ?? {} };
   // “Nova reads this before every reply” is backed by the eval claim.memory-recalled-next-conversation (tests/evals/tasks/claims.ts).
   const out = [`<header class="memory-intro"><p class="empty-date">What Nova knows</p>
 <p class="memory-lede">Nova reads this before every reply. Change anything, or forget it.</p></header>`];
@@ -586,14 +617,14 @@ export function renderMemory(data, now = new Date()) {
     const hid = `ms-${s.title.toLowerCase().replace(/\W+/g, '-')}`;
     out.push(`<section class="memory-section" aria-labelledby="${hid}"><h2 class="memory-heading" id="${hid}">${esc(s.title)}</h2>
 ${KIND_NOTES[s.title] ? `<p class="memory-kind">${KIND_NOTES[s.title]}</p>` : ''}
-${s.entries.length ? `<ul class="memory-list">${s.entries.map((e) => memoryItem(e, titles, now)).join('')}</ul>` : '<p class="memory-none">Nothing yet.</p>'}</section>`);
+${s.entries.length ? `<ul class="memory-list">${s.entries.map((e) => memoryItem(e, origins, now)).join('')}</ul>` : '<p class="memory-none">Nothing yet.</p>'}</section>`);
   }
   if (days.length) {
     out.push(`<section class="memory-section" aria-labelledby="ms-days"><h2 class="memory-heading" id="ms-days">Day notes</h2>
 <p class="memory-kind">Detail from each day. Nova looks here when a message calls for it.</p>
 ${days.map((d) => {
     const [y, m, dd] = d.day.split('-').map(Number);
-    return `<h3 class="memory-day">${esc(longDate(new Date(y, m - 1, dd), now))}</h3><ul class="memory-list">${d.entries.map((e) => memoryItem(e, titles, now)).join('')}</ul>`;
+    return `<h3 class="memory-day">${esc(longDate(new Date(y, m - 1, dd), now))}</h3><ul class="memory-list">${d.entries.map((e) => memoryItem(e, origins, now)).join('')}</ul>`;
   }).join('')}</section>`);
   }
   return out.join('\n');

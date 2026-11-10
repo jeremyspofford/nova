@@ -35,19 +35,17 @@ const entry = (id, text, extra = {}) => ({ id, text, time: null, from: null, at:
 const data = (entries, more = {}) => ({ sections: [{ title: 'Facts', entries }], days: [], titles: { s1: 'The kitchen shelf' }, ...more });
 const sourceOf = (html, id) => new RegExp(`id="m-${id}"[\\s\\S]*?<p class="memory-source">([\\s\\S]*?)</p>`).exec(html)?.[1] ?? null;
 
-test('the source line: a matched conversation links to its turn; anything unmatched is not guessed at', () => {
+// Slice 1a's rule, kept: no row names a conversation it didn't match. F-038 (tests/memory-origin.test.js)
+// then names captured items, devices and imports truly, so this checks only what 1a settled.
+test('the source line: a matched conversation links to its turn; an unmatched one is not guessed at', () => {
   const html = renderMemory(data([
     entry('matched', 'Shelf at eye level.', { from: 's1/k1' }),
     entry('hand', 'Written by hand.', { by: 'hand' }),
-    entry('capture', 'From a screenshot.', { from: 'capture:ev1,ev2' }),
-    entry('device', 'From the phone.', { from: 'device:phone-1' }),
     entry('gone', 'From a conversation Nova has no title for.', { from: 's9/k2' }),
-    entry('none', 'No source at all.'),
   ]), NOW);
   assert.match(sourceOf(html, 'matched'), /from <a class="memory-from" href="\/c\/s1#t-k1">“The kitchen shelf”<\/a>/);
   assert.equal(sourceOf(html, 'hand'), 'written into MEMORY.md by hand');
-  for (const id of ['capture', 'device', 'gone']) assert.equal(sourceOf(html, id), 'Nova cannot show where this came from yet.', id);
-  assert.equal(sourceOf(html, 'none'), '', 'no source, no line words, as before');
+  assert.equal(sourceOf(html, 'gone'), 'Nova cannot show where this came from yet.');
   assert.doesNotMatch(html, /from a conversation/, 'no row says "from a conversation" without a matched one');
 });
 

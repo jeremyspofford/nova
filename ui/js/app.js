@@ -1123,6 +1123,17 @@ async function forgetMemory(item) {
   }
 }
 
+// F-038: the person says a memory Nova wrote is right (the core's confirm route). Its "Not yet
+// checked" goes; focus stays on the row.
+async function confirmMemory(item) {
+  try {
+    await post(`/api/v1/memory/${encodeURIComponent(item.dataset.id)}/confirm`);
+    await loadMemory();
+    document.getElementById(item.id)?.focus({ preventScroll: true });
+    toast('Confirmed.');
+  } catch (e) { toast(e.message); }
+}
+
 async function undoForget(items) {
   try {
     await post('/api/memory/restore', { items });
@@ -1164,6 +1175,7 @@ el.memory.addEventListener('click', (e) => {
   if (b?.dataset.action === 'keep-candidate' || b?.dataset.action === 'drop-candidate') return decideCandidate(b);
   if (b?.dataset.action === 'edit-memory') editMemory(item);
   else if (b?.dataset.action === 'forget-memory') forgetMemory(item);
+  else if (b?.dataset.action === 'confirm-memory') confirmMemory(item);
   else if (b?.dataset.action === 'retry-memory') loadMemory();
   else if (item && !item.dataset.candidate && e.target.closest('.memory-text')) editMemory(item);
 });

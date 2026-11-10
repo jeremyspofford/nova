@@ -442,6 +442,7 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 .memory-item + .memory-item { margin-top: 1px; }
 .memory-text { cursor: text; overflow-wrap: anywhere; }
 .memory-source { margin-top: var(--space-1); font: var(--type-weight-regular) var(--type-small)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.memory-unchecked { color: var(--text-secondary); font-style: italic; }
 .memory-from { color: inherit; text-decoration: underline; text-decoration-color: var(--border-subtle); text-underline-offset: 3px; }
 .memory-from:hover { text-decoration-color: var(--accent-primary); }
 .memory-actions {

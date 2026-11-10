@@ -116,8 +116,10 @@ const usedSkill = {
 };
 const memorySample = {
   titles: { '2026-10-21-aaaaaa': 'Morning plan' },
+  devices: { d1: 'Hall tablet', d2: 'Studio laptop' },
+  captured: { m00000006: { count: 2, devices: ['d2'] } },
   sections: [
-    { title: 'Facts', entries: [{ id: 'm00000001', text: 'The spring project starts on the first Monday of March.', from: '2026-10-21-aaaaaa/a', at: t0.toISOString(), by: 'nova' }] },
+    { title: 'Facts', entries: [{ id: 'm00000001', text: 'The spring project starts on the first Monday of March.', from: '2026-10-21-aaaaaa/a', at: t0.toISOString(), by: 'nova', state: 'unreviewed' }, { id: 'm00000006', text: 'The boiler was serviced in October.', from: 'capture:e1,e2', at: t0.toISOString(), by: 'nova', state: 'confirmed' }, { id: 'm00000007', text: 'The shed key hangs on the blue hook.', from: 'device:d1', at: t0.toISOString(), by: 'nova', state: 'confirmed' }] },
     { title: 'Preferences', entries: [{ id: 'm00000002', text: 'Takes coffee with oat milk.', from: '2026-10-21-aaaaaa/a', at: t0.toISOString(), updated: t0.toISOString(), by: 'nova' }, { id: 'h00000003', text: 'Short replies before 9am.', by: 'hand' }] },
     { title: 'Decisions', entries: [] },
     { title: 'Commitments', entries: [{ id: 'm00000004', text: 'Nova drafts the migration PR description on Thursday.', at: t0.toISOString(), updated: t0.toISOString(), by: 'you' }] },

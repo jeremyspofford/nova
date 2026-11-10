@@ -539,7 +539,42 @@ function recordEntry({ r, root }) {
     id: r.id, text: oneLine(r.content), time: null, from: own ?? root.source ?? null, at: root.observed_at,
     updated: r.supersedes ? r.created_at : null,
     by: r.recorded_by !== 'person' ? 'nova' : r.supersedes || r.source ? 'you' : 'hand',
+    // F-038: whether the person has checked it (the store's user_state), and the device that wrote
+    // it when one did (a note a device sent is recorded_by "device:<id>").
+    state: r.user_state ?? null,
+    device: typeof r.recorded_by === 'string' && r.recorded_by.startsWith('device:') ? r.recorded_by.slice(7) : null,
+    root: root.id,
   };
+}
+
+// F-038: what the Memory view needs to say where its records came from, read from the stores Nova
+// already keeps: each device's name from the device registry, and for a memory made from captured
+// items, how many and on which devices, from its promotion rows (never from the text of its
+// source, which is a copy). `deviceName(id)` is null for a device no longer on the registry;
+// `promotions(memoryId)` is capture's rows for one memory (src/core/capture/capture.ts).
+export function originsOf(read, { deviceName, promotions }) {
+  const devices = {};
+  const captured = {};
+  const name = (id) => {
+    if (!id || id in devices) return;
+    const n = deviceName(id);
+    if (n) devices[id] = n;
+  };
+  for (const s of read.sections ?? []) {
+    for (const e of s.entries) {
+      if (e.device) name(e.device);
+      if (typeof e.from === 'string' && e.from.startsWith('device:')) name(e.from.slice(7));
+      if (typeof e.from === 'string' && e.from.startsWith('capture:')) {
+        let rows = [];
+        try { rows = promotions(e.root ?? e.id) ?? []; } catch { rows = []; }
+        const on = [...new Set(rows.map((r) => r.device_id).filter(Boolean))];
+        for (const d of on) name(d);
+        captured[e.id] = { count: rows.length, devices: on };
+      }
+    }
+  }
+  for (const d of read.days ?? []) for (const e of d.entries) if (typeof e.from === 'string' && e.from.startsWith('device:')) name(e.from.slice(7));
+  return { devices, captured };
 }
 
 // A record as a MEMORY.md line. Low confidence is said, so it isn't taken as fact.
