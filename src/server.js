@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { ConfigError, loadConfig, ollamaUrlFrom } from './config.js';
 import { ensureGit, seedHome } from './home.js';
 import { SessionStore, validId } from './sessions.js';
+import { originsOf } from './memory.js';
 import { Runner, BusyError } from './runner.js';
 import { SkillError } from './skills.js';
 import { GmailError } from './connectors/gmail.js';
@@ -426,7 +427,13 @@ export function createNova(config = loadConfig(), deps = {}) {
       if (req.method === 'GET' && !id) {
         // A forget waiting for the person names the memory it would forget.
         const candidates = core.ingest.candidates().map((c) => (c.op === 'forget' && c.target ? { ...c, target_text: memory.record(c.target)?.content ?? null } : c));
-        return json(res, 200, { ...memory.read(), titles: titles(), candidates });
+        const read = memory.read();
+        // F-038: device names and capture provenance, from the device registry and capture's rows.
+        const origins = originsOf(read, {
+          deviceName: (d) => core.mesh.devices.find(d)?.name ?? null,
+          promotions: (m) => core.capture.promotions(m),
+        });
+        return json(res, 200, { ...read, titles: titles(), candidates, ...origins });
       }
       if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
       if (id === 'candidates' && action && (sub === 'keep' || sub === 'drop')) {

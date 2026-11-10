@@ -111,7 +111,8 @@ test('memory filter: held items stay and are not counted; day notes filter by da
   await page.goto(`${server!.m.base}/memory`);
   await settled(page, 'memory');
 
-  assert.equal(await page.$eval('#m-m1 .memory-source', (e) => e.textContent), 'Nova cannot show where this came from yet.');
+  // F-038 names captured items truly (no count: this stub sends no promotion rows); 1a only stopped the guess.
+  assert.equal(await page.$eval('#m-m1 .memory-source', (e) => (e.textContent ?? '').trim()), 'from captured items');
   assert.equal(await page.locator('#memory').getByText('from a conversation', { exact: false }).count(), 1, 'only the held item’s own words say it');
 
   await type(page, 'garlic');

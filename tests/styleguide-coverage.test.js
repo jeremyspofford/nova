@@ -23,7 +23,7 @@ const HELPERS = {
   'ui/js/view.js': {
     longDate: 'words', shortDay: 'words', exactTime: 'words', msgTime: 'words', toolLabel: 'words', toolState: 'logic', relWhen: 'words', took: 'words', daySentence: 'words',
     renderNotes: 'drawn inside renderTurn', collapseLines: 'logic', renderKept: 'drawn inside renderTurn', renderSkillNote: 'drawn inside renderTurn',
-    memoryMatch: 'logic: the Memory filter', renderBlocks: 'the thread, made of renderTurn', renderThread: 'the thread, made of renderTurn', memoryIndex: 'logic', activityEntry: 'drawn inside renderActivity',
+    memoryMatch: 'logic: the Memory filter', memoryOrigin: 'logic: where a memory came from, drawn inside renderMemory', renderBlocks: 'the thread, made of renderTurn', renderThread: 'the thread, made of renderTurn', memoryIndex: 'logic', activityEntry: 'drawn inside renderActivity',
   },
 };
 
