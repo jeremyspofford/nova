@@ -10,8 +10,9 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { generateDeviceKeys, CAPTURE_PERMISSIONS as HUB_CAPTURE_PERMISSIONS } from '../../src/core/index.ts';
-import { CAPTURE_PERMISSIONS, WORKLOAD_VERBS, Workloads, checkVerbRequest, commandProblem, verifyWorkload, type VerbResult } from '../../src/device/workloads.ts';
+import { generateDeviceKeys, sha256Hex, CAPTURE_PERMISSIONS as HUB_CAPTURE_PERMISSIONS } from '../../src/core/index.ts';
+import { createServer, type AddressInfo } from 'node:net';
+import { CAPTURE_PERMISSIONS, WORKLOAD_VERBS, Workloads, checkVerbRequest, commandProblem, sidePort, verifyWorkload, type VerbResult } from '../../src/device/workloads.ts';
 import { RUNTIME_CALLS } from '../../src/device/boot.ts';
 import { freePort, getJson, manifest, sign, standInAt, standInBytes } from '../support/workloads.ts';
 import { until } from './device-support.ts';
@@ -230,6 +231,98 @@ test('switch keeps the version before for one step back, and going back to it do
   } finally { await k.w.close(); }
 });
 
+// The range this OS hands out for a port-0 bind (its ephemeral range): Linux says so in /proc;
+// macOS and Windows default to 49152–65535.
+function ephemeral(): [number, number] {
+  try {
+    const [lo, hi] = readFileSync('/proc/sys/net/ipv4/ip_local_port_range', 'utf8').trim().split(/\s+/).map(Number);
+    if (lo && hi) return [lo, hi];
+  } catch { /* not Linux */ }
+  return [49152, 65535];
+}
+
+test('a copy started alongside gets a port the OS never hands to a port-0 bind, so nothing else is given it before it binds', async () => {
+  const port = await freePort();
+  const k = rig({ serve: () => sign(manifest({ device_id: DEVICE, port, alongside: 'shadow' }), hub) });
+  try {
+    assert.equal((await k.verb('install')).ok, true);
+    const r = await k.verb('start');
+    assert.equal(r.ok, true, r.said);
+    const shadow = r.state.find((s) => s.service === 'stand-in')!.running[0]!;
+    assert.equal(shadow.role, 'shadow');
+    const p = shadow.ports.api!;
+    const [lo, hi] = ephemeral();
+    // A port picked by binding port 0 and closing it is one the OS hands the next port-0 bind on the
+    // machine; between that close and the workload's own bind, another program can be given it.
+    assert.ok(p < lo || p > hi, `the shadow’s port ${p} is outside the ephemeral range ${lo}–${hi}`);
+    assert.notEqual(p, port, 'never the stable port');
+    assert.equal((await until(() => getJson(`http://127.0.0.1:${p}/health`), (h) => h.status === 200, 10_000)).body.shadow, true);
+  } finally { await k.w.close(); }
+});
+
+test('a workload that keeps dying says why: its exit and the last of its stderr, bounded, one line, no control characters', async () => {
+  const port = await freePort();
+  // Any program a person adds: this one writes a lot, then the line that matters, with terminal
+  // colours, a carriage return, a bell and a right-to-left override in it, and exits 3.
+  const program = Buffer.from([
+    "process.stderr.write('noise '.repeat(20000) + '\\n');",
+    "process.stderr.write('\\x1b[31mError: listen EADDRINUSE: address already in use 127.0.0.1:' + process.env.PORT + '\\x1b[0m\\r\\n\\u202eevil\\u0007 \\u0000end\\n\\n');",
+    'process.exitCode = 3;',
+  ].join('\n'));
+  const m = manifest({ device_id: DEVICE, port, files: { 'crash.js': sha256Hex(program) }, command: ['node', 'crash.js'] });
+  const k = rig({ serve: () => sign(m, hub), file: () => program });
+  try {
+    assert.equal((await k.verb('install')).ok, true);
+    assert.equal((await k.verb('switch')).ok, true);
+    const st = await until(async () => k.w.state().find((s) => s.service === 'stand-in')!.running[0], (x) => !!x?.failed, 15_000);
+    const failed = st!.failed!;
+    assert.match(failed, /^It stopped three times in a minute, so the device agent stopped trying\./, 'the watchdog’s word is unchanged');
+    assert.match(failed, /exited with code 3/);
+    assert.match(failed, /Error: listen EADDRINUSE: address already in use 127\.0\.0\.1:\d+/);
+    assert.match(failed, /evil/);
+    assert.ok([...failed].every((ch) => { const c = ch.codePointAt(0)!; return c >= 0x20 && !(c >= 0x7f && c <= 0x9f) && ![0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069].includes(c); }), `no control or direction characters: ${JSON.stringify(failed)}`);
+    assert.doesNotMatch(failed, /\[31m|\[0m/, 'no terminal colour codes');
+    assert.ok(failed.length <= 500, `bounded: ${failed.length} characters`);
+    // The hub hears the same: a probe of a held copy answers with it.
+    assert.equal((await k.verb('probe')).said, failed);
+  } finally { await k.w.close(); }
+});
+
+test('a workload whose port another program holds says so, in Node’s own words, without its stack', async () => {
+  const held = createServer();
+  await new Promise<void>((r) => held.listen(0, '127.0.0.1', r));
+  const port = (held.address() as AddressInfo).port;
+  const k = rig({ serve: () => sign(manifest({ device_id: DEVICE, port }), hub) });
+  try {
+    assert.equal((await k.verb('install')).ok, true);
+    assert.equal((await k.verb('switch')).ok, true);
+    const st = await until(async () => k.w.state().find((s) => s.service === 'stand-in')!.running[0], (x) => !!x?.failed, 15_000);
+    assert.match(st!.failed!, new RegExp(`exited with code 1 and wrote: “.*EADDRINUSE.*127\\.0\\.0\\.1:${port}.*”\\.$`));
+    assert.doesNotMatch(st!.failed!, /\| at |Node\.js v\d/, 'stack frames and Node’s version line are left out');
+  } finally { await k.w.close(); held.close(); }
+});
+
+test('the port for a copy alongside skips what is held, what a manifest names, and Linux’s ephemeral range', async () => {
+  const held = createServer();
+  const [lo, hi] = ephemeral();
+  // A port in 20000–32000 this test holds (bound now, so it is free of other programs too).
+  let heldPort = 0;
+  for (let p = 20_000 + Math.floor(Math.random() * 10_000); !heldPort; p++) {
+    heldPort = await new Promise<number>((r) => { held.once('error', () => r(0)); held.listen(p, '127.0.0.1', () => r(p)); });
+  }
+  try {
+    const named = heldPort + 1;
+    const seq = [heldPort, named, heldPort + 2];
+    const random = () => (seq.length ? (seq.shift()! - 20_000) / 12_000 + 1e-9 : Math.random());
+    assert.equal(await sidePort(new Set([named]), random), heldPort + 2);
+    // Every pick is in 20000–32000 and out of this OS’s port-0 range.
+    for (let i = 0; i < 20; i++) {
+      const p = await sidePort(new Set());
+      assert.ok(p >= 20_000 && p < 32_000 && (p < lo || p > hi), `${p} (ephemeral ${lo}–${hi})`);
+    }
+  } finally { held.close(); }
+});
+
 test('closing during a switch (shut down, revoked) leaves nothing running', async () => {
   const port = await freePort();
   const versions: Record<string, ReturnType<typeof manifest>> = { '1.0.0': manifest({ device_id: DEVICE, port }), '2.0.0': manifest({ device_id: DEVICE, port, version: '2.0.0' }) };
@@ -256,7 +349,8 @@ test('Decision 1 in the code: only the five verbs start anything, and the captur
   // In the boot agent's workload code, the one spawn is the start of a verified slot's own command.
   const w = src('workloads.ts');
   assert.equal([...w.matchAll(/\bspawn\(/g)].length, 1);
-  assert.match(w, /start: \(\) => group\(spawn\(file, args, \{ cwd: slot, env, stdio: 'ignore', detached: true \}\)/);
+  // No stdin, no stdout; stderr only, read into a bounded tail (the reason a crashing copy gives).
+  assert.match(w, /start: \(\) => group\(spawn\(file, args, \{ cwd: slot, env, stdio: \['ignore', 'ignore', 'pipe'\], detached: true \}\)/);
   assert.doesNotMatch(w, /shell: true|execSync|exec\(/);
 });
 
