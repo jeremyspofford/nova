@@ -9,6 +9,7 @@ import type { Log } from '../log.ts';
 import type { MeshIdentity } from './identity.ts';
 import { checkPurposes, defaultPurposes, purposeChange, purposeWords, type Purpose, type PurposeChange } from './purposes.ts';
 import { freshTime, keyFingerprint, sessionMessage, signRoster, verifyDeviceSignature, type Roster, type RosterMember, type SignedRoster } from './wire.ts';
+import { deviceText } from './device-text.ts';
 
 export const KINDS = ['browser', 'phone', 'computer', 'standby'] as const;
 export type Kind = (typeof KINDS)[number];
@@ -54,8 +55,9 @@ const fromRow = (r: Row): Device => ({ ...r, capabilities: JSON.parse(r.capabili
 const tokenHash = (token: string) => createHash('sha256').update(`nova-session\0${token}`, 'utf8').digest('hex');
 
 export function cleanName(v: unknown, what = 'name'): string {
-  // Control characters out, spaces collapsed: a name is shown on other screens.
-  const s = typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim() : '';
+  // Escapes, control and format characters (bidi overrides) out, spaces collapsed: a name is shown on
+  // other screens, and a joining device chooses its own (device-text.ts).
+  const s = typeof v === 'string' ? deviceText(v).replace(/\s+/g, ' ').trim() : '';
   if (!s) throw new CoreError('validation', `A ${what} is required.`);
   if (s.length > 60) throw new CoreError('validation', `A ${what} can be up to 60 characters.`);
   return s;

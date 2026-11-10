@@ -14,6 +14,7 @@ import type { Log } from '../log.ts';
 import type { MeshIdentity } from './identity.ts';
 import { SlidingWindowLimiter } from './limiter.ts';
 import { cleanName, KINDS, type Device, type Devices, type Kind } from './devices.ts';
+import { deviceText } from './device-text.ts';
 import { allowedPurposes, checkPurposes, defaultPurposes, fixedPurposes, type Purpose } from './purposes.ts';
 import {
   PAIRING_CODE_TTL_MS, ed25519PublicKey, freshTime, keyFingerprint, newPairingCode, newPairingNonce, normalizePairingCode,
@@ -169,7 +170,7 @@ export class Enrollment extends EventEmitter {
     if (!KINDS.includes(kind)) problems.push(`claims.kind must be one of ${KINDS.join(', ')}.`);
     let name = '';
     try { name = cleanName(claims.name, 'device name'); } catch (e) { problems.push((e as Error).message); }
-    const platform = typeof claims.platform === 'string' ? claims.platform.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60) : '';
+    const platform = typeof claims.platform === 'string' ? deviceText(claims.platform, 60).trim() : '';
     const caps = claims.capabilities ?? [];
     if (!Array.isArray(caps) || caps.length > 32 || !caps.every((c) => typeof c === 'string' && CAPABILITY.test(c))) problems.push('claims.capabilities must be up to 32 short names.');
     // What it is for (M10f): what the device asks; the person decides on the hub's approval screen.

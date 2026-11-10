@@ -26,6 +26,7 @@ import type { Verifier } from '../verify.ts';
 import { isObj, reportOf, type Brief, type PrivacyMode } from '../envelope.ts';
 import type { Worker } from '../workers.ts';
 import type { Device, Devices } from '../mesh/devices.ts';
+import { deviceReport, deviceText } from '../mesh/device-text.ts';
 import {
   canonicalJson, captureBatchMessage, captureItemDigest, rawManifestMessage, sha256Hex, tombstoneAckMessage, verifyDeviceSignature,
   type CaptureBatchManifest, type RawManifest,
@@ -108,7 +109,7 @@ export class CaptureSync {
     if (man.v !== 1 || typeof man.batch_id !== 'string' || !ID.test(man.batch_id) || typeof man.device_id !== 'string' || !Array.isArray(man.items)) refuse('its manifest isn’t one Nova reads.');
     // Whose it says it is: an enrolled device, trusted, and the one whose session sent it.
     const claimed = this.#o.devices.find(man.device_id);
-    if (!claimed) refuse(`it names a device Nova doesn’t know (${man.device_id.slice(0, 40)}).`);
+    if (!claimed) refuse(`it names a device Nova doesn’t know (${deviceText(man.device_id, 40)}).`);
     if (claimed!.trust !== 'trusted') refuse(`it is from ${claimed!.name}, which was revoked.`);
     if (claimed!.id !== session.id) refuse(`it says it is from ${claimed!.name}, but came over ${session.name}’s session.`);
     let ok = false;
@@ -129,12 +130,14 @@ export class CaptureSync {
     const sync = this.syncAllowed();
     if (!sync.allowed) throw new CoreError('conflict', `Not kept: ${sync.why}`);
 
+    // Its source's name is the device's word (signed, so checked first, then cleaned like any report).
+    const source = deviceText(String(man.source), 40);
     const at = this.#o.now().toISOString();
     const results: { id: string; status: 'kept' | 'duplicate' | 'not_kept'; reason: string | null }[] = [];
     let newest: string | null = null;
     this.#o.db.tx(() => {
       this.#o.db.run('INSERT OR IGNORE INTO capture_batch (id, device_id, source, seq_from, seq_to, items, manifest_sha256, signature, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        man.batch_id, session.id, String(man.source).slice(0, 40), man.seq_from, man.seq_to, list.length, sha256Hex(canonicalJson(man)), body.signature as string, at);
+        man.batch_id, session.id, source, man.seq_from, man.seq_to, list.length, sha256Hex(canonicalJson(man)), body.signature as string, at);
       for (const raw of list as Record<string, unknown>[]) {
         const kind = String(raw.kind) as Kind;
         if (!(KINDS as readonly string[]).includes(kind)) { results.push({ id: String(raw.id), status: 'not_kept', reason: `kind must be one of ${KINDS.join(', ')}.` }); continue; }
@@ -142,7 +145,7 @@ export class CaptureSync {
         const r = this.#o.capture.fromSpoke(session, {
           external_id: String(raw.id), kind, at: String(raw.at), ended_at: str(raw.ended_at), app: str(raw.app), window_title: str(raw.window_title), url: str(raw.url), text: str(raw.text),
           provenance: {
-            path: 'capture-sync', device_id: session.id, device_name: session.name, source: String(man.source).slice(0, 40), seq: raw.seq, batch_id: man.batch_id,
+            path: 'capture-sync', device_id: session.id, device_name: session.name, source, seq: raw.seq, batch_id: man.batch_id,
             device_time: str(raw.at), sent_at: str(man.sent_at), verified: 'the device’s Ed25519 key, against its enrolled record',
           },
         });
@@ -159,7 +162,8 @@ export class CaptureSync {
   }
 
   // A device that can't send says what waits (no content: a count and why).
-  status(device: Device, body: Record<string, unknown>): { ok: true } {
+  status(device: Device, report: Record<string, unknown>): { ok: true } {
+    const body = deviceReport(report);
     const queued = Math.max(0, Math.min(10_000_000, Number(body.queued) || 0));
     const paused = typeof body.paused === 'string' ? body.paused.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 300) : null;
     const at = this.#o.now().toISOString();
