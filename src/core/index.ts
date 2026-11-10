@@ -163,7 +163,7 @@ export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries, supervisorResetPe
 export { HOME_MARK, ensureMark, unsafeHome } from './resilience/home-mark.ts';
 export { alive, makeScratch, dropScratch } from './resilience/scratch.ts';
 export { freePort } from './coding/preview.ts';
-export { restoreBackup, loadMigrations } from './db.ts';
+export { restoreBackup, loadMigrations, UpgradeError } from './db.ts';
 // Checkpoints (M7 amendment §1): the supervisor takes one before a release switch on the stopped
 // home; the server applies a staged restore before anything opens the home.
 export { takeCheckpoint, listCheckpoints, finishStaged, stagedPending, KEEP_AUTO } from './resilience/checkpoints.ts';
@@ -307,10 +307,17 @@ export function createCore(o: CoreOptions) {
   const db = new Db(join(o.home, 'nova.db'));
   // An automatic checkpoint before a database upgrade, beside the pre-upgrade copy: one that can't
   // be taken stops the upgrade (and so the start), with the reason.
-  const migration = db.migrate({
-    backupDir: join(o.home, 'backups'), now,
-    ...(o.sandbox ? {} : { before: (from: number) => { takeCheckpoint({ home: o.home, db, kind: 'auto', reason: `Before upgrading the database from version ${from}`, version: o.version, now, ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}) }); } }),
-  });
+  let migration: ReturnType<Db['migrate']>;
+  try {
+    migration = db.migrate({
+      backupDir: join(o.home, 'backups'), now,
+      ...(o.sandbox ? {} : { before: (from: number) => { takeCheckpoint({ home: o.home, db, kind: 'auto', reason: `Before upgrading the database from version ${from}`, version: o.version, now, ...(o.checkpoints?.free ? { free: o.checkpoints.free } : {}) }); } }),
+    });
+  } catch (e) {
+    // A failed upgrade left the database as it was (db.ts): nothing else opens it.
+    db.close();
+    throw e;
+  }
   const log = new Log(db, join(o.home, 'logs', 'nova.log'), now);
   // What a staged restore couldn't do (or did, with a full disk) is the person's to know.
   for (const p of staged?.problems ?? []) log.problem('resilience', p);

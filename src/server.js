@@ -23,7 +23,7 @@ import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
 import { toolTier } from '../ui/js/status.js';
-import { APPROVER_ONLY, BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, allows, createCore, ensureMark, finishReset, fromBrowserTask, htmlSecurityHeaders, ipcBroker, ipcLink, nonceStyles, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
+import { APPROVER_ONLY, BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, UpgradeError, allows, createCore, ensureMark, finishReset, fromBrowserTask, htmlSecurityHeaders, ipcBroker, ipcLink, nonceStyles, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 import { shellHash, withShellHash } from './sw-version.js';
 
@@ -692,7 +692,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const context = await ipcBroker(process);
     nova = createNova(undefined, { broker: context ? new BrokerClient(context) : null });
   } catch (e) {
-    if (!(e instanceof ConfigError)) throw e;
+    // A setting that can't work, or a database upgrade that couldn't finish: said in one plain line.
+    if (!(e instanceof ConfigError) && !(e instanceof UpgradeError)) throw e;
     console.error(`Nova didn't start: ${e.message}`);
     process.exit(1);
   }

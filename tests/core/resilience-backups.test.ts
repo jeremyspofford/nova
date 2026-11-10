@@ -167,3 +167,31 @@ test('a backup folder that isn’t there is refused, never created; the task fai
     await c.close();
   }
 });
+
+test('with no backup to fall back on, the backups check isn’t fine, and it never fails health for it (F-019)', async () => {
+  const w = world('nova-bk-none-');
+  const c = open(w.home);
+  try {
+    const none = c.health();
+    assert.equal(none.ok, true, 'nothing stops Nova');
+    assert.equal(none.checks.backups.ok, true);
+    assert.match(none.checks.backups.attention ?? '', /no backup folder is set/);
+    assert.match(none.checks.backups.detail, /nothing is backed up/);
+
+    c.resilience.setSettings({ target: w.target });
+    assert.match(c.health().checks.backups.attention ?? '', /nothing is backed up yet/);
+
+    c.resilience.nightly.run();
+    const after = c.health().checks.backups;
+    assert.equal(after.attention, undefined, 'a backup was made: fine');
+    assert.equal(after.encrypted, false);
+    assert.match(after.detail, /not encrypted/);
+
+    c.resilience.setSettings({ encrypted_target: w.second });
+    c.resilience.nightly.run();
+    assert.equal(c.health().checks.backups.encrypted, true);
+    assert.match(c.health().checks.backups.detail, /with an encrypted copy/);
+  } finally {
+    await c.close();
+  }
+});

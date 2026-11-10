@@ -182,7 +182,10 @@ can write; from this screen or a device that may approve) starts a nightly
 backup and a weekly restore drill, both in Automations. Each backup is a
 consistent copy of the database and your home's files, with a manifest of
 hashes, readable by you only; the vault's key and this computer's private keys
-are never in it. Add `"encrypted_target"` for an AES-256-GCM copy in a second
+are never in it. **The backup folder is not encrypted**: anyone who can read
+it can read your data, so keep it on a drive only you use. Until a backup
+folder is set and the first backup is made, Home and Health say nothing is
+backed up. Add `"encrypted_target"` for an AES-256-GCM copy in a second
 folder: the reply shows its **recovery key once**. Keep it somewhere other
 than this computer: with it the copy opens anywhere; without it the copy can't
 be opened if this computer is lost. `POST /api/v1/backups/recovery-key
