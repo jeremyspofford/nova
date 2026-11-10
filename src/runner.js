@@ -26,6 +26,10 @@ import { CORRECTION, Interstitial, SKILL_ID as IR_SKILL, UNBACKED as IR_UNBACKED
 
 const shortId = () => randomUUID().slice(0, 8);
 const hostOf = (u) => { try { return new URL(String(u)).hostname; } catch { return String(u ?? '').slice(0, 100); } };
+// The screens of memories made from capture (Runner.screenMemory): how many are kept, and how long
+// a held-back one stands before it is asked again.
+const MEMORY_SCREENS_KEPT = 500;
+const MEMORY_RESCREEN_MS = 60 * 60 * 1000;
 
 // The ingest gate (Amendment 2026-10-30-C Part 3). While a run has read outside content (its
 // taint), these steps never run on their own, whatever permissions.md says: each asks the person,
@@ -150,6 +154,7 @@ export class Runner extends EventEmitter {
     // own conversation is metered only. Without it, nothing here changes.
     this.caps = null;
     this.runTasks = new Map(); // sessionId → the ledger task its run is doing
+    this.memoryScreens = new Map(); // `${memory id}:${sha256 of its words}` → a capture memory's screen (screenMemory)
   }
 
   record(sessionId, ev) {
@@ -395,7 +400,9 @@ export class Runner extends EventEmitter {
       let streamed = '';
       // MEMORY.md may have been edited by hand since Nova last wrote it: take that in first.
       if (this.memory.records) this.memory.sync();
-      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, briefing, approvals: this.approvals, services: this.services, ...(this.identity ? { identity: this.identity.persona() } : {}) });
+      // Memories made from capture are screened before this call uses them (once each, cached).
+      const captured = run.helper ? null : await this.screenMemory(sessionId, tag, run);
+      const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, briefing, approvals: this.approvals, services: this.services, captured, ...(this.identity ? { identity: this.identity.persona() } : {}) });
       const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
       // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
       // hash, and where it went. Written before the call, so it exists even if the call fails.
@@ -1029,6 +1036,54 @@ export class Runner extends EventEmitter {
       run.taint.push(...taint);
       this.record(sessionId, { type: 'taint', ...tag, taint });
     }
+  }
+
+  // The memories made from capture (promote's source `capture:<ids>`, docs/plans/
+  // capture-screening-consumers.md, recall-path screening). A correction Nova made keeps its chain's
+  // origin; one the person made is their own words.
+  capturedMemories() {
+    const store = this.memory.store();
+    const fromCapture = (r) => typeof r?.source === 'string' && r.source.startsWith('capture:');
+    return this.memory.shown()
+      .filter(({ r, root }) => fromCapture(r) || (r.recorded_by !== 'person' && (fromCapture(root) || (!!r.supersedes && store.history(r.id).some(fromCapture)))))
+      .map(({ r }) => ({ id: r.id, text: String(r.content ?? '') }));
+  }
+
+  // A-005: what Capture took in is outside content, and a memory made from it reaches every prompt.
+  // Before a model call uses one, it is screened as capture-derived text. A block keeps it out of
+  // the prompt: the screen opens its Work Ledger entry, and the conversation records which memory
+  // was kept out (once a run). Anything else goes in as the screen's extract, marked as
+  // outside-derived memory (context.js memoryFile). The verdict is kept per memory and its words,
+  // so a long run screens each once; a held-back verdict is asked again after an hour, in case a
+  // trusted model has been set up since. A screen that fails keeps the memory out.
+  async screenMemory(sessionId, tag, run) {
+    if (!this.memory.records) return null;
+    let found;
+    try { found = this.capturedMemories(); } catch { return null; }
+    if (!found.length) return null;
+    const out = new Map();
+    const keptOut = [];
+    run.keptOut ??= new Set();
+    for (const m of found) {
+      const key = `${m.id}:${sha256(m.text)}`;
+      let v = this.memoryScreens.get(key);
+      if (v && v.verdict === 'quarantine' && Date.now() - v.at > MEMORY_RESCREEN_MS) v = null;
+      if (!v) {
+        try {
+          const s = await this.ingest.screen({ text: m.text, from: 'capture', source: { kind: 'ocr', origin: 'a memory made from capture', ref: m.id }, ...this.screenScope(sessionId, run) });
+          v = { screen: s.id, verdict: s.verdict, extract: s.extract, at: Date.now() };
+          this.memoryScreens.delete(key);
+          this.memoryScreens.set(key, v);
+          while (this.memoryScreens.size > MEMORY_SCREENS_KEPT) this.memoryScreens.delete(this.memoryScreens.keys().next().value);
+        } catch {
+          v = { screen: null, verdict: 'block', extract: '', at: Date.now() };
+        }
+      }
+      out.set(m.id, v);
+      if (v.verdict === 'block' && !run.keptOut.has(key)) { run.keptOut.add(key); keptOut.push({ id: m.id, screen: v.screen }); }
+    }
+    if (keptOut.length) this.record(sessionId, { type: 'memory_screen', ...tag, kept_out: keptOut });
+    return out;
   }
 
   // A report from a run that read outside content carries its taint, and the conversation it goes

@@ -142,7 +142,7 @@ export const grounded: Reply = (b) => {
   // What Nova keeps in memory (MEMORY.md, in the system prompt), where it shares words with the
   // question.
   const words = new Set((s.user.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((x) => !['what', 'where', 'when', 'which', 'about', 'there', 'have', 'does', 'your', 'that', 'this', 'with'].includes(x)));
-  const memory = /<file path="~\/MEMORY\.md">\n([\s\S]*?)\n<\/file>/.exec(s.system)?.[1] ?? '';
+  const memory = /<memory file="~\/MEMORY\.md">\n([\s\S]*?)\n<\/memory>/.exec(s.system)?.[1] ?? '';
   for (const line of memory.split('\n').filter((l) => /^- /.test(l.trim()))) {
     const hits = (line.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((x) => words.has(x)).length;
     if (hits >= 2) parts.push(`From memory: ${line.trim().replace(/^- /, '')}`);
