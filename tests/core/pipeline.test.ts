@@ -73,7 +73,7 @@ test('the ledger: one workstream per area, newest first; designs are designed, a
   assert.deepEqual(names, ['Models', 'UI rebuild', 'Passkeys'], 'newest area first, "(design)" folded into its area');
   const ui = v.workstreams.find((w) => w.name === 'UI rebuild')!;
   assert.deepEqual(ui.items.map((i) => [i.name, i.state]), [['The shell takes the look', 'merged'], ['A proposed look', 'designed']]);
-  assert.deepEqual(ui.items[0]!.evidence, { kind: 'ledger', path: 'docs/ledger/2026-11-07-ui-shell.md', title: 'The shell takes the look', date: '2026-11-07', changed: 'The shell takes the look.', now: 'see it.', unfinished: 'more.' });
+  assert.deepEqual(ui.items[0]!.evidence, { kind: 'ledger', path: 'docs/ledger/2026-11-07-ui-shell.md', title: 'The shell takes the look', date: '2026-11-07', changed: 'The shell takes the look.', now: 'see it.', unfinished: 'more.', url: 'https://github.com/jeremyspofford/nova/blob/main/docs/ledger/2026-11-07-ui-shell.md' });
   assert.equal(v.workstreams.find((w) => w.name === 'Models')!.items[0]!.state, 'designed', 'a headline that says "not built yet" is a design');
   assert.equal(v.workstreams.find((w) => w.name === 'Passkeys')!.items[0]!.state, 'progress', 'part 1 of 2, with no part 2 in the ledger');
   assert.equal(v.problems.length, 3, v.problems.join('\n'));
@@ -107,4 +107,48 @@ test('this repository: every item’s evidence is a file that exists here, and n
     assert.ok(STATES.includes(it.state));
   }
   assert.ok(v.counts.merged > 0);
+});
+
+// ---- A-080 ≡ F-048: state from what the records can show, and links that open them -----------------
+
+test('a gate evidence file that says the gate failed or passed in part is not merged; one that says passed is, and says emulated', () => {
+  const root = fixture();
+  const w = (p: string, text: string) => { mkdirSync(join(root, p, '..'), { recursive: true }); writeFileSync(join(root, p), text); };
+  w('docs/evidence/m1-gate.md', '# M1 gate — evidence\n\nRun on the hub.\n\n**Result:** failed: the restart drill timed out.\n');
+  w('docs/evidence/m3-gate.md', '# M3 gate — evidence\n\nResult: partial (emulated): two of three engines.\n');
+  w('docs/evidence/m2-gate.md', '# M2 gate — evidence\n\nResult: passed (emulated phones)\n');
+  const items = pipelineView(root).workstreams[0]!.items;
+  assert.deepEqual([find(items, 'M1').state, find(items, 'M1').evidence?.result], ['progress', 'failed'], 'a failed gate never counts as merged, though the ledger history names M1');
+  assert.match(find(items, 'M1').why, /says the gate failed/);
+  assert.equal(find(items, 'M3').state, 'progress');
+  assert.match(find(items, 'M3').why, /passed only in part/);
+  assert.equal(find(items, 'M2').state, 'merged');
+  assert.match(find(items, 'M2').why, /says the gate passed, on emulated devices/);
+});
+
+test('a ledger part that runs over several lines keeps every line', () => {
+  const root = fixture();
+  writeFileSync(join(root, 'docs', 'LEDGER.md'), [
+    '# Ledger', '', '## What changed (plain language)', '',
+    '**2026-10-30 · #213 · M1: the core, plainly**', '- What changed: a core.', '- What you can now do: chat.', '- Still unfinished: three things.', '  - the first;', '  - the second;', '  - the third.', '',
+  ].join('\n'));
+  assert.equal(find(pipelineView(root).workstreams[0]!.items, 'M1').evidence?.unfinished, 'three things. - the first; - the second; - the third.');
+});
+
+test('every record opens: a link to the file at the running commit (main without one), and a history entry\'s pull request', () => {
+  const root = fixture();
+  const items = (o?: { commit?: string | null }) => pipelineView(root, o).workstreams.flatMap((x) => x.items);
+  for (const it of items({ commit: 'c0ffee1234567890' })) if (it.evidence) assert.equal(it.evidence.url, `https://github.com/jeremyspofford/nova/blob/c0ffee1234567890/${it.evidence.path}`, it.id);
+  assert.equal(find(items(), 'M1').evidence?.url, 'https://github.com/jeremyspofford/nova/blob/main/docs/LEDGER.md');
+  assert.equal(find(items(), 'M1').evidence?.pull_url, 'https://github.com/jeremyspofford/nova/pull/213');
+  // A commit that isn't one is never put in a link.
+  assert.match(find(items({ commit: '../../evil' }), 'M1').evidence!.url!, /\/blob\/main\//);
+});
+
+test('this repository: no ledger entry for the owner\'s reaction, proposed, or not built yet is counted merged, and each carries its design note', () => {
+  const v = pipelineView(ROOT);
+  const ledgerItems = v.workstreams.filter((w) => w.source === 'ledger').flatMap((w) => w.items);
+  const designs = ledgerItems.filter((it) => /\b(not built yet|for (?:the )?owner(?:['’]s)? reaction|proposed for)\b/i.test(it.name));
+  assert.ok(designs.length >= 15, `the compositions and proposals are found (${designs.length})`);
+  for (const it of designs) assert.equal(it.state, 'designed', `${it.id}: ${it.name}`);
 });

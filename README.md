@@ -1,22 +1,53 @@
 # Nova
 
-Nova is a personal AI agent. It is built like Muse: a system prompt, standing
-markdown files, memory, and an agent loop with a few tools. Plain files are
-the only source of truth.
+Nova is a personal agent that runs on your own computer. You talk to it in
+chat; it keeps memory you can see and correct, runs schedules and skills,
+hands longer work to other AIs (a chat command, Claude Code, Codex, a local
+model through Ollama, n8n) as tasks that must bring back evidence, and lets
+your phone and other computers join it as one private system. It is local
+first: what leaves your computer depends on the privacy mode you choose, and
+each model call leaves a receipt.
 
-It is deliberately small. Each feature should be finished end to end before
-the next one starts. The build plan and its phases live outside this repo, in
-the project's `nova-harness-prompt.md`.
+The design it is built to is in [docs/builder-packet/](docs/builder-packet/START-HERE.md);
+what each merge changed is in [docs/ledger/](docs/ledger/README.md), and what
+is built, designed or not started is on the app's Where Nova stands page
+(`/pipeline`).
 
 ## Run it
 
-You need Node 26 or newer (`mise install` reads `mise.toml`) and the `claude` CLI on your PATH (or another agent command,
-see below).
+You need Node 26 or newer (`mise install` reads `mise.toml`).
 
 ```sh
 npm install
 npm start           # http://localhost:4317
 ```
+
+Open the address on this computer. Setup asks a few questions, among them
+which privacy mode to use (Settings › Privacy changes it later):
+
+- **Local-only** (recommended): model calls stay on your own devices.
+- **Local first**: Nova's own model work runs on your devices first, and the
+  cloud helps when they can't.
+- **Cloud allowed**: Nova may use cloud models when they're the better tool.
+
+**Chat needs a chat model, and the default is a cloud one.** Out of the box,
+chat runs the `claude` command (Claude Code, `agent_cmd` below), which counts
+as the cloud. Under Local-only Nova refuses to send it anything and says so in
+the conversation. To chat locally:
+
+1. Install [Ollama](https://ollama.com) on this computer (or on one of your
+   devices, given by IP address).
+2. In **Settings › Models**, take the model Nova recommends for thinking and
+   writing; it downloads with your OK.
+3. In **Settings › Providers**, open **Local model (Ollama or compatible)**,
+   set it to use Nova's local models (`reasoner`), turn it on, and choose it
+   for chat.
+
+To chat through the cloud instead, install and sign in to the `claude` CLI
+(or set another command, below) and choose Local first or Cloud allowed. Every
+chat turn then goes to that command, with your standing files (memory
+included), recent day notes, the conversation and any file Nova read, and each call leaves a receipt
+(`GET /api/v1/receipts`).
 
 For development:
 
@@ -25,15 +56,30 @@ npm run dev         # hot reload: CSS applies in place, anything else reloads
 npm run dev:follow  # the same, and fast-forwards this branch every 5 s
 ```
 
-Nova keeps your data in **`~/Nova`**: the standing files (`AGENTS.md`, `SOUL.md`,
-`IDENTITY.md`, `USER.md`, `MEMORY.md`), dated notes in `memory/`, its
-`workspace/`, and one JSONL log per conversation in `sessions/`. The folder is
-seeded from `templates/home/` on first run, and nothing is ever overwritten.
-It is a local git repository, with a commit after every reply, so its history
-is the audit trail (for conversations and standing files; memory, skills and
-sign-ins stay out). Back it up by putting it wherever you keep things that
-matter (a NAS, iCloud, an Obsidian vault). Set `NOVA_HOME` to move it.
-**Never point it inside this repo**, which is public.
+## Where your data lives
+
+Nova keeps your data in **`~/Nova`** (set `NOVA_HOME` to move it; **never
+point it inside this repo**, which is public):
+
+- `nova.db`, a SQLite database: the structured state. Tasks and their
+  evidence (the Work Ledger), your memory records, settings and privacy,
+  receipts, approvals, devices, decisions. Upgrades are forward-only and copy
+  the database first.
+- The standing files `AGENTS.md`, `SOUL.md`, `IDENTITY.md` and `USER.md`, which
+  go into every prompt, and `MEMORY.md`, which Nova writes from the memory
+  records in the database (an edit you make by hand is taken in at the next
+  start).
+- Day notes in `memory/`, one JSONL log per conversation in `sessions/`, the
+  `workspace/` (put notes to import in `workspace/import/`), `skills/`,
+  `schedules/`, and the vault (`vault/`, encrypted; its key is in the system
+  keychain if one answers, else `vault/key`).
+
+The folder is seeded from `templates/home/` on first run, and nothing is ever
+overwritten. It is a local git repository with a commit after every reply, so
+its history is the audit trail for conversations and standing files; memory,
+skills, sign-ins and captured originals stay out of it. Don't back it up by
+syncing the folder while Nova runs (a database copied mid-write can be
+broken): use Nova's own backups and restore, under Keep it running below.
 
 **Memory.** Nova keeps what lasts in `MEMORY.md` (facts, preferences,
 decisions, commitments) and day detail in `memory/YYYY-MM-DD.md`, written
@@ -130,6 +176,7 @@ Optional `nova.config.json` at the repo root (environment variables win). It is 
 | `port` | `NOVA_PORT` | `4317` |
 | `host` | `NOVA_HOST` | `127.0.0.1` |
 | `agent_cmd` | `NOVA_AGENT_CMD` | `claude -p …` (see `src/config.js`) |
+| `agent_egress` | `NOVA_AGENT_EGRESS` | none, which counts as `remote`: where the chat command sends what it is given (`none`, `local` or `remote`) |
 | `timezone` | `NOVA_TZ` | the system timezone |
 |  | `NOVA_IMAP_URL` | `imaps://imap.gmail.com:993` (tests point it at a stand-in) |
 | `mesh_url` | `NOVA_MESH_URL` | none: no other device can reach Nova |
@@ -145,10 +192,16 @@ Optional `nova.config.json` at the repo root (environment variables win). It is 
 |  | `NOVA_MODELS_WATCH_MS` | `15000`: how often work waiting on local capacity or the cloud budget is checked again |
 |  | `NOVA_CAPTURE_POLL_MS` | `10000`: how often the hub pulls a capture source that is on (Screenpipe). Capture itself is off until you turn a source on in Settings › Capture |
 
-`agent_cmd` is the one place a model is chosen. Nova writes the assembled
-system prompt to a file and substitutes its path for `{system_file}`, sends the
-conversation on stdin, and reads the reply from stdout, as plain text or as
-Claude Code's stream-json. Any command that does that works.
+`agent_cmd` is the chat command Nova uses until another chat model is chosen in
+Settings › Providers; it is not the only place a model is chosen (Settings ›
+Providers chooses chat, Settings › Models chooses Nova's own local models).
+Nova writes the assembled system prompt to a file and substitutes its path for
+`{system_file}`, sends the conversation on stdin, and reads the reply from
+stdout, as plain text or as Claude Code's stream-json. Any command that does
+that works. `agent_egress` is where that command sends what it is given: `none`
+(this computer), `local` (your own devices) or `remote` (a cloud service). Nova
+can't see where a command connects, so it takes your word for it; a command
+with no `agent_egress` counts as `remote`, and Local-only never starts it.
 
 ## Keep it running
 
@@ -351,6 +404,12 @@ the Playwright default.
 ```
 src/            server, runner (the agent loop), context assembly, tools, memory,
                 skills, schedules (cron, scheduler), connectors/ (Gmail)
+src/core/       the core: SQLite and its migrations, the Work Ledger, memory records,
+                receipts, providers, local models, the Decision Service, devices
+                (mesh), backups, approvals; its API is /api/v1
+src/broker/     the credential broker (docs/plans/vault-broker.md)
+src/supervisor/ keeps Nova running, deploys and rolls back releases
+src/device/     the agent a paired computer runs
 skills/         the skills Nova ships (SKILL.md playbooks)
 schedules/      the schedules Nova offers (the morning digest)
 connectors/     connector docs (CONNECTOR.md: capabilities, limits, auth)
@@ -360,7 +419,8 @@ ui/             the web UI: themes/ (token files only), styles/, js/
 scripts/        token lint, theme checker, browser walkthrough, scripted test model,
                 a stand-in Google for tests
 tests/          node:test suites
-docs/           ledger, phase reviews, screenshots
+docs/           builder-packet/ (the design), plans/, ledger/ and changelog/ (one file
+                per merge), evidence/ (gate evidence), restore.md, screenshots
 ```
 
 Themes are token files only (`ui/themes/*.css`). Components never hardcode a

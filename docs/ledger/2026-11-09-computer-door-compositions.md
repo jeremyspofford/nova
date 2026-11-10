@@ -1,4 +1,4 @@
-**2026-11-09 · UI rebuild · The Nova Computer door: compositions for the owner's reaction**
+**2026-11-09 · UI rebuild (design) · The Nova Computer door: compositions for the owner's reaction**
 - What changed: the design-first step of the wiring item "Nova Computer door". /styleguide?entry=computer-door, marked for the owner's reaction, has 15 frames built from the real model (src/core/computer): the door at rest, a workspace's access and limits, commands and their states, failures as the backend reports them, and phone and Duo cover layouts. Nothing is wired into the app.
 - What you can now do: react to where and how you'd reach Nova's computer before it's built.
 - Still unfinished: the wiring waits for the owner. Nova Computer is a local Docker workspace per project, with no terminal, screen, file browser or start/stop. Chat can't drive it, and GET /computer doesn't say what is running.

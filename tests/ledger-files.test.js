@@ -18,3 +18,15 @@ test('every ledger entry file is named by date and branch and has its four parts
     for (const part of PARTS) assert.ok(s.includes(`\n${part} `), `${f}: has "${part}"`);
   }
 });
+
+// A merge that ships no working capability says so in its area, "(design)" or "(ADR)", which Where
+// Nova stands reads (src/core/pipeline.ts): an entry whose headline says it is for the owner's
+// reaction, proposed, or not built yet must carry it (A-080, F-048).
+test('a design-only entry carries its area note', () => {
+  for (const f of readdirSync(DIR).filter((f) => f !== 'README.md')) {
+    const head = readFileSync(join(DIR, f), 'utf8').split('\n')[0];
+    const m = /^\*\*\d{4}-\d{2}-\d{2} · ([^·\n]+) · ([^\n]+)\*\*$/.exec(head);
+    if (!m || !/\b(not built yet|for (?:the )?owner(?:['’]s)? reaction|proposed for)\b/i.test(m[2])) continue;
+    assert.match(m[1], /\((?:[^)]*\b)?(design|ADR)\b[^)]*\)/i, `${f}: its headline says it is a design, so its area carries "(design)" or "(ADR)"`);
+  }
+});

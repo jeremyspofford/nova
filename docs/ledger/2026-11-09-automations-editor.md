@@ -1,4 +1,4 @@
-**2026-11-09 · UI rebuild · Automations rule editor: compositions for the owner's reaction**
+**2026-11-09 · UI rebuild (design) · Automations rule editor: compositions for the owner's reaction**
 - What changed: the design-first step of the wiring item "Automations rule editor (create/edit/fire/webhook token reveal)" (owner-priority-queue-2026-11-02.md item 4). /styleguide?entry=automations-editor, marked for the owner's reaction, has nine frames built from the real rule model (src/core/triggers.ts):
   - the list
   - empty

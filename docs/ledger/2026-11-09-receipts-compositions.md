@@ -1,4 +1,4 @@
-**2026-11-09 · UI rebuild · Receipts and egress viewer: compositions for the owner's reaction**
+**2026-11-09 · UI rebuild (design) · Receipts and egress viewer: compositions for the owner's reaction**
 - What changed: the design-first step of the wiring item "receipts / egress viewer". /styleguide?entry=receipts, marked for the owner's reaction, has seven frames built from the real receipt model (src/core/receipts.ts): the list by day with filters, one receipt, empty states, an honest coverage statement, and phone and Duo cover layouts. Nothing is wired into the app.
 - What you can now do: react to how Nova would show what it sent out, and see plainly what receipts do and don't cover.
 - Still unfinished: receipts cover model calls only. Web fetch and search, browser tasks, Gmail, Home Assistant, servers and network devices, code fetches, model downloads, sync between devices and work done inside tasks produce no receipt, because T4's single egress checkpoint isn't built. Receipts also store no size or tokens, and are never deleted.

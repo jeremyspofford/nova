@@ -1,4 +1,4 @@
-**2026-11-09 · UI rebuild · Home Assistant: compositions for the owner's reaction**
+**2026-11-09 · UI rebuild (design) · Home Assistant: compositions for the owner's reaction**
 - What changed: the design-first step of the wiring item "Home Assistant". /styleguide?entry=home-assistant, marked for the owner's reaction, has 16 frames built from the real connector (src/core/connectors/home-assistant.ts): connecting with an address and token, what Nova can see (state only), a change that asks first and one that confirms every time, disconnecting, each failure in the backend's own words, and phone and Duo cover layouts. Nothing is wired into the app.
 - What you can now do: react to how Nova reaches your home before the control surface is built.
 - Still unfinished: the wiring waits for the owner. No route lists services, Nova sees state without units or rooms, chat can't use Home Assistant, and scripts, scenes and automations are tier 2 even when they can unlock a door.
