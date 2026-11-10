@@ -8,10 +8,10 @@
 const VERSION = 'nova-shell-__SHELL_HASH__';
 const SHELL = [
   '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/mark-1024.webp',
-  '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css', '/styles/stage2.css', '/styles/palette.css', '/styles/status-icon.css',
+  '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css', '/styles/stage2.css', '/styles/palette.css', '/styles/status-icon.css', '/styles/compositions.css',
   '/js/app.js', '/js/core.js', '/js/shell.js', '/js/layout.js', '/js/nav.js', '/js/status.js', '/js/components.js',
   '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js', '/js/qr.js', '/js/device-key.js', '/js/takeover.js',
-  '/js/connections.js', '/js/sites.js', '/js/capture.js', '/js/models.js', '/js/approvals.js', '/js/changes.js', '/js/checkpoints.js', '/js/services.js', '/js/topology.js', '/js/topology-view.js', '/js/reset.js', '/js/forget-here.js', '/js/settings-ia.js', '/js/contrast.js', '/js/look.js', '/js/wait.js', '/js/skeleton.js', '/js/passkey.js', '/js/config.js', '/js/device-models.js', '/js/fit-engine.js', '/js/palette.js', '/js/about.js', '/js/status-icon.js',
+  '/js/connections.js', '/js/sites.js', '/js/capture.js', '/js/models.js', '/js/approvals.js', '/js/changes.js', '/js/checkpoints.js', '/js/services.js', '/js/topology.js', '/js/topology-view.js', '/js/reset.js', '/js/forget-here.js', '/js/settings-ia.js', '/js/contrast.js', '/js/look.js', '/js/wait.js', '/js/skeleton.js', '/js/passkey.js', '/js/config.js', '/js/device-models.js', '/js/fit-engine.js', '/js/palette.js', '/js/about.js', '/js/receipts.js', '/js/receipts-draw.js', '/js/status-icon.js',
 ];
 // Memory and context receipts are never kept here: a forgotten memory must not survive in a
 // cache (owner's standing order 4), so these are network-only.
@@ -34,7 +34,7 @@ const SHELL = [
 // So are approval tiers: a gate shown from a cache could look looser or stricter than it is.
 const NEVER = /^\/api\/(?:memory|health|v1\/memory|v1\/receipts|v1\/health|v1\/mesh|v1\/browser|v1\/vault|v1\/connectors|v1\/capture|v1\/models|v1\/changes|v1\/resilience|v1\/reset|v1\/services\/topology|v1\/diagnostics|v1\/version|v1\/changelog|v1\/pipeline|v1\/security|v1\/approvals)(?:\/|$)/;
 // Pages the app answers with its shell.
-const PAGES = /^\/(?:|chat|new|tasks|memory|automations|skills|schedules|activity|health|settings|capture|topology|about|changelog|pipeline|c\/[\w-]+)$/;
+const PAGES = /^\/(?:|chat|new|tasks|memory|automations|skills|schedules|activity|health|settings|capture|topology|about|changelog|pipeline|receipts|c\/[\w-]+)$/;
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -1138,3 +1138,7 @@ a.rail-stamp[data-pending]:hover { color: var(--status-attention); }
 .pipeline-ev-title { color: var(--text-primary); }
 .pipeline-ev-path { font-family: var(--font-mono); }
 .pipeline-ev-k { color: var(--text-primary); font-weight: var(--type-weight-strong); }
+
+/* Receipts (receipts.js): the owner’s composition (compositions.css, .rc-*) filling the page. */
+.receipts-view { display: flex; width: 100%; min-height: 100%; }
+.receipts-view .uc-screen.rc-app { flex: 1; height: auto; min-height: 100%; border: 0; border-radius: 0; }

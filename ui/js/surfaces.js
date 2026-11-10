@@ -818,7 +818,8 @@ export function renderPrivacy() {
   return `<section class="memory-section" id="privacy" aria-labelledby="set-privacy"><h2 class="memory-heading" id="set-privacy">Privacy</h2>
 <p class="memory-lede">The default for every task. A task can be stricter, never looser.</p>
 <fieldset class="set-field"><legend class="sr-only">Privacy mode</legend><div class="choices">${PRIVACY.map(([v, l]) => `<label class="choice"><input type="radio" name="privacy" value="${v}"${privacy() === v ? ' checked' : ''}><span class="choice-name">${l}</span></label>`).join('')}</div></fieldset>
-<p class="settings-note">${esc(PRIVACY.find(([v]) => v === privacy())?.[2] ?? '')}</p>${chatPrivacyNote()}</section>`;
+<p class="settings-note">${esc(PRIVACY.find(([v]) => v === privacy())?.[2] ?? '')}</p>${chatPrivacyNote()}
+<div class="connection-actions"><a class="btn" href="/receipts">Receipts: what left your devices</a></div></section>`;
 }
 
 // Where chat goes, and what a chat turn carries, said where the mode is chosen and before the first

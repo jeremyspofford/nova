@@ -2,7 +2,8 @@
    structure for the shell (hairlines over boxes, one accent, a strict row grid), Claude.ai's chat
    (a content-width column, almost no chrome, the composer as the focus), Arc's spaces, Raycast's
    palette and Settings. The orb is the one standout. Breakpoints are container queries in
-   layout.css, scoped to .uc-*. The app never loads this file. */
+   layout.css, scoped to .uc-*. The app loads this file only for the Receipts screen (receipts.js),
+   which is its composition filled with real receipts. */
 
 /* Full-screen frames: ?entry=…&frame=… shows one frame at the size of the window. */
 .sg-full .sg-head { display: none; }

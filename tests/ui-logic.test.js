@@ -76,9 +76,9 @@ test('breakpoints live in layout.css only: bands derived from the regions, plus 
 
 // ---- navigation ------------------------------------------------------------------------
 
-test('every layout models the same fourteen destinations, including Settings children', () => {
+test('every layout models the same fifteen destinations, including Settings children', () => {
   const all = DESTINATIONS.map((d) => d.id).sort();
-  assert.deepEqual(all, ['about', 'activity', 'automations', 'capture', 'changelog', 'chat', 'health', 'home', 'memory', 'pipeline', 'settings', 'skills', 'tasks', 'topology']);
+  assert.deepEqual(all, ['about', 'activity', 'automations', 'capture', 'changelog', 'chat', 'health', 'home', 'memory', 'pipeline', 'receipts', 'settings', 'skills', 'tasks', 'topology']);
   for (const l of LAYOUTS) assert.deepEqual(reachable(l).sort(), all, l);
 });
 

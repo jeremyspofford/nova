@@ -93,7 +93,7 @@ async function words(page: Page, frame: string, label: string) {
   // textContent: group labels are uppercased by CSS, and innerText would return them so.
   const t = (await page.locator(`[data-rc-frame="${frame}"]`).textContent() ?? '').replace(/\s+/g, ' ');
   if (frame === 'coverage') {
-    for (const w of ['Receipts record model calls, not everything Nova sends.', 'Web pages and searches Nova fetches, and browser tasks.', 'Gmail and Home Assistant.', 'Sync between your own devices.', 'Nova doesn’t yet have one place that checks everything it sends.']) assert.ok(t.includes(w), `${label}: says “${w}”`);
+    for (const w of ['Receipts record model calls and calls to connected services, not everything Nova sends.', 'Web pages and searches Nova fetches, and browser tasks.', 'What a connected service sends Nova on its own, such as mail arriving or your home’s events.', 'Sync between your own devices.', 'Nova doesn’t yet have one place that checks everything it sends.']) assert.ok(t.includes(w), `${label}: says “${w}”`);
   }
   if (frame === 'receipt' || frame === 'list') {
     for (const w of ['Where it went', 'Provider', 'Model', 'Why, as recorded', 'Privacy setting for this call', 'Opt-in', 'Receipt', 'What it was told, by reference', 'Not in a receipt']) assert.ok(t.includes(w), `${label}: shows ${w}`);
@@ -102,8 +102,8 @@ async function words(page: Page, frame: string, label: string) {
   if (frame === 'list') assert.ok(t.includes('Open the conversation'), `${label}: links its conversation`);
   if (frame === 'screening') assert.ok(t.includes('Screening, which you turned on'), `${label}: names the opt-in`);
   if (frame === 'empty-local') {
-    assert.ok(t.includes('No receipt shows a model call leaving your devices.'), `${label}: says exactly what the receipts show`);
-    assert.ok(t.includes('Receipts record model calls only.'), `${label}: says what they don't cover`);
+    assert.ok(t.includes('No receipt shows a call leaving your devices.'), `${label}: says exactly what the receipts show`);
+    assert.ok(t.includes('Receipts record model calls and service calls only.'), `${label}: says what they don't cover`);
   }
 }
 

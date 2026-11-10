@@ -846,6 +846,9 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     addConfirmation: (system, check) => verifier.registerConfirmation(system, check),
     // A connector's manifest declares its capabilities that act; they go into the approvals registry.
     approvals,
+    // Each call to a connected service leaves a receipt (F-031); under local-only a remote one is
+    // refused here, before it runs.
+    receipt: (r) => { receipts.record(r); },
   });
   // Home Assistant's service tier is the registry's home-assistant.service, declared in its manifest.
   connectors.register(homeAssistant(o.homeAssistant));
