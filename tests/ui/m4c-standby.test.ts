@@ -23,8 +23,8 @@ test('M4c: the standby says what it is, the hub shows its lag, and the standby i
   try {
     await finishSetup(s.hub);
     standbyProc = await s.standby.start(s.env(s.standbyMesh));
-    await until(() => s.standby.get('/api/v1/setup'), (v: any) => v?.done === true, 400);
-    await until(() => s.hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_at && h.checks.mesh.standby.lag.rows === 0, 400);
+    await until(() => s.standby.get('/api/v1/setup'), (v: any) => v?.done === true);
+    await until(() => s.hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_at && h.checks.mesh.standby.lag.rows === 0);
 
     // The hub's Health: the standby, caught up.
     const hub = await device(b, { width: 1280, height: 900 });

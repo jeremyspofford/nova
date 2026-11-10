@@ -10,7 +10,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { blank, start, stop, until, sleep, type Running } from './support.ts';
+import { START_MS, blank, output, said, start, stop, until, sleep, type Running } from './support.ts';
 // This test restarts the hub on the same mesh port, so it picks one first: below the ephemeral
 // range, where no server on port 0 in a parallel test can take it meanwhile.
 import { freePort } from './m4c-support.ts';
@@ -44,11 +44,11 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
     assert.equal(pairing.body.command, `curl -fsS ${mesh}/join.sh | sh -s -- ${pairing.body.code}`);
     const sh = spawn('sh', ['-c', pairing.body.command], { env: agentEnv });
     procs.push(sh);
-    let out = '';
-    sh.stdout!.on('data', (d) => { out += d; });
-    sh.stderr!.on('data', (d) => { out += d; });
-    const digits = (await until(async () => /these digits: (\d{3}) (\d{3})/.exec(out), Boolean, 400))?.slice(1).join('');
-    assert.ok(digits, `no digits from join.sh:\n${out}`);
+    const shSaid = output(sh);
+    const out = () => shSaid.out.join('');
+    // join.sh fetches the agent and starts it (a Node start, as the server's: START_MS).
+    const digits = (await said(shSaid, /these digits: (\d{3}) (\d{3})/, START_MS, 'no digits from join.sh')).slice(1).join('');
+    assert.ok(digits, `no digits from join.sh:\n${out()}`);
     // The hub's prompt shows the same digits; approve on the console with confirm.
     const requests = (await m.get('/api/v1/mesh/requests')) as Array<{ id: string; confirmation: string; kind: string }>;
     const req = requests.find((r) => r.confirmation === digits);
@@ -56,28 +56,28 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
     assert.equal(req.kind, 'computer');
     assert.equal((await m.send('POST', `/api/v1/mesh/requests/${req.id}/approve`, { confirm: true })).status, 200);
     const shCode = await new Promise<number | null>((r) => (sh.exitCode !== null ? r(sh.exitCode) : sh.on('exit', r)));
-    assert.equal(shCode, 0, out);
-    assert.match(out, /The agent is running in the background/);
+    assert.equal(shCode, 0, out());
+    assert.match(out(), /The agent is running in the background/);
     // Nothing system-wide: the agent, its keys and its state are in the device home.
     for (const f of ['agent/package.json', 'agent/src/core/mesh/wire.ts', 'boot/keys.json', 'boot/device.json']) assert.ok(existsSync(join(deviceHome, f)), f);
     assert.equal(readFileSync(join(deviceHome, 'boot', 'keys.json')).length > 0 && (spawnSync('stat', ['-c', '%a', join(deviceHome, 'boot', 'keys.json')], { encoding: 'utf8' }).stdout.trim()), '600');
 
     // 2. The boot agent (background) starts the runtime; the runtime heartbeats; Online.
     const computer = async () => ((await m.get('/api/v1/mesh/devices')) as Array<{ id: string; kind: string; online: boolean; agent?: { runtime_version: string; safe_mode: boolean } }>).find((d) => d.kind === 'computer' && d.agent);
-    const online = await until(computer, (d) => !!d?.online, 400);
+    const online = await until(computer, (d) => !!d?.online);
     assert.ok(online?.online, 'the computer shows Online');
     assert.equal(online!.agent!.safe_mode, false);
     assert.match(online!.agent!.runtime_version, new RegExp(`^${VERSION.replace(/\./g, '\\.')}\\+[0-9a-f]{12}$`), 'running the runtime the hub signed');
     // M6b: its heartbeat carries what it can run models on, read by the boot agent; the hub's
     // device map shows it.
-    const mapped = await until(async () => ((await m.get('/api/v1/models')) as { devices: { id: string; hub: boolean; hardware: { cpu: { threads: number }; ram_bytes: number } | null }[] }).devices.find((d) => d.id === online!.id), (d) => !!d?.hardware, 400);
+    const mapped = await until(async () => ((await m.get('/api/v1/models')) as { devices: { id: string; hub: boolean; hardware: { cpu: { threads: number }; ram_bytes: number } | null }[] }).devices.find((d) => d.id === online!.id), (d) => !!d?.hardware);
     assert.ok(mapped?.hardware && mapped.hardware.ram_bytes > 0 && mapped.hardware.cpu.threads > 0, 'the computer’s hardware reached the hub');
     // M10f: approved with no roles, it holds none; given one on the hub (tier 3), its agent hears it
     // in the next heartbeat answer and keeps it, for its own check on any assignment.
     const deviceFile = () => JSON.parse(readFileSync(join(deviceHome, 'boot', 'device.json'), 'utf8')) as { purposes?: string[] };
     assert.deepEqual(deviceFile().purposes, []);
     assert.equal((await m.send('PATCH', `/api/v1/mesh/devices/${online!.id}`, { purposes: ['compute'], confirm: true })).status, 200);
-    assert.deepEqual((await until(async () => deviceFile().purposes, (p) => p?.[0] === 'compute', 400)), ['compute'], 'the agent keeps the roles the hub holds for it');
+    assert.deepEqual((await until(async () => deviceFile().purposes, (p) => p?.[0] === 'compute')), ['compute'], 'the agent keeps the roles the hub holds for it');
     const first = bootPid();
     assert.ok(alive(first));
     const rt = JSON.parse(readFileSync(join(deviceHome, 'state', 'runtime.json'), 'utf8')) as { pid: number; hub_url: string };
@@ -88,7 +88,7 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
     // Online, a note goes straight through the queue.
     assert.equal(agent('queue', 'memory_note', JSON.stringify({ content: 'The test lamp is in the hall.' })).status, 0);
     // It waits for the person's OK (the ingest gate: no sorting model here, so it can't pass the screen).
-    const mem = await until(async () => ((await m.get('/api/v1/ingest/candidates')) as Array<{ content: string; source: string }>).find((x) => x.content === 'The test lamp is in the hall.'), Boolean, 400);
+    const mem = await until(async () => ((await m.get('/api/v1/ingest/candidates')) as Array<{ content: string; source: string }>).find((x) => x.content === 'The test lamp is in the hall.'), Boolean);
     assert.equal(mem?.source, `device:${online!.id}`);
 
     // 3. The hub dies. The computer keeps working: a task request and a memory note wait offline.
@@ -99,16 +99,15 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
     assert.equal(agent('queue', 'memory_note', JSON.stringify({ content: 'Noted while the hub was down.' }), '--key', 'outage-note-0001').status, 0);
     // Both agents restart while the hub is down: the queue is on disk.
     process.kill(first, 'SIGTERM');
-    await until(async () => alive(first), (a) => !a, 200);
+    await until(async () => alive(first), (a) => !a);
     assert.ok(!alive(first));
-    await until(async () => alive(rt.pid), (a) => !a, 200);
+    await until(async () => alive(rt.pid), (a) => !a);
     assert.ok(!alive(rt.pid), 'the runtime went with it');
     const again = spawn(process.execPath, [boot, 'run'], { env: agentEnv });
     procs.push(again);
-    let runOut = '';
-    again.stdout!.on('data', (d) => { runOut += d; });
-    again.stderr!.on('data', (d) => { runOut += d; });
-    await until(async () => runOut, (o) => /can’t be reached yet/.test(o), 200);
+    const againSaid = output(again);
+    const runOut = () => againSaid.out.join('');
+    await said(againSaid, /can’t be reached yet/, START_MS, 'the restarted agent did not say the hub can’t be reached');
     const st = JSON.parse(agent('status', '--json').stdout);
     assert.equal(st.queue.pending, 2, JSON.stringify(st));
     assert.equal(st.running, true);
@@ -116,24 +115,24 @@ test('M4b: join by the one-line command, Online, offline queue across a hub outa
     // 4. The hub comes back (same home, same address): each item arrives, once.
     hub = await start({ ...m.env, ...meshEnv, NOVA_PORT: String(new URL(m.base).port) });
     const tasks = async () => ((await m.get('/api/v1/tasks?limit=500')) as Array<{ title: string; origin: { kind: string } }>).filter((t) => t.title === task.title);
-    const delivered = await until(tasks, (t) => t.length > 0, 400);
+    const delivered = await until(tasks, (t) => t.length > 0);
     assert.equal(delivered.length, 1);
     assert.equal(delivered[0]!.origin.kind, 'device');
-    const notes = await until(async () => ((await m.get('/api/v1/ingest/candidates')) as Array<{ content: string }>).filter((x) => x.content === 'Noted while the hub was down.'), (x) => x.length > 0, 400);
+    const notes = await until(async () => ((await m.get('/api/v1/ingest/candidates')) as Array<{ content: string }>).filter((x) => x.content === 'Noted while the hub was down.'), (x) => x.length > 0);
     assert.equal(notes.length, 1);
-    const settled = await until(async () => JSON.parse(agent('status', '--json').stdout), (s) => s.queue.pending === 0, 400);
+    const settled = await until(async () => JSON.parse(agent('status', '--json').stdout), (s) => s.queue.pending === 0);
     assert.equal(settled.queue.pending, 0);
     // Sending the same keys again, as after a lost reply, changes nothing.
     await sleep(500);
     assert.equal((await tasks()).length, 1);
-    assert.ok(/Connected to the hub/.test(runOut), runOut);
+    assert.ok(/Connected to the hub/.test(runOut()), runOut());
 
     // 5. Revoked: the agent stops, says so, and won't start again.
     const id = online!.id;
     assert.equal((await m.send('POST', `/api/v1/mesh/devices/${id}/revoke`, { confirm: true, reason: 'Test revocation.' })).status, 200);
     const code = await new Promise<number | null>((r) => (again.exitCode !== null ? r(again.exitCode) : again.on('exit', r)));
-    assert.equal(code, 3, runOut);
-    assert.match(runOut, /the hub revoked it\. The agent has stopped/);
+    assert.equal(code, 3, runOut());
+    assert.match(runOut(), /the hub revoked it\. The agent has stopped/);
     const after = JSON.parse(agent('status', '--json').stdout);
     assert.equal(after.revoked, true);
     assert.equal(after.running, false);
@@ -174,25 +173,24 @@ test('M4b over HTTPS: NOVA_CA_FILE carries trust to curl, the boot agent and the
     // The command as handed out; the first curl (the one fetching join.sh) trusts the CA through
     // curl's own CURL_CA_BUNDLE, everything after it through NOVA_CA_FILE.
     joining = spawn('sh', ['-c', pairing.body.command], { env: { ...env, NOVA_CA_FILE: ca, CURL_CA_BUNDLE: ca } });
-    let out = '';
-    joining.stdout!.on('data', (d) => { out += d; });
-    joining.stderr!.on('data', (d) => { out += d; });
-    const digits = (await until(async () => /these digits: (\d{3}) (\d{3})/.exec(out), Boolean, 400))?.slice(1).join('');
-    assert.ok(digits, out);
+    const joinSaid = output(joining);
+    const out = () => joinSaid.out.join('');
+    const digits = (await said(joinSaid, /these digits: (\d{3}) (\d{3})/, START_MS, 'no digits from join.sh')).slice(1).join('');
+    assert.ok(digits, out());
     const req = ((await m.get('/api/v1/mesh/requests')) as Array<{ id: string; confirmation: string }>).find((r) => r.confirmation === digits)!;
     assert.equal((await m.send('POST', `/api/v1/mesh/requests/${req.id}/approve`, { confirm: true })).status, 200);
     const j = joining;
-    assert.equal(await new Promise((r) => (j.exitCode !== null ? r(j.exitCode) : j.on('exit', r))), 0, out);
+    assert.equal(await new Promise((r) => (j.exitCode !== null ? r(j.exitCode) : j.on('exit', r))), 0, out());
     assert.ok(existsSync(join(deviceHome, 'boot', 'ca.pem')), 'the CA is kept with the boot agent');
-    const dev = await until(async () => ((await m.get('/api/v1/mesh/devices')) as Array<{ kind: string; online: boolean; agent?: unknown }>).find((d) => d.kind === 'computer' && d.agent), (d) => !!d?.online, 400);
+    const dev = await until(async () => ((await m.get('/api/v1/mesh/devices')) as Array<{ kind: string; online: boolean; agent?: unknown }>).find((d) => d.kind === 'computer' && d.agent), (d) => !!d?.online);
     const log = existsSync(join(deviceHome, 'agent.log')) ? readFileSync(join(deviceHome, 'agent.log'), 'utf8') : '';
-    assert.ok(dev?.online, `not Online over HTTPS:\n${out}\n${log}`);
+    assert.ok(dev?.online, `not Online over HTTPS:\n${out()}\n${log}`);
   } finally {
     if (joining?.exitCode === null) joining.kill('SIGKILL');
     try {
       const pid = Number(readFileSync(join(deviceHome, 'boot', 'run.pid'), 'utf8'));
       if (alive(pid)) process.kill(pid, 'SIGTERM');
-      await until(async () => alive(pid), (a) => !a, 200);
+      await until(async () => alive(pid), (a) => !a);
     } catch { /* gone */ }
     await stop(hub);
   }

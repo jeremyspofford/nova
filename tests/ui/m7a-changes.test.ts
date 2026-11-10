@@ -24,14 +24,14 @@ test('M7a: Settings › Changes — the tier-3 Ship it with its sandbox evidence
     await m.send('PUT', api('/profile/user/timezone'), { value: 'UTC' });
     // A stopped one (its own test is wrong) and one a provider proposed: tier 3.
     const broken = await m.send('POST', api('/changes'), { kind: 'trigger-rules', artifact: windDown('0.9.0', { tests: [{ name: 'fires at eight', at: '20:00', expect: { rule: 'Wind down', fires: true } }] }) });
-    await until<any>(() => m.get(api(`/changes/${broken.body.id}`)), (c) => c.state === 'stopped', 1600);
+    await until<any>(() => m.get(api(`/changes/${broken.body.id}`)), (c) => c.state === 'stopped', 40_000);
     // Its second rule starts a task: the OK is given on what that task would run.
     const pack = windDown('1.0.0');
     const note = { name: 'Morning note', class: 'heartbeat', cron: '0 6 * * 1', action: { kind: 'task', task: { title: 'Write the morning note', owner: 'workspace', goal: 'A note exists.', evidence_required: [{ kind: 'read_back', target: 'workspace:notes/morning.md' }], approval_tier: 0, inputs: { action: 'write', path: 'notes/morning.md', content: 'Good morning.' } } } };
     const proposed = await m.send('POST', api('/changes'), { kind: 'trigger-rules', artifact: { ...pack, rules: [...pack.rules, note] }, proposed_by: 'provider:example-agent' });
     assert.equal(proposed.status, 201, JSON.stringify(proposed.body));
     const id = proposed.body.id as string;
-    await until<any>(() => m.get(api(`/changes/${id}`)), (c) => c.state === 'waiting', 1600);
+    await until<any>(() => m.get(api(`/changes/${id}`)), (c) => c.state === 'waiting', 40_000);
 
     const { page, errors } = await device(b, { width: 1280, height: 900 });
     await page.goto(`${m.base}/settings#changes`);

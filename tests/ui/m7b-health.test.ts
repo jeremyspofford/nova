@@ -20,7 +20,7 @@ test('M7b: Health shows the supervisor, backups and the last drill, and a proble
   const shots = m3 ? join(dirname(m3), 'm7') : null;
   if (shots) mkdirSync(shots, { recursive: true });
   const api = (p: string) => `/api/v1${p}`;
-  const settled = (id: string) => until<any>(() => m.get(api(`/tasks/${id}`)), (x) => ['done', 'failed'].includes(x.state), 2400);
+  const settled = (id: string) => until<any>(() => m.get(api(`/tasks/${id}`)), (x) => ['done', 'failed'].includes(x.state), 60_000);
   try {
     await finishSetup(m);
     assert.equal((await m.send('PUT', api('/backups/settings'), { target })).status, 200);

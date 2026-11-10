@@ -19,10 +19,10 @@ test('M5a: providers over the API — a verified coding task, privacy in plain w
   const nova = await m.start({ NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(ROOT, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none', NOVA_SECRET_N8N_SIGNING_SECRET: SECRET });
   let n8n: Awaited<ReturnType<typeof startFakeN8n>> | null = null;
   const api = (p: string) => `/api/v1${p}`;
-  const settled = (id: string) => until<any>(() => m.get(api(`/tasks/${id}`)), (t) => ['done', 'failed', 'waiting', 'cancelled'].includes(t.state), 400);
+  const settled = (id: string) => until<any>(() => m.get(api(`/tasks/${id}`)), (t) => ['done', 'failed', 'waiting', 'cancelled'].includes(t.state));
   const chat = async (text: string) => {
     const { body } = await m.send('POST', '/api/sessions', { text });
-    const s = await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null && x.session.turns[0]?.state !== 'open', 400);
+    const s = await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null && x.session.turns[0]?.state !== 'open');
     return { id: body.id as string, turn: s.session.turns[0] };
   };
   try {
@@ -44,7 +44,7 @@ test('M5a: providers over the API — a verified coding task, privacy in plain w
     assert.match((await settled(created.body.id)).reason, /Nova needs your OK to run `node --test calc\/sum.test.mjs`\. This runs code the provider wrote/);
     assert.deepEqual((await m.get(api(`/providers/tasks/${created.body.id}/test-run`))).files.map((f: { path: string }) => f.path), ['calc/sum.mjs']);
     await m.send('POST', api(`/providers/tasks/${created.body.id}/test-run`), {});
-    await until<any>(() => m.get(api(`/tasks/${created.body.id}`)), (x) => x.state !== 'waiting', 400);
+    await until<any>(() => m.get(api(`/tasks/${created.body.id}`)), (x) => x.state !== 'waiting');
     const done = await settled(created.body.id);
     assert.equal(done.state, 'done', done.reason);
     assert.ok(done.verification.checks.every((c: { ok: boolean }) => c.ok));

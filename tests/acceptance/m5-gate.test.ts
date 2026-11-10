@@ -27,7 +27,7 @@ test('M5 gate: one brief, two providers (a coding agent and a chat model), evide
   });
   const nova = await m.start();
   const api = (p: string) => `/api/v1${p}`;
-  const settled = (id: string) => until<any>(() => m.get(api(`/tasks/${id}`)), (t) => ['done', 'failed', 'cancelled'].includes(t.state) || (t.state === 'waiting' && /OK/.test(t.reason ?? '')), 800);
+  const settled = (id: string) => until<any>(() => m.get(api(`/tasks/${id}`)), (t) => ['done', 'failed', 'cancelled'].includes(t.state) || (t.state === 'waiting' && /OK/.test(t.reason ?? '')));
   const sum = () => readFileSync(join(m.home, 'workspace', 'calc', 'sum.mjs'), 'utf8');
   // Submit the brief to a provider and wait for the end, giving the OK each time Nova asks to run
   // the test on what the provider wrote (after it has written it, showing what changed).
@@ -45,7 +45,7 @@ test('M5 gate: one brief, two providers (a coding agent and a chat model), evide
       assert.equal(ask.body.command, 'node --test calc/sum.test.mjs');
       if (ask.body.files.length) assert.match(ask.body.words, /This runs code the provider wrote, as you, with access to your files\./);
       assert.equal((await m.send('POST', api(`/providers/tasks/${created.body.id}/test-run`), {})).status, 200);
-      await until<any>(() => m.get(api(`/tasks/${created.body.id}`)), (x) => x.state !== 'waiting', 400);
+      await until<any>(() => m.get(api(`/tasks/${created.body.id}`)), (x) => x.state !== 'waiting');
     }
   };
   try {

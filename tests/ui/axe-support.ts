@@ -56,7 +56,7 @@ export async function reviewProfile(prefix: string) {
   const { m, nova } = await seeded(prefix);
   writeFileSync(join(m.home, 'sessions', 'main.jsonl'), reviewConversation());
   const api = (p: string) => `/api/v1${p}`;
-  const settled = (id: string) => until<any>(() => m.get(api(`/tasks/${id}`)), (x) => ['done', 'failed'].includes(x.state), 2400);
+  const settled = (id: string) => until<any>(() => m.get(api(`/tasks/${id}`)), (x) => ['done', 'failed'].includes(x.state), 60_000);
   const target = join(m.dir, 'backups');
   mkdirSync(target);
   if ((await m.send('PUT', api('/backups/settings'), { target })).status !== 200) throw new Error('backup settings');

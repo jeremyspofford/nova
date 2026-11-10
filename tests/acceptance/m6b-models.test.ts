@@ -27,7 +27,7 @@ test('M6b: models by role over the API — recommend and assign, chat with recei
   const api = (p: string) => `/api/v1${p}`;
   const chat = async (text: string) => {
     const { body } = await m.send('POST', '/api/sessions', { text });
-    const s = await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null && x.session.turns[0]?.state !== 'open', 400);
+    const s = await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null && x.session.turns[0]?.state !== 'open');
     return { id: body.id as string, turn: s.session.turns[0] };
   };
   try {
@@ -59,9 +59,9 @@ test('M6b: models by role over the API — recommend and assign, chat with recei
     // 3. A download: tier 2, then Nova reads the digest back itself.
     const pull = await m.send('POST', api('/models/pull'), { model: 'nomic-embed-text' });
     assert.equal(pull.status, 201);
-    assert.equal((await until<any>(() => m.get(api(`/tasks/${pull.body.id}`)), (t) => t.state === 'waiting', 200)).reason, 'Needs your OK before it runs.');
+    assert.equal((await until<any>(() => m.get(api(`/tasks/${pull.body.id}`)), (t) => t.state === 'waiting')).reason, 'Needs your OK before it runs.');
     await m.send('POST', api(`/tasks/${pull.body.id}/approve`), {});
-    const pulled = await until<any>(() => m.get(api(`/tasks/${pull.body.id}`)), (t) => ['done', 'failed'].includes(t.state), 400);
+    const pulled = await until<any>(() => m.get(api(`/tasks/${pull.body.id}`)), (t) => ['done', 'failed'].includes(t.state));
     assert.equal(pulled.state, 'done', pulled.reason);
     assert.match(pulled.verification.checks[0].why, /Nova read nomic-embed-text from the runtime itself/);
 
@@ -81,17 +81,17 @@ test('M6b: models by role over the API — recommend and assign, chat with recei
     assert.match(JSON.stringify(down.turn.items), /Waiting on local capacity/);
     const task = await m.send('POST', api('/tasks'), calcTask('openai-compatible', { privacy_mode: 'local-only' }));
     assert.equal(task.status, 201, JSON.stringify(task.body));
-    const waiting = await until<any>(() => m.get(api(`/tasks/${task.body.id}`)), (t) => t.state === 'waiting', 400);
+    const waiting = await until<any>(() => m.get(api(`/tasks/${task.body.id}`)), (t) => t.state === 'waiting');
     assert.match(waiting.reason, /Waiting on local capacity/);
-    const told = await until<any>(() => m.get(api('/messages')), (ms) => ms.some((x: { text: string }) => /is waiting\. Waiting on local capacity/.test(x.text)), 400);
+    const told = await until<any>(() => m.get(api('/messages')), (ms) => ms.some((x: { text: string }) => /is waiting\. Waiting on local capacity/.test(x.text)));
     assert.ok(told.length, 'the person is told');
 
     // Capacity returns: the task runs by itself, and Nova asks before running the test.
     ollama = await startFakeOllama({ models: INSTALLED, port, reply });
-    const ask = await until<any>(() => m.get(api(`/tasks/${task.body.id}`)), (t) => t.state === 'waiting' && /OK/.test(t.reason ?? ''), 600);
+    const ask = await until<any>(() => m.get(api(`/tasks/${task.body.id}`)), (t) => t.state === 'waiting' && /OK/.test(t.reason ?? ''));
     assert.match(ask.reason, /Nova needs your OK to run/);
     await m.send('POST', api(`/providers/tasks/${task.body.id}/test-run`), {});
-    const done = await until<any>(() => m.get(api(`/tasks/${task.body.id}`)), (t) => ['done', 'failed'].includes(t.state), 600);
+    const done = await until<any>(() => m.get(api(`/tasks/${task.body.id}`)), (t) => ['done', 'failed'].includes(t.state));
     assert.equal(done.state, 'done', done.reason);
     assert.equal(readFileSync(join(m.home, 'workspace', 'calc', 'sum.mjs'), 'utf8'), FIXED_SUM);
     assert.equal(cloud.requests.length, 0, 'local-only never reached the cloud stand-in');

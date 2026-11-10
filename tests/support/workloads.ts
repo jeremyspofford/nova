@@ -13,12 +13,23 @@ export const standInBytes = () => readFileSync(STAND_IN);
 export const standInSha = () => sha256Hex(standInBytes());
 export const standInUrl = () => pathToFileURL(STAND_IN).href;
 
-export function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+// A port for an address that must be known before its program starts (a workload's, which is in the
+// manifest the hub signs; a standby's, which goes in the roster when it enrolls). Picked below the
+// ephemeral range (Linux 32768+ by default, 54175+ on this WSL host; macOS 49152+), never by
+// listening on port 0: a port 0 pick lies in that range, and once it is let go any server on port 0
+// in a parallel test can be handed it before the program binds it (the M10h pilot's stand-in found
+// its port taken that way, and the device agent stopped after three failed starts). Servers that
+// can, listen on port 0 themselves and say which port they got.
+export async function freePort(host = '127.0.0.1'): Promise<number> {
+  for (;;) {
+    const port = 20_000 + Math.floor(Math.random() * 12_000);
     const s = createServer();
-    s.on('error', reject);
-    s.listen(0, '127.0.0.1', () => { const p = (s.address() as { port: number }).port; s.close(() => resolve(p)); });
-  });
+    const ok = await new Promise<boolean>((r) => { s.once('error', () => r(false)); s.listen(port, host, () => r(true)); });
+    if (ok) {
+      await new Promise((r) => s.close(r));
+      return port;
+    }
+  }
 }
 
 export function manifest(o: Partial<WorkloadManifest> & { device_id: string; port: number }): WorkloadManifest {

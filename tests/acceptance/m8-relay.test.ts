@@ -30,13 +30,13 @@ test('M8 gate (CI): the calc brief, done by Relay’s worker in a worktree, veri
     const created = await m.send('POST', api('/tasks'), calcTask('relay', over));
     assert.equal(created.status, 201, JSON.stringify(created.body));
     for (;;) {
-      const t = await until<any>(() => task(created.body.id), (x) => { seen?.(x); return ['done', 'failed', 'cancelled'].includes(x.state) || (x.state === 'waiting' && /OK/.test(x.reason ?? '')); }, 1200);
+      const t = await until<any>(() => task(created.body.id), (x) => { seen?.(x); return ['done', 'failed', 'cancelled'].includes(x.state) || (x.state === 'waiting' && /OK/.test(x.reason ?? '')); });
       if (t.state !== 'waiting') return t;
       const ask = await m.send('GET', api(`/providers/tasks/${created.body.id}/test-run`));
       assert.equal(ask.status, 200, `waiting, but not for the test run: ${t.reason}`);
       assert.equal(ask.body.command, 'node --test calc/sum.test.mjs');
       assert.equal((await m.send('POST', api(`/providers/tasks/${created.body.id}/test-run`), {})).status, 200);
-      await until<any>(() => task(created.body.id), (x) => x.state !== 'waiting', 400);
+      await until<any>(() => task(created.body.id), (x) => x.state !== 'waiting');
     }
   };
   try {
