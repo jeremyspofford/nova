@@ -46,12 +46,14 @@ export class Backups {
   // the file. A backup without that table (older than the feature) has nothing to clean. A backup
   // with a sync log (M4c) loses the log's entries for those rows too, and, for memory, any entry of
   // memory's or of the files that show it (MEMORY.md, the day notes) that still carries `words`.
+  // A day note's forget (memory.ts, forgetNotes) is `memory` with no ids, only its words.
   // The same forget then reaches every other place that keeps copies (`also`).
   forget(table: string, ids: string[], words: string[] = []): { cleaned: string[]; destroyed: string[] } {
     if (!TABLE.test(table)) throw new Error(`Not a table name: ${table}`);
     const cleaned: string[] = [];
     const destroyed: string[] = [];
-    if (!ids.length) return { cleaned, destroyed };
+    // A forget of a day note has words and no rows: it still reaches every copy.
+    if (!ids.length && !words.some((w) => String(w ?? '').trim())) return { cleaned, destroyed };
     for (const { path } of this.list()) {
       try {
         cleanDbFile(path, table, ids, words);

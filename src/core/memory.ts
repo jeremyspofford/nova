@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from './errors.ts';
+import { NOTE_FORGOTTEN, NOTE_RESTORED, noteKey, validNoteId } from './forgotten-notes.ts';
 import { sha256 } from './workspace.ts';
 import type { Db } from './db.ts';
 
@@ -50,7 +51,11 @@ export interface MemoryRecord {
   active: boolean;
 }
 
-export interface MemoryEvent { id: number; at: string; kind: 'remembered' | 'corrected' | 'confirmed' | 'forgotten'; memory_id: string; by: string }
+// note-forgotten / note-restored: a day note (no record) forgotten or put back by undo; its
+// memory_id is "note:<id>:<hash of its words>" (forgotten-notes.ts), never the words.
+export interface MemoryEvent { id: number; at: string; kind: 'remembered' | 'corrected' | 'confirmed' | 'forgotten' | 'note-forgotten' | 'note-restored'; memory_id: string; by: string }
+// A day note as src/memory.js removed it: its id and its words.
+export interface ForgottenNote { id: string; text: string }
 export interface Retrieved { kind: 'memory'; ref: string; sha256: string }
 export interface Filter { kind?: Kind; scope?: string; state?: UserState }
 
@@ -81,14 +86,15 @@ export class Memory {
   readonly exportsDir: string;
   #db: Db;
   #now: () => Date;
-  #afterForget: (ids: string[], records: MemoryRecord[]) => void;
+  #afterForget: (ids: string[], records: MemoryRecord[], words?: string[]) => void;
   #forgetListeners: ((records: MemoryRecord[]) => void)[] = [];
   #doneListeners: ((records: MemoryRecord[]) => void)[] = [];
   #log: ((message: string) => void) | null;
+  #noteListeners: ((texts: string[]) => void)[] = [];
 
-  // afterForget: where else the forgotten records must go (the backups). problem: told when a forget
-  // couldn't reach an export.
-  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[], records: MemoryRecord[]) => void; problem?: (message: string) => void }) {
+  // afterForget: where else the forgotten records must go (the backups); `words`, more words that
+  // must go with them (a forgotten day note's). problem: told when a forget couldn't reach an export.
+  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[], records: MemoryRecord[], words?: string[]) => void; problem?: (message: string) => void }) {
     this.#db = o.db;
     this.#log = o.problem ?? null;
     this.#now = o.now ?? (() => new Date());
@@ -216,6 +222,40 @@ export class Memory {
     this.#scrubExports(records);
     for (const fn of this.#forgetListeners) fn(records);
     for (const fn of this.#doneListeners) fn(records);
+  }
+
+  // Day notes (memory/YYYY-MM-DD.md) were forgotten: src/memory.js has already taken them out of
+  // the files. A note has no record, so the forget leaves a content-free note of itself (its id and
+  // a hash of its words, for a restore to find it by), and its words go the way a record's do:
+  // every backup, encrypted copy, checkpoint and staged restore, and the sync log.
+  forgetNotes(notes: ForgottenNote[], by = 'person'): { forgotten: string[] } {
+    const who = this.#by(by);
+    const list = (Array.isArray(notes) ? notes : []).filter((n) => validNoteId(n?.id) && typeof n.text === 'string' && n.text.trim());
+    if (!list.length) return { forgotten: [] };
+    this.#db.tx(() => { for (const n of list) this.#event(NOTE_FORGOTTEN, noteKey(n.id, n.text), who); });
+    if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    const texts = list.map((n) => n.text);
+    this.#afterForget([], [], texts);
+    for (const fn of this.#noteListeners) fn(texts);
+    return { forgotten: list.map((n) => n.id) };
+  }
+
+  // Forgotten day notes put back by undo: a restore leaves them as they are now.
+  notesRestored(notes: ForgottenNote[], by = 'person'): void {
+    const who = this.#by(by);
+    const list = (Array.isArray(notes) ? notes : []).filter((n) => validNoteId(n?.id) && typeof n.text === 'string' && n.text.trim());
+    if (!list.length) return;
+    this.#db.tx(() => {
+      for (const n of list) {
+        const key = noteKey(n.id, n.text);
+        if (this.#db.get('SELECT 1 FROM memory_event WHERE memory_id = ? AND kind = ?', key, NOTE_FORGOTTEN)) this.#event(NOTE_RESTORED, key, who);
+      }
+    });
+  }
+
+  // Called once a day note's forget has reached the backups: the sync log drops what carries its words.
+  onNotesForgotten(fn: (texts: string[]) => void): void {
+    this.#noteListeners.push(fn);
   }
 
   get(id: string): MemoryRecord {

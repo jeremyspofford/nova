@@ -26,6 +26,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Db } from '../db.ts';
 import { SKILL, cleanDbFile, skillDirs } from '../backups.ts';
 import { CoreError } from '../errors.ts';
+import { needles, scrubWords } from '../forgotten-notes.ts';
 import type { Log } from '../log.ts';
 import type { Ledger, LanedWorker, Task } from '../ledger.ts';
 import type { Verifier } from '../verify.ts';
@@ -368,7 +369,8 @@ export function forgetInCheckpoints(home: string, table: string, ids: string[], 
   const destroyed: string[] = [];
   // A half-taken checkpoint holds a whole copy of the database and no manifest to clean by: it goes.
   dropPartials(home);
-  if (!ids.length) return { cleaned, destroyed };
+  // A forget of a day note has words and no rows.
+  if (!ids.length && !needles(words).length) return { cleaned, destroyed };
   const key = sealKey(home, false);
   const { found, strays } = scanCheckpoints(home);
   for (const f of found) {
@@ -401,17 +403,13 @@ export function forgetInCheckpoints(home: string, table: string, ids: string[], 
 }
 
 // Lines carrying the words go from every text file under `dir` (a staged restore's files).
+// Matched as written or with whitespace collapsed, as in a backup (backup.ts, cleanBackup).
 function cleanTextTree(dir: string, words: string[]): void {
-  const ws = words.map((w) => w.trim()).filter((w) => w.length >= 3);
-  if (!ws.length) return;
+  if (!needles(words).length) return;
   for (const rel of checkpointFiles(dir)) {
     const p = join(dir, rel);
-    const raw = readFileSync(p);
-    if (!ws.some((w) => raw.includes(Buffer.from(w)))) continue;
-    if (raw.includes(0)) throw new Error(`${rel} holds forgotten words and isn’t text.`);
-    let text = raw.toString('utf8').split('\n').filter((line) => !ws.some((w) => line.includes(w))).join('\n');
-    for (const w of ws) text = text.split(w).join('');
-    writeFileSync(p, text);
+    const text = scrubWords(readFileSync(p), words, rel);
+    if (text !== null) writeFileSync(p, text);
   }
 }
 
@@ -468,7 +466,8 @@ export interface Carried {
   epoch: { now: number; checkpoint: number; restored: number };
   standby_resync: boolean;
   problems: { carried: number; resolved: number };
-  forgotten: { memories: number; capture: number };
+  // notes: forgotten day-note entries taken out of the staged MEMORY.md and day notes.
+  forgotten: { memories: number; capture: number; notes?: number };
   sessions_ended: number;
   backup_records: number;
   identity: string;

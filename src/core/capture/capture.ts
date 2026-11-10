@@ -267,6 +267,9 @@ export interface CaptureOptions {
   pollMs?: number;
   // Why retention must not delete anything now (the clock jumped, M7b), or null.
   retentionHold?: () => string | null;
+  // The backup folders that still owe a forget of these rows (resilience: a folder that wasn't there
+  // when the forget happened), so "deleted everywhere" is never said while one holds a copy.
+  owedForgets?: (table: string, ids: string[]) => { folder: string }[];
   // Screening, job 1: capture-sensitive asked of the Decision Service, which routes it (never a
   // cloud seat in local-first or local-only; in cloud mode only with the capture source's own
   // opt-in, which doesn't exist yet) and records it. Absent: nothing can check, so every event is
@@ -678,10 +681,28 @@ export class Capture extends EventEmitter {
     }
     this.#changed('events');
     // "Deleted everywhere" only when every device that held it has said so (the design's standard,
-    // as for deletion in backups): an offline device shows as waiting.
+    // as for deletion in backups): an offline device shows as waiting. A backup folder that wasn't
+    // there for the forget (a drive unplugged) still holds a copy until it is back: said, by name.
     const waiting = elsewhere.filter((e) => !e.acknowledged);
-    const said = waiting.length ? `Deleted here. Waiting for ${waiting.map((w) => w.name).join(', ')} to confirm ${waiting.length === 1 ? 'it has' : 'they have'} deleted ${rows.length === 1 ? 'its copy' : 'their copies'} too.` : 'Deleted everywhere.';
-    return { forgotten: rows.map((r) => r.id), memories: forgotten, elsewhere, everywhere: !waiting.length, said };
+    const owed = this.#owedFolders(rows.map((r) => r.id), forgotten);
+    const parts: string[] = [];
+    if (waiting.length) parts.push(`Waiting for ${waiting.map((w) => w.name).join(', ')} to confirm ${waiting.length === 1 ? 'it has' : 'they have'} deleted ${rows.length === 1 ? 'its copy' : 'their copies'} too.`);
+    if (owed.length) parts.push(`The backups in ${owed.join(', ')} still hold ${rows.length === 1 ? 'a copy' : 'copies'}: ${owed.length === 1 ? 'that folder wasn’t' : 'those folders weren’t'} there, so Nova deletes ${rows.length === 1 ? 'it' : 'them'} there as soon as ${owed.length === 1 ? 'it is' : 'they are'} back.`);
+    const said = parts.length ? `Deleted here. ${parts.join(' ')}` : 'Deleted everywhere.';
+    return { forgotten: rows.map((r) => r.id), memories: forgotten, elsewhere, everywhere: !parts.length, said };
+  }
+
+  // The backup folders that still owe the forget of these events, or of the memories that went with
+  // them. A list Nova can't read counts as owed, so it never claims the forget is done on a guess.
+  #owedFolders(events: string[], memories: string[]): string[] {
+    if (!this.#o.owedForgets) return [];
+    try {
+      const folders = [...this.#o.owedForgets('capture_event', events), ...(memories.length ? this.#o.owedForgets('memory', memories) : [])].map((f) => f.folder);
+      return [...new Set(folders)];
+    } catch (e) {
+      this.#o.log.warn('capture', 'Nova couldn’t check whether a backup folder still owes a forget.', { error: (e as Error).message });
+      return ['a backup folder Nova couldn’t check'];
+    }
   }
 
   // The devices that still hold what was forgotten (it came from them by the capture data path).

@@ -391,7 +391,8 @@ export function createCore(o: CoreOptions) {
   });
   const design = new Design({ extensions, profile });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
-  const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)), problem: (m) => log.problem('memory', m) });
+  // A day note's forget (forgetNotes) has no records, only its words.
+  const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records, words = []) => backups.forget('memory', ids, [...records.map((r) => r.content), ...words]), problem: (m) => log.problem('memory', m) });
   // A decision model's receipt is checked against the person's settings as they are at the send.
   // A capture source's own opt-in doesn't exist yet, so it is never on here either.
   const liveDecisionOptIn = (f: 'screening' | 'box' | 'capture'): boolean => { if (f === 'capture') return false; const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {}); return v.ok && v.settings.opt_in[f]; };
@@ -588,6 +589,7 @@ export function createCore(o: CoreOptions) {
   // Hub, standby and sync (M4 plan §3).
   const sync = new SyncLog({ db, log, home: o.home, node: meshIdentity.id, now });
   memory.onForgetDone((records) => sync.forgotten(records.map((r) => r.content)));
+  memory.onNotesForgotten((texts) => sync.forgotten(texts));
   // A standby gets the vault sealed through sync.
   sync.vault = vault;
   vault.on('change', () => {
@@ -706,6 +708,8 @@ export function createCore(o: CoreOptions) {
     removed: (ids) => captureSync?.forgetRaw(ids),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
+    // A forget owed to a backup folder that isn't there: "deleted everywhere" waits for it.
+    owedForgets: (table, ids) => resilience?.nightly.owing(table, ids) ?? [],
     secrets: vault,
     ...(o.capture?.fetch ? { fetch: o.capture.fetch } : {}),
   });

@@ -136,7 +136,7 @@ export class Runner extends EventEmitter {
   // memoryGate: (fields, { source, task_id, privacy_mode }) → the memory-gate decision, asked by
   // keep() before an untainted remember is written; only while config.features.memoryGate is on.
   // The server passes the Decision Service's ask, which routes it as `private`.
-  constructor(config, store, { agent = runAgent, records = null, vault = null, ingest = null, fetchAllow = null, linkCaps = null, decisions = null, memoryGate = null } = {}) {
+  constructor(config, store, { agent = runAgent, records = null, notes = null, vault = null, ingest = null, fetchAllow = null, linkCaps = null, decisions = null, memoryGate = null } = {}) {
     super();
     this.config = config;
     this.store = store;
@@ -149,7 +149,8 @@ export class Runner extends EventEmitter {
     // How many links a tainted run may follow on its own (the ingest gate); tests alone pass others.
     this.linkCaps = { ...DEFAULT_LINK_CAPS, ...(linkCaps ?? {}) };
     this.active = new Map(); // sessionId → live run
-    this.memory = new Memory(config.home, config.timezone, { records });
+    // notes: where a forgotten day note goes (the core: its backups, checkpoints and restores).
+    this.memory = new Memory(config.home, config.timezone, { records, onNoteForget: notes?.forget ?? null, onNoteRestore: notes?.restored ?? null });
     this.skills = new Skills(config.root, config.home, config.features ?? (config.features = {}));
     this.schedules = new Schedules(config.root, config.home, config.timezone);
     this.gmail = new Gmail(config.home, { endpoints: googleEndpoints(config.googleBase), imapUrl: config.imapUrl, timezone: config.timezone, vault });
