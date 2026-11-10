@@ -726,16 +726,34 @@ let helperRun;
   await p.waitForTimeout(500);
   const atEnd = await p.evaluate(() => { const sc = document.getElementById('scroller'); return sc.scrollHeight - sc.scrollTop - sc.clientHeight; });
   check('a long conversation opens at its latest message', atEnd < 2, `${Math.round(atEnd)} px from the end`);
-  // The container has no GPU, so Chromium composites every frame in software
-  // (~16 ms at 2x), and frame intervals measure this machine, not Nova. The
-  // budget is judged on what the page controls: the main-thread work in each
-  // frame (script, style, layout, paint), from a trace of the same scroll.
+  // The budget is judged on what the page controls: the main-thread work in each frame of the
+  // scroll (script, style, layout, paint), from a trace of the same scroll. Frame intervals are
+  // compositor timing. Without a GPU, Chromium composites every frame in software (~16 ms at 2x)
+  // and the intervals measure the machine, not Nova, so they are reported and never judged (owner
+  // ruling on #486). Whether Chromium composites on a GPU is asked of Chromium itself, not assumed,
+  // and the check says which it found; if Chromium can't say, the check fails rather than guess.
+  const gpu = await (async () => {
+    try {
+      const cdp = await browser.newBrowserCDPSession();
+      const { gpu: info } = await cdp.send('SystemInfo.getInfo');
+      await cdp.detach();
+      const compositing = info?.featureStatus?.gpu_compositing;
+      if (typeof compositing !== 'string') return { known: false, why: 'Chromium reported no gpu_compositing status' };
+      const device = info.auxAttributes?.glRenderer || info.devices?.find((d) => d.deviceString)?.deviceString || 'no device named';
+      return { known: true, present: compositing.startsWith('enabled'), compositing, device };
+    } catch (e) { return { known: false, why: `SystemInfo.getInfo failed: ${e.message}` }; }
+  })();
+  // The trace is browser-wide: every page opened earlier in the walkthrough is still open and
+  // drawing frames. Only the frames of this page's main thread, between the two marks the scroll
+  // itself leaves, are the scroll's work.
+  const MARK = 'nova-shots-scroll';
   await browser.startTracing(p, { categories: ['cc', 'devtools.timeline'] });
-  const fps = await p.evaluate(async () => {
+  const fps = await p.evaluate(async (mark) => {
     const sc = document.getElementById('scroller');
     sc.scrollTop = 0;
     const times = [];
     let last = performance.now();
+    console.timeStamp(`${mark}:start`);
     await new Promise((done) => {
       const stepFrame = (t) => {
         times.push(t - last); last = t;
@@ -744,15 +762,30 @@ let helperRun;
       };
       requestAnimationFrame(stepFrame);
     });
+    // One more frame, so the last scroll step's frame lands inside the marks.
+    await new Promise((r) => requestAnimationFrame(() => r()));
+    console.timeStamp(`${mark}:end`);
     times.shift();
     const sorted = [...times].sort((a, b) => a - b);
     return { frames: times.length, avgMs: times.reduce((a, b) => a + b, 0) / times.length, p95Ms: sorted[Math.floor(sorted.length * 0.95)], over20: times.filter((t) => t > 20).length };
-  });
+  }, MARK);
   const trace = JSON.parse(String(await browser.stopTracing()));
-  const work = (trace.traceEvents ?? trace).filter((e) => e.name === 'ProxyMain::BeginMainFrame' && e.ph === 'X').map((e) => e.dur / 1000).sort((a, b) => a - b);
+  const events = trace.traceEvents ?? trace;
+  const markOf = (which) => events.find((e) => e.name === 'TimeStamp' && (e.args?.data?.message ?? e.args?.data?.name) === `${MARK}:${which}`);
+  const [start, end] = [markOf('start'), markOf('end')];
+  const frames = events.filter((e) => e.name === 'ProxyMain::BeginMainFrame' && e.ph === 'X');
+  const ours = start && end && start.pid === end.pid && start.tid === end.tid
+    ? frames.filter((e) => e.pid === start.pid && e.tid === start.tid && e.ts >= start.ts && e.ts <= end.ts) : [];
+  const work = ours.map((e) => e.dur / 1000).sort((a, b) => a - b);
   const workP95 = work[Math.floor(work.length * 0.95)] ?? Infinity;
-  results.budgets.scroll = { frames: fps.frames, mainThreadP95Ms: +workP95.toFixed(2), mainThreadMaxMs: +work.at(-1).toFixed(2), frameIntervalP95Ms: +fps.p95Ms.toFixed(2), slowIntervals: fps.over20 };
-  check('scrolling a long thread holds 60 fps', workP95 <= 8, `page work p95 ${workP95.toFixed(1)} ms/frame (max ${work.at(-1).toFixed(1)}) over ${work.length} frames; frame interval p95 ${fps.p95Ms.toFixed(1)} ms on this GPU-less machine`);
+  const workMax = work.at(-1) ?? Infinity;  const mode = !gpu.known ? `GPU unknown (${gpu.why})`
+    : gpu.present ? `GPU present (gpu_compositing ${gpu.compositing}, ${gpu.device})`
+    : `no GPU (gpu_compositing ${gpu.compositing}, ${gpu.device})`;
+  results.budgets.scroll = { gpu: gpu.known ? (gpu.present ? 'present' : 'none') : 'unknown', judged: 'mainThreadP95Ms', frames: fps.frames, mainThreadFrames: work.length, otherFramesExcluded: frames.length - work.length, mainThreadP95Ms: +workP95.toFixed(2), mainThreadMaxMs: +workMax.toFixed(2), frameIntervalP95Ms: +fps.p95Ms.toFixed(2), slowIntervals: fps.over20 };
+  const found = !start || !end ? `the scroll's trace marks are missing (start ${!!start}, end ${!!end}), so no frame could be judged`
+    : `page work p95 ${workP95.toFixed(1)} ms/frame (max ${workMax.toFixed(1)}, budget 8) over ${work.length} frames of this page's scroll; ${frames.length - work.length} frames from other pages excluded`;
+  check('scrolling a long thread holds 60 fps', gpu.known && work.length > 0 && workP95 <= 8,
+    `judged on page work, ${mode}: ${found}; frame interval p95 ${fps.p95Ms.toFixed(1)} ms (${fps.over20} over 20 ms), reported, not judged`);
   await p.evaluate(() => { document.getElementById('scroller').scrollTop = 900; });
   await p.waitForTimeout(200);
   await shot(p, 'paper-long');
