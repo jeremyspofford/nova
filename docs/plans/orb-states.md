@@ -39,7 +39,6 @@ record didn't say whether it stops Nova, so the record now does:
 
 | Where | What | Why it stops Nova |
 |---|---|---|
-| `src/core/ledger.ts:586` | "A task failed: …" | The Failed class: the task's work can't proceed |
 | `src/core/network/index.ts:331` | "Nova couldn't put … back to the snapshot after …" | The dead-man's switch's revert failed; the person must check the target |
 | `src/core/network/index.ts:430` | "Nova lost contact with your devices after …, so it is putting the snapshot back by itself." | The dead-man's switch fired |
 | `src/core/network/index.ts:435` | "Nova couldn't start putting … back after …" | The dead-man's switch couldn't start its revert |
@@ -55,6 +54,9 @@ record didn't say whether it stops Nova, so the record now does:
 | `src/core/resilience/playbooks.ts:43` (`server-unresponsive`) | "Nova stopped answering" | Nova stopped answering |
 
 **Amber on purpose:** everything else. That includes:
+- a failed task, scheduled or not (`src/core/ledger.ts`, "A task failed: …"). Owner ruling D5,
+  2026-11-10: tasks are not a downed system; red is only when Nova is stopped, and a dead component
+  under a task raises its own red problem. Migration 0028 makes the ones raised before amber;
 - the review's case, files too large for the standby's copy (`src/core/mesh/sync.ts:193`);
 - capture outages, which are degraded capture (`src/core/capture/capture.ts:747`, `:753`);
 - the local model not answering (`src/core/models/index.ts:639`);
@@ -65,10 +67,11 @@ record didn't say whether it stops Nova, so the record now does:
 - budget guardrails (`src/core/infra/index.ts`). They refuse the plan but are not security
   refusals. An apply they stop also fails its task, and that failure is stopped.
 
-**Consequence to know:** a failed task is stopped, so a failed "Backup now" turns the orb red.
-The UI review profile (`tests/ui/axe-support.ts`) fails one on purpose, so its screens show the
-stopped orb. The fold-posture baselines for the cover posture's Home and Settings were rewritten
-for that (`tests/ui/baselines/fold/*-duo-cover-{home,settings}.png`); the other 16 are unchanged.
+**Consequence to know (before D5):** a failed task was stopped, so a failed "Backup now" turned the
+orb red. The UI review profile (`tests/ui/axe-support.ts`) fails one on purpose; since D5 its
+screens show the amber needs-you orb. Of the fold-posture baselines only the cover posture's Health
+(`tests/ui/baselines/fold/*-duo-cover-health.png`) changed past the gate's threshold (its lede, the
+problem's status and the badge's shape), so only those two were rewritten.
 
 **The pair page** (`ui/js/pair.js`) uses the same states: needs-you while it waits, and stopped
 when pairing fails or the hub is the wrong one.

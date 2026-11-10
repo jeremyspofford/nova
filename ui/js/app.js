@@ -7,12 +7,12 @@ import { applyEvent, emptySession } from './reduce.js';
 import { escapeHtml, renderMarkdown } from './markdown.js';
 import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { apply as applyTheme } from './theme.js';
-import { NOVA_HEADERS, api, fromCache, on as onCore, reach, refused, stream as coreStream } from './core.js';
+import { NOVA_HEADERS, NO_ANSWER_MS, api, fromCache, on as onCore, reach, refused, stream as coreStream } from './core.js';
 import { approvalFor, loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
 import { bindConfig, bindConfigForm, loadConfigForm, renderConfig, renderConfigForm } from './config.js';
 import { ICONS, lookingIntoItCard, voiceState } from './components.js';
 import { destination, routeOf } from './nav.js';
-import { greeting, problemTone, stoppingProblems } from './status.js';
+import { greeting, healthBadge } from './status.js';
 import { CATEGORIES, GROUPS, categoryOf, filterSettings } from './settings-ia.js';
 import { closeSheet, layout, markCurrent, openSheet, readLayout, runToastAction, setBadge, setBuild, setRecent, signal, toast as notify, toggleAside, liveIcon } from './shell.js';
 import * as core from './surfaces.js';
@@ -105,7 +105,9 @@ async function loadList() {
 }
 
 // A GET that fails the same way whether the server is gone or answers with an error.
-const getJson = (path) => reach(path).then((r) => { if (!r.ok) throw new Error(); return r.json(); });
+// Given up after the same limit the core reads have (F-023), so a pane never waits forever; its
+// waiting line (`key`) is over either way.
+const getJson = (path, key = '') => reach(path, { signal: AbortSignal.timeout(NO_ANSWER_MS) }).then((r) => { if (!r.ok) throw new Error(); return r.json(); }).finally(() => { if (key) over(key); });
 
 // A view whose data couldn't be read: what failed, why, and a way to try again.
 const errorEmpty = (title, msg, retry) => `<div class="empty"><p class="empty-line">${title}</p><p class="memory-lede">${msg}</p><button type="button" class="btn" data-action="${retry}">Try again</button></div>`;
@@ -128,7 +130,7 @@ function loadMemory() {
 }
 
 function loadSkills() {
-  return getJson('/api/skills')
+  return getJson('/api/skills', 'view-skills')
     .then((data) => {
       state.skills = data;
       state.skillsError = '';
@@ -151,7 +153,7 @@ function loadSkills() {
 }
 
 function loadSchedules() {
-  return getJson('/api/schedules')
+  return getJson('/api/schedules', 'view-schedules')
     .then((data) => {
       state.schedules = data;
       state.schedulesError = '';
@@ -180,7 +182,7 @@ function markMainSeen() {
 
 let activityLoad = null;
 function loadActivity() {
-  activityLoad = getJson('/api/activity')
+  activityLoad = getJson('/api/activity', 'view-activity')
     .then((data) => {
       state.activity = data;
       state.activityError = '';
@@ -205,15 +207,16 @@ function showBusy(busy = state.busy) {
 function showSignals() {
   const asking = core.needsYou();
   setBadge('tasks', asking ? { tone: 'attention', label: `${asking} need${asking === 1 ? 's' : ''} you`, count: asking } : null);
-  // Red only for problems that stop Nova; any other open problem needs the person (amber).
-  const problems = core.store.problems;
-  const stopped = stoppingProblems(problems).length;
-  setBadge('health', problems.length ? { tone: problemTone(problems), label: `${problems.length} problem${problems.length === 1 ? '' : 's'}`, count: problems.length } : null);
+  // One severity for the mark, the badge, Home and Health (status.js severity; ruling D5): red only
+  // when Nova is stopped, amber for anything else that needs the person while it runs.
+  const s = core.severityNow(state.busy.waiting);
+  setBadge('health', healthBadge(s));
   signal({
     reachable: state.reachable,
     listening: state.listening,
-    stopped,
-    needsYou: asking + state.busy.waiting + (problems.length - stopped),
+    stopped: s.stopped,
+    needsYou: s.needs,
+    unknown: s.level === 'unknown',
     speaking: state.view === 'chat' && state.live?.phase === 'streaming',
     thinking: state.view === 'chat' && viewLive()?.phase === 'thinking',
     working: core.working() + state.busy.working + (state.pending || state.live ? 1 : 0),
@@ -429,9 +432,22 @@ function open(id, { quiet = false } = {}) {
   es.addEventListener('open', () => setReachable(true));
   es.addEventListener('error', () => {
     if (es.readyState === EventSource.CLOSED) {
-      // A stream refused before any snapshot (no such conversation): the wait is over, never left
-      // waiting for good.
-      if (es === stream && !state.snapshot) { Object.assign(state, { snapshot: true, missing: true, session: emptySession(id) }); renderThread(); renderChrome(); }
+      // A stream refused before any snapshot: the wait is over, never left waiting for good. A
+      // refused stream doesn't say why, so one ordinary read asks (F-024): "no such conversation"
+      // is said as that, with Nova still reachable; only no answer at all is an outage.
+      if (es === stream && !state.snapshot) {
+        reach(`/api/sessions/${encodeURIComponent(id)}`).then((r) => {
+          if (es !== stream || state.snapshot) return;
+          if (r.status === 404) { Object.assign(state, { snapshot: true, missing: 'gone', session: emptySession(id) }); setReachable(true); renderThread(); renderChrome(); return; }
+          throw new Error('refused');
+        }).catch(() => {
+          if (es !== stream || state.snapshot) return;
+          Object.assign(state, { snapshot: true, missing: 'unreachable', session: emptySession(id) });
+          renderThread(); renderChrome();
+          setReachable(false);
+        });
+        return;
+      }
       setReachable(false);
       return;
     }
@@ -490,9 +506,12 @@ function flash(node) {
   found = { node, timer: setTimeout(() => { node.classList.remove('is-found'); found = null; }, FOUND_MS) }; // wait: expiry: the mark
 }
 
-// A conversation that couldn't be opened (no such conversation, or no server): said plainly, never
-// the greeting of an empty chat.
-const MISSING = '<div class="empty"><p class="empty-line">This conversation couldn’t be opened.</p><p class="memory-lede">It may not exist, or Nova’s server isn’t answering. <a href="/chat">Open the main conversation</a>.</p></div>';
+// A conversation that couldn't be opened, said as what it is (F-024): there is no such
+// conversation, or Nova's server isn't answering. Never the greeting of an empty chat.
+const MISSING = {
+  gone: '<div class="empty" data-missing="gone"><p class="empty-line">This conversation doesn’t exist.</p><p class="memory-lede">It may have been deleted, or the link is wrong. <a href="/chat">Open the main conversation</a>.</p></div>',
+  unreachable: '<div class="empty" data-missing="unreachable"><p class="empty-line">This conversation couldn’t be opened.</p><p class="memory-lede">Nova’s server isn’t answering. Your conversations are safe on disk; <a href="/chat">open the main conversation</a> once it’s back.</p></div>',
+};
 let emptyKey = '';
 
 // A conversation whose snapshot isn't in yet is waiting (open): nothing of another one shows.
@@ -514,9 +533,9 @@ function renderThread() {
   if (!session.turns.length) {
     const name = core.store.identity?.address_as ?? core.store.identity?.user_name ?? '';
     // Drawn again only when what it says changes (the name arriving), so it doesn't rise twice.
-    const key = state.missing ? 'missing' : greeting(new Date(), name);
+    const key = state.missing ? `missing-${state.missing}` : greeting(new Date(), name);
     if (!el.thread.querySelector('.empty') || key !== emptyKey) {
-      el.thread.innerHTML = state.missing ? MISSING : renderEmpty(new Date(), { name, orb: liveIcon('hero') });
+      el.thread.innerHTML = state.missing ? MISSING[state.missing] ?? MISSING.unreachable : renderEmpty(new Date(), { name, orb: liveIcon('hero') });
       emptyKey = key;
       rendered = new Map();
     }
@@ -648,7 +667,7 @@ const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state
 // rail, and on a phone's Home, it is there for screen readers only (layout.css).
 const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture', topology: 'Topology', about: 'About Nova', changelog: 'What’s new', pipeline: 'Where Nova stands' };
 function renderChrome() {
-  const title = state.view === 'chat' ? (!state.id ? 'New chat' : state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
+  const title = state.view === 'chat' ? (!state.id ? 'New chat' : state.missing === 'gone' ? 'Conversation not found' : state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
   // An empty chat asks; a thread with turns is replied to. The field is two rows while it is centred.
   // Only a chat known to be empty: while one loads, the field stays one row, as most land.
@@ -1143,7 +1162,7 @@ function renderSkillsView({ enter: entering = false } = {}) {
   const open = [...el.skills.querySelectorAll('.skill-playbook[open]')].map((d) => d.closest('.skill').id);
   if (state.skills) el.skills.innerHTML = renderSkills(state.skills, { local: isLocal() });
   else if (state.skillsError) el.skills.innerHTML = errorEmpty("Skills couldn't be shown.", state.skillsError, 'retry-skills');
-  else el.skills.innerHTML = '';
+  else el.skills.innerHTML = waitingLine('Loading skills', { key: 'view-skills' });
   for (const id of open) document.querySelector(`#${CSS.escape(id)} .skill-playbook`)?.setAttribute('open', '');
   for (const [id, v] of Object.entries(typed)) if ($(id)) $(id).value = v;
   if (advancedOpen) el.skills.querySelector('.connection-advanced')?.setAttribute('open', '');
@@ -1371,7 +1390,7 @@ function renderSchedulesView({ enter: entering = false } = {}) {
   const typed = Object.fromEntries([...el.schedules.querySelectorAll('.schedule-setup')].map((f) => [f.closest('.skill').id, { time: f.time.value, days: f.days.value }]));
   if (state.schedules) el.schedules.innerHTML = renderSchedules(state.schedules, new Date());
   else if (state.schedulesError) el.schedules.innerHTML = errorEmpty("Schedules couldn't be shown.", state.schedulesError, 'retry-schedules');
-  else el.schedules.innerHTML = '';
+  else el.schedules.innerHTML = waitingLine('Loading schedules', { key: 'view-schedules' });
   for (const id of open) document.querySelector(`#${CSS.escape(id)} .skill-playbook`)?.setAttribute('open', '');
   for (const [id, v] of Object.entries(typed)) {
     const f = document.querySelector(`#${CSS.escape(id)} .schedule-setup`);
@@ -1484,7 +1503,7 @@ function renderActivityView({ enter: entering = false } = {}) {
     const last = state.earlier.at(-1) ?? state.activity;
     el.activity.innerHTML = renderActivity({ ...state.activity, days, more: last.more, before: last.before, earlier: state.earlier.length > 0 }, new Date());
   } else if (state.activityError) el.activity.innerHTML = errorEmpty("Activity couldn't be shown.", state.activityError, 'retry-activity');
-  else el.activity.innerHTML = '';
+  else el.activity.innerHTML = waitingLine('Loading activity', { key: 'view-activity' });
   for (const id of open) document.getElementById(id)?.querySelector('.act-steps')?.setAttribute('open', '');
   if (focusKey) {
     const item = $(focusKey);
@@ -2059,7 +2078,8 @@ function showAboutView(view) {
   enter(el[view]);
   el[view].focus({ preventScroll: true });
   import('./about.js').then((m) => m.show(view, el[view])).catch(() => {
-    el[view].innerHTML = `<header class="view-head"><h2 class="view-title">${escapeHtml(TITLES[view])}</h2></header><div class="empty-state"><p class="empty-title">This page couldn’t open</p><p class="empty-sub">Nova’s server didn’t answer. Open it again once Nova is back.</p></div>`;
+    el[view].innerHTML = `<header class="view-head"><h2 class="view-title">${escapeHtml(TITLES[view])}</h2></header><div class="empty-state"><p class="empty-title">This page couldn’t open</p><p class="empty-sub">Nova’s server didn’t answer.</p><button type="button" class="btn" data-about-reopen>Try again</button></div>`;
+    el[view].querySelector('[data-about-reopen]')?.addEventListener('click', () => { if (state.view === view) showAboutView(view); }, { once: true });
   });
 }
 el.capture.addEventListener('click', (e) => { followLink(e); });
@@ -2136,6 +2156,9 @@ const CORE_ACTIONS = {
   'promotion-cancel': () => core.promotionAction('cancel'),
   'promotion-take-back': () => core.promotionAction('take-back'),
   'backup-now': resilienceAction, 'drill-now': resilienceAction, 'repair-problem': resilienceAction,
+  // A part that couldn't be loaded (F-021, F-023): that part alone, read again and drawn in place.
+  // One part failing again says nothing about whether Nova answers, so reachability is left alone.
+  'retry-part': (b) => (['tasks', 'problems', 'health', 'rules'].includes(b.dataset.part) ? core.load([b.dataset.part]).then(() => renderCore()) : null),
   'resolve-problem': toasting(async (b) => { await post(`/api/v1/problems/${encodeURIComponent(b.dataset.problem)}/resolve`); scheduleRefresh(['problems', 'health']); toast('Marked as dealt with.'); }),
   'read-message': toasting(async (b) => { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/read`); scheduleRefresh(['messages']); }),
   'send-message': toasting(async (b) => { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/approve`); scheduleRefresh(['messages']); toast('Sent.'); }),

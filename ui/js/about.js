@@ -30,7 +30,9 @@ const head = (view) => {
   return `<p class="view-crumb"><a class="link view-crumb-link" href="${back[0]}">${ICONS.back}<span>${back[1]}</span></a></p><header class="view-head"><h2 class="view-title">${title}</h2><p class="view-lede">${lede}</p></header>`;
 };
 const saved = (stale) => (stale ? '<p class="settings-note" role="status">Saved earlier, while Nova was out of reach: this may not be the latest.</p>' : '');
-const failed = (what) => `<div data-about-failed>${emptyState({ title: `Nova couldn’t read ${what}`, line: 'Its server didn’t answer. Open this page again once Nova is back.' })}</div>`;
+// A read that failed (F-023): said, with Try again, which reads it again without leaving the page.
+const retry = (view) => `<div class="connection-actions"><button type="button" class="btn" data-about-retry="${view}">Try again</button></div>`;
+const failed = (what, view) => `<div data-about-failed>${emptyState({ title: `Nova couldn’t read ${what}`, line: 'Its server didn’t answer.', action: retry(view) })}</div>`;
 
 async function read(view, path) {
   const mine = ++generation[view];
@@ -49,7 +51,7 @@ async function about(root) {
   root.innerHTML = `${head('about')}${aboutCard({ state: 'loading' })}`;
   const r = await read('about', '/version');
   if (!r) return;
-  if (r.error) { root.innerHTML = `${head('about')}${aboutCard({ state: 'failed' })}`; return; }
+  if (r.error) { root.innerHTML = `${head('about')}${aboutCard({ state: 'failed' })}${retry('about')}`; return; }
   // The stamp at the rail's foot says the same as this page, as of now.
   if (!r.stale) setBuild(r.data);
   root.innerHTML = `${head('about')}${saved(r.stale)}${aboutCard({ build: r.data })}`;
@@ -92,7 +94,7 @@ async function changelog(root) {
   root.innerHTML = `${head('changelog')}<div data-waiting>${waitingLine('Reading the changelog', { key: 'view-changelog' })}</div>`;
   const r = await read('changelog', '/changelog');
   if (!r) return;
-  root.innerHTML = `${head('changelog')}${r.error ? failed('the changelog') : `${saved(r.stale)}${changelogPage(r.data)}`}`;
+  root.innerHTML = `${head('changelog')}${r.error ? failed('the changelog', 'changelog') : `${saved(r.stale)}${changelogPage(r.data)}`}`;
 }
 
 // ---- Where Nova stands ------------------------------------------------------------------------------------
@@ -111,13 +113,20 @@ async function pipeline(root) {
   root.innerHTML = `${head('pipeline')}<div data-waiting>${waitingLine('Reading the roadmap and the ledger', { key: 'view-pipeline' })}</div>`;
   const r = await read('pipeline', '/pipeline');
   if (!r) return;
-  root.innerHTML = `${head('pipeline')}${r.error ? failed('where Nova stands') : `${saved(r.stale)}${pipelinePage(r.data)}`}`;
+  root.innerHTML = `${head('pipeline')}${r.error ? failed('where Nova stands', 'pipeline') : `${saved(r.stale)}${pipelinePage(r.data)}`}`;
 }
 
 const VIEWS = { about, changelog, pipeline };
 // Draws one of the three views into its root, reading the core afresh. The stamp at the rail's foot
 // is read again with it, so it never says less than these pages do.
 export function show(view, root) {
+  if (!root.dataset.retryBound) {
+    root.dataset.retryBound = '1';
+    root.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-about-retry]');
+      if (b && Object.hasOwn(VIEWS, b.dataset.aboutRetry)) VIEWS[b.dataset.aboutRetry](root);
+    });
+  }
   if (view !== 'about') request('GET', '/version').then((r) => { if (!r.stale) setBuild(r.data); }).catch(() => {});
   return VIEWS[view](root);
 }

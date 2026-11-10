@@ -229,9 +229,12 @@ test('the rail holds every destination, scrolls when short, opens no popover, an
       const health = page.locator('#rail a[data-dest="health"]');
       const mark = health.locator('.nav-badge[data-tone]').filter({ visible: true });
       await mark.first().waitFor();
-      assert.match((await health.getAttribute('aria-label')) ?? '', /^Health, \d+ problems?$/, `${what}: Health says it has a problem`);
+      // Its name says the severity in words (F-075): needs-you for attention, Nova stopped for alert.
+      const tone = (await mark.first().getAttribute('data-tone')) ?? '';
+      assert.match(tone, /^(alert|attention)$/, `${what}: the dot carries the problem's tone`);
+      const said = (await health.getAttribute('aria-label')) ?? '';
+      assert.match(said, tone === 'alert' ? /^Health, \d+ problems?, Nova is stopped$/ : /^Health, (1 problem, it needs you|\d+ problems, they need you)$/, `${what}: Health says it has a problem, and how serious (${tone})`);
       const [hb, bb] = [(await health.boundingBox())!, (await mark.first().boundingBox())!];
-      assert.match((await mark.first().getAttribute('data-tone')) ?? '', /^(alert|attention)$/, `${what}: the dot carries the problem's tone`);
       assert.notEqual(await mark.first().evaluate((e) => getComputedStyle(e).backgroundColor), 'rgba(0, 0, 0, 0)', `${what}: the dot is painted`);
       assert.ok(bb.width > 0 && bb.x >= hb.x && bb.x + bb.width <= hb.x + hb.width && bb.y >= hb.y && bb.y + bb.height <= hb.y + hb.height, `${what}: the badge sits on the Health row`);
       // Moving between places never opens a floating panel over the page.

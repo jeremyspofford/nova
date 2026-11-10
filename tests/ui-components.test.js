@@ -55,7 +55,7 @@ test('a task row carries its own state’s icon slot', () => {
   assert.match(row('active'), /<span class="task-icon-slot" data-task-icon="working" data-task="x-active" aria-hidden="true"><\/span>/);
   assert.match(row('waiting', { approval_tier: 2 }), /data-task-icon="needs-you"/);
   assert.match(row('queued'), /data-task-icon="idle"/);
-  assert.match(row('failed'), /data-task-icon="stopped"/);
+  assert.match(row('failed'), /data-task-icon="needs-you"/, 'a failed task needs you; it hasn\x27t stopped Nova (D5)');
   assert.match(taskRow(verified), /data-task-icon="success"/);
   assert.doesNotMatch(row('cancelled'), /data-task-icon/);
 });
@@ -145,7 +145,21 @@ test('health and memory cards say what is true', () => {
   assert.match(healthCard({ health: ok, problems: [sync, { id: 3, source: 'backups', message: 'x' }, { id: 4, source: 'whatever', message: 'y' }] }), /About the standby’s copy of your files, backups and Nova itself\./);
   // A check that isn't fine, with no problem open: its name, not its detail.
   const badCheck = healthCard({ health: { ok: false, checks: { backups: { ok: false, detail: '/mnt/backup: ENOENT' } } } });
-  assert.match(badCheck, /Something isn’t right[\s\S]*Needs a look: Backups\./);
+  // Amber, not red: a failing check doesn't stop Nova unless it says it does (ruling D5).
+  assert.match(badCheck, /data-status="needs-you">Something needs a look[\s\S]*Needs a look: Backups\./);
+  const deadDb = healthCard({ health: { ok: false, checks: { database: { ok: false, stops: true, detail: 'x' } } } });
+  assert.match(deadDb, /data-status="failed">Nova is stopped[\s\S]*Needs a look: Database\./);
+  // A failed task's problem is amber, said as not stopping Nova; a stopping one says it did.
+  const task = { id: 7, source: 'ledger', message: 'A task failed: Nightly backup.', stops: 0 };
+  assert.match(healthCard({ health: ok, problems: [task] }), /data-status="needs-you">1 problem to look at<[\s\S]*Nothing has stopped Nova/);
+  assert.match(healthCard({ health: ok, problems: [{ ...task, stops: 1 }] }), /data-status="failed">1 problem to look at: Nova is stopped[\s\S]*Something stopped Nova/);
+  // The problems list couldn't be read (F-021): never "All systems normal", with a retry.
+  const unknown = healthCard({ health: ok, known: false });
+  assert.doesNotMatch(unknown, /All systems normal/);
+  assert.match(unknown, /Problems couldn’t be checked[\s\S]*data-action="retry-part" data-part="problems"/);
+  // The health reading couldn't be had (F-023): said with a retry, never an endless "Checking".
+  assert.match(healthCard({ healthFailed: true }), /Health checks couldn’t be loaded[\s\S]*data-part="health"/);
+  assert.doesNotMatch(healthCard({ healthFailed: true }), /Checking Nova’s health/);
   assert.doesNotMatch(badCheck, /ENOENT|\/mnt/);
   // No backup to fall back on (F-019): not "All systems normal", amber, never red, in plain words.
   for (const attention of ['nothing is backed up: no backup folder is set.', 'nothing is backed up yet.']) {

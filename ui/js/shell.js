@@ -122,7 +122,7 @@ export function renderNav() {
   const p = placement(layout.layout);
   // A phone's drawer: the same rail, Home a row (the orb is the top bar's), and a close button.
   const drawer = layout.layout === 'phone';
-  const home = p.home === 'orb' ? `<a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(ICON_WORDS[iconNow])}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${liveIcon('rail', { decorative: true })}${ICONS.home}</a>` : '';
+  const home = p.home === 'orb' ? `<a class="rail-home" href="/" data-dest="home" aria-label="Home. ${esc(words(iconNow))}"${currentDest === 'home' ? ' aria-current="page"' : ''}>${liveIcon('rail', { decorative: true })}${ICONS.home}</a>` : '';
   $('rail').innerHTML = `<div class="rail-head">${home}
 <button type="button" class="icon-btn rail-search" id="rail-search" aria-label="Search or go to" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Search or go to (Ctrl K)">${ICONS.search}</button>${drawer ? `<button type="button" class="icon-btn rail-new" id="nav-new" aria-label="New conversation" title="New conversation (Ctrl Shift O)">${ICONS.plus}</button><button type="button" class="icon-btn" id="nav-close" aria-label="Close navigation">${ICONS.close}</button>` : ''}</div>
 <div class="rail-scroll"><p class="rail-group" id="rail-places">Places</p>
@@ -215,24 +215,31 @@ document.addEventListener('keydown', (e) => {
 
 // ---- the live state, drawn as the status icon --------------------------------------------------
 
-const signals = { reachable: true, listening: false, stopped: 0, needsYou: 0, speaking: false, working: 0, thinking: false };
+const signals = { reachable: true, listening: false, stopped: 0, needsYou: 0, speaking: false, working: 0, thinking: false, unknown: false };
 let orbNow = 'idle'; // the one live state (status.js orbState)
 let iconNow = 'idle'; // the same, as the status icon draws it (status.js iconState)
+let unknownNow = false;
+
+// What the live icon says. Quiet is a claim that nothing is wrong: when the problems list couldn't
+// be read (F-021) the icon isn't redrawn (the artwork is the owner's), but it doesn't say quiet.
+const UNKNOWN_WORDS = 'Nova couldn’t check for problems';
+const words = (icon) => (icon === 'idle' && signals.unknown ? UNKNOWN_WORDS : ICON_WORDS[icon] ?? icon);
 
 // Real signals in: every live icon on the page shows the most urgent state.
 export function signal(patch) {
   Object.assign(signals, patch);
   const next = orbState(signals);
   const icon = iconState(next, signals);
-  if (next === orbNow && icon === iconNow) return;
+  if (next === orbNow && icon === iconNow && !!signals.unknown === unknownNow) return;
   const changed = next !== orbNow;
   orbNow = next;
   iconNow = icon;
+  unknownNow = !!signals.unknown;
   for (const el of presences) {
     if (!el.isConnected && !pooled.has(el)) { presences.delete(el); continue; }
     showLive(el);
   }
-  document.querySelector('.rail-home')?.setAttribute('aria-label', `Home. ${ICON_WORDS[icon]}`);
+  document.querySelector('.rail-home')?.setAttribute('aria-label', `Home. ${words(icon)}`);
   if (changed) window.dispatchEvent(new CustomEvent('nova:orb', { detail: next }));
 }
 
@@ -249,13 +256,15 @@ const pooled = new Set();
 function showLive(el) {
   el.dataset.state = orbNow;
   el.setStatus(iconNow); // also wakes an icon put back on the page
+  // Its words can change while its state doesn't (quiet, or the problems couldn't be read).
+  if (el.getAttribute('role') === 'img') { const w = words(iconNow); el.setAttribute('aria-label', w); el.title = w; }
 }
 function live(size, decorative) {
   const key = `${size}${decorative ? ':decorative' : ''}`;
   let el = pool.get(key);
   if (!el || el.isConnected) {
     // Two of a kind on the page at once (Home and a chat both drawn): the second is its own.
-    el = statusIcon({ status: iconNow, size: LIVE_PX[size] ?? LIVE_PX.rail, decorative, label: (s) => ICON_WORDS[s] ?? s });
+    el = statusIcon({ status: iconNow, size: LIVE_PX[size] ?? LIVE_PX.rail, decorative, label: (s) => words(s) });
     el.dataset.presence = '';
     el.dataset.size = size;
     presences.add(el);

@@ -2,7 +2,7 @@
 // the style reference and the appearance preview all draw the same components. Every visual
 // value is a token (components.css); nothing here carries a colour, size or font.
 import { escapeHtml as esc } from './markdown.js';
-import { ORB_WORDS, STATUS, isOpen, label, needsApproval, statusOf, taskIconState } from './status.js';
+import { ORB_WORDS, STATUS, isOpen, label, needsApproval, severity, statusOf, taskIconState } from './status.js';
 import { qrSvg } from './qr.js';
 import { waitingLine } from './wait.js';
 
@@ -472,23 +472,30 @@ export function problemsSummary(problems) {
   const words = listWords(shown);
   return `About ${words}.`;
 }
-export function healthCard({ health = null, problems = [], reachable = true } = {}) {
+// The card's tone and words follow severity() (status.js), as the mark, the badge and Home's first
+// line do: red only when Nova is stopped (ruling D5), and the words say which it is (F-075).
+// `known`: whether the problems list was read (F-021); `healthFailed`: the health reading couldn't
+// be had (F-023), which is said with a retry rather than an endless "Checking".
+export function healthCard({ health = null, problems = [], reachable = true, known = true, healthFailed = false } = {}) {
   let body;
   if (!reachable) body = '<p class="card-lead">Nova isn’t answering.</p><p class="card-line">This page reconnects when it’s back.</p>';
+  else if (!health && healthFailed) body = `<p class="card-lead" data-status="needs-you">Health checks couldn’t be loaded</p><p class="card-line">Nova answered, but not with its health reading.</p><button type="button" class="btn small" data-action="retry-part" data-part="health">Try again</button>`;
   else if (!health) body = waitingLine('Checking Nova’s health', { key: 'health' });
   else {
-    const bad = Object.entries(health.checks ?? {}).filter(([, c]) => c && c.ok === false);
-    // Working, but not something to call normal: no backup to fall back on (F-019).
-    const look = Object.entries(health.checks ?? {}).filter(([, c]) => c && c.ok !== false && c.attention);
-    const lead = problems.length ? `${problems.length} problem${problems.length === 1 ? '' : 's'} to look at` : bad.length ? 'Something isn’t right' : look.length ? 'Something needs a look' : 'All systems normal';
-    const lines = problems.length ? [problemsSummary(problems), 'What happened, and what you can do, is in Health.']
-      : bad.length ? [`Needs a look: ${listWords(bad.map(([k]) => CHECK_NAMES[k] ?? 'another check'))}.`, 'The detail is in Health.']
-        : look.length ? [...look.map(([k, c]) => `${CHECK_NAMES[k] ?? 'A check'}: ${typeof c.attention === 'string' ? c.attention : 'needs a look.'}`), 'The detail is in Health.']
-          : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
-    // Failed (red) only when a problem stops Nova; any other open problem, or a check that needs a
-    // look while Nova runs, needs you (amber).
-    const tone = problems.some((p) => p?.stops) || (!problems.length && bad.length) ? 'failed' : problems.length || look.length ? 'needs-you' : 'verified';
-    body = `<p class="card-lead" data-status="${tone}">${esc(lead)}</p>${lines.map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}`;
+    const s = severity({ problems, known, checks: health.checks });
+    const stopped = s.level === 'stopped';
+    // Working, but not something to call normal: no backup to fall back on (F-019). Amber, never red.
+    const look = Object.entries(health.checks ?? {}).filter(([, ch]) => ch && ch.ok !== false && ch.attention);
+    const lead = problems.length ? `${problems.length} problem${problems.length === 1 ? '' : 's'} to look at${stopped ? ': Nova is stopped' : ''}`
+      : stopped ? 'Nova is stopped' : s.lookChecks.length || look.length ? 'Something needs a look' : !known ? 'Problems couldn’t be checked' : 'All systems normal';
+    const failing = [...s.stoppedChecks, ...s.lookChecks];
+    const lines = problems.length ? [problemsSummary(problems), stopped ? 'Something stopped Nova. What happened, and what you can do, is in Health.' : 'Nothing has stopped Nova. What happened, and what you can do, is in Health.']
+      : failing.length ? [`Needs a look: ${listWords(failing.map((k) => CHECK_NAMES[k] ?? 'another check'))}.`, 'The detail is in Health.']
+        : look.length ? [...look.map(([k, ch]) => `${CHECK_NAMES[k] ?? 'A check'}: ${typeof ch.attention === 'string' ? ch.attention : 'needs a look.'}`), 'The detail is in Health.']
+          : !known ? ['Nova couldn’t read its list of problems, so it can’t say nothing is wrong.']
+            : [`Database, ledger and ${health.checks?.workers?.workers?.length ?? 0} workers are fine.`];
+    const tone = stopped ? 'failed' : s.level === 'needs-you' || s.level === 'unknown' || look.length ? 'needs-you' : 'verified';
+    body = `<p class="card-lead" data-status="${tone}">${esc(lead)}</p>${lines.map((l) => `<p class="card-line">${esc(l)}</p>`).join('')}${!known ? '<button type="button" class="btn small" data-action="retry-part" data-part="problems">Try again</button>' : ''}`;
   }
   return card({ kind: 'health-card', title: 'System health', icon: 'health', body, action: '<a class="link" href="/health" data-nav="health">Health</a>' });
 }
@@ -543,8 +550,10 @@ export function workCosts({ view = null, state = 'ready', error = '', invalid = 
 
 // Leave the real action as a native attachment navigation. The styleguide alone intercepts it;
 // future Health composition must not fetch the bundle or turn it into a client-side data store.
-export function diagnosticsDownload({ available = true } = {}) {
-  return `<section class="diagnostics-download" aria-label="Diagnostics" data-diagnostics-state="${available ? 'available' : 'unavailable'}"><p class="card-line">Download versions, health, settings and recent diagnostic logs. Work, memory and conversations are represented by counts and states, without conversation, memory or captured screen/audio content.</p><p class="card-line">Built in memory for your download. Nova keeps no copy and uploads nothing.</p><details class="work-cost-details"><summary>Review before sharing</summary><p class="card-line">Known secrets and secret-shaped values are redacted. Logs and error details can still contain other free text; this is not a guarantee that every private detail is removed. Review the file before sharing.</p></details>${available ? '<a class="btn" href="/api/v1/diagnostics" download data-download-diagnostics>Download diagnostics</a>' : '<p class="card-line">Diagnostics are unavailable. Try again when Nova is reachable.</p><button class="btn" disabled>Download diagnostics</button>'}</section>`;
+// `why` it is unavailable: Nova out of reach, or reachable without its health reading (F-023).
+export function diagnosticsDownload({ available = true, why = 'unreachable' } = {}) {
+  const unavailable = why === 'health' ? 'Diagnostics are unavailable until Nova’s health reading is in. Try the checks again below.' : 'Diagnostics are unavailable. Try again when Nova is reachable.';
+  return `<section class="diagnostics-download" aria-label="Diagnostics" data-diagnostics-state="${available ? 'available' : 'unavailable'}"><p class="card-line">Download versions, health, settings and recent diagnostic logs. Work, memory and conversations are represented by counts and states, without conversation, memory or captured screen/audio content.</p><p class="card-line">Built in memory for your download. Nova keeps no copy and uploads nothing.</p><details class="work-cost-details"><summary>Review before sharing</summary><p class="card-line">Known secrets and secret-shaped values are redacted. Logs and error details can still contain other free text; this is not a guarantee that every private detail is removed. Review the file before sharing.</p></details>${available ? '<a class="btn" href="/api/v1/diagnostics" download data-download-diagnostics>Download diagnostics</a>' : `<p class="card-line">${esc(unavailable)}</p><button class="btn" disabled>Download diagnostics</button>`}</section>`;
 }
 
 export function memoryHighlightCard({ records = [] } = {}) {

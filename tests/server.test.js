@@ -143,6 +143,22 @@ test('how to restore a backup is served at the address Health links to', async (
   assert.equal((await fetch(`${base}/docs/README`)).status, 404);
 });
 
+test('an unknown address gets a page that names Nova and links Home, still 404; the API keeps its own answers (F-024)', async () => {
+  const page = await fetch(`${base}/no-such-page`, { headers: { accept: 'text/html,application/xhtml+xml' } });
+  assert.equal(page.status, 404);
+  assert.match(page.headers.get('content-type'), /^text\/html/);
+  assert.ok(page.headers.get('content-security-policy'), 'the page carries the same security headers as the app');
+  const html = await page.text();
+  assert.match(html, /<h1[^>]*>Nova has nothing at this address<\/h1>/);
+  assert.match(html, /<a class="btn" href="\/">Go to Home<\/a>/);
+  const asset = await fetch(`${base}/js/no-such-file.js`);
+  assert.equal(asset.status, 404);
+  assert.equal(await asset.text(), 'Not found', 'a script or an image keeps the plain answer');
+  const missing = await fetch(`${base}/api/sessions/2026-01-01-zzzzzz`);
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: 'No such conversation' }, 'the API answers as it did');
+});
+
 test('first run seeds the standing files without overwriting', () => {
   const home = nova.config.home;
   for (const f of ['AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md', 'MEMORY.md']) assert.ok(existsSync(join(home, f)), f);
