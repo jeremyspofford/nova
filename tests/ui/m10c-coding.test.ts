@@ -21,9 +21,9 @@ test('M10c: the check and merge sheets show the diff, the tests and the preview 
   const api = (p: string) => `/api/v1${p}`;
   const task = (id: string) => m.get(api(`/tasks/${id}`));
   const stepOf = async (run: string, step: string) => {
-    const v = await until<any>(() => m.get(api(`/coding/runs/${run}`)), (x) => x.tasks.some((y: { step: string }) => y.step === step), 800);
+    const v = await until<any>(() => m.get(api(`/coding/runs/${run}`)), (x) => x.tasks.some((y: { step: string }) => y.step === step));
     const ref = v.tasks.filter((y: { step: string }) => y.step === step).at(-1);
-    return until<any>(() => task(ref.id), (x) => ['waiting', 'done', 'failed', 'cancelled'].includes(x.state), 800);
+    return until<any>(() => task(ref.id), (x) => ['waiting', 'done', 'failed', 'cancelled'].includes(x.state));
   };
   const request = `In the repository at ${repos.person}, make greet() say “Hello, <name>!” as its test expects. Test with \`node --test\`, preview with \`node server.mjs\`.`;
   try {
@@ -35,7 +35,7 @@ test('M10c: the check and merge sheets show the diff, the tests and the preview 
 
     // The request in chat: the tool step says where to follow it.
     const { body } = await m.send('POST', '/api/sessions', { text: request });
-    await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null, 800);
+    await until<any>(() => m.get(`/api/sessions/${body.id}`), (x) => x.live === null);
     await page.goto(`${m.base}/c/${body.id}`);
     await ready(page);
     const followed = page.locator('a.record-link', { hasText: 'Follow it in Tasks' });
@@ -103,7 +103,7 @@ test('M10c: the check and merge sheets show the diff, the tests and the preview 
 
     // A second run, confirmed in the sheet: merged, exactly the reviewed commit.
     await m.send('POST', '/api/sessions', { text: request });
-    const run2 = await until<string>(async () => (await m.get(api('/coding'))).runs[0].id, (x) => x !== run, 800);
+    const run2 = await until<string>(async () => (await m.get(api('/coding'))).runs[0].id, (x) => x !== run);
     const check2 = await stepOf(run2, 'check');
     await m.send('POST', api(`/tasks/${check2.id}/approve`), {});
     const merge2 = await stepOf(run2, 'merge');
@@ -115,7 +115,7 @@ test('M10c: the check and merge sheets show the diff, the tests and the preview 
     await sheet2.locator('input[name="confirm"]').check();
     await sheet2.locator('[data-action="approve"]').click();
     await page.locator('.toast', { hasText: 'Approved' }).waitFor();
-    const merged = await until<any>(() => task(merge2.id), (x) => ['done', 'failed'].includes(x.state), 800);
+    const merged = await until<any>(() => task(merge2.id), (x) => ['done', 'failed'].includes(x.state));
     assert.equal(merged.state, 'done', merged.reason);
     assert.equal(git(repos.person, 'rev-parse', 'main'), (await m.get(api(`/coding/runs/${run2}`))).head);
     assert.deepEqual(errors, [], 'no errors in the page');

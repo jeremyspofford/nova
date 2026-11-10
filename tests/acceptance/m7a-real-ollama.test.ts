@@ -25,18 +25,18 @@ test('M7a evidence: the foundry on a real local model, through the pipeline', { 
     assert.equal(role.status, 200, JSON.stringify(role.body));
     const asked = await m.send('POST', api('/foundry'), { need: 'Remind me to wind down at nine every evening', kind: 'trigger-rules' });
     assert.equal(asked.status, 201, JSON.stringify(asked.body));
-    const authored = await until<any>(() => m.get(api(`/tasks/${asked.body.id}`)), (t) => ['done', 'failed', 'cancelled', 'waiting'].includes(t.state), 32_000);
+    const authored = await until<any>(() => m.get(api(`/tasks/${asked.body.id}`)), (t) => ['done', 'failed', 'cancelled', 'waiting'].includes(t.state), 800_000);
     const lines = [`Model ${model} at ${url}, ${Math.round((Date.now() - started) / 1000)} s to write. Foundry task: ${authored.state}${authored.reason ? ` — ${String(authored.reason).replace(/[.\s]+$/, '')}` : ''}.`];
     const receipts = await m.get(api(`/receipts?task_id=${asked.body.id}`));
     assert.ok(receipts.every((r: { egress: string }) => r.egress === 'local'), 'local-only: the model on this machine');
     if (authored.state === 'done') {
       const c = (await m.get(api('/changes'))).changes.find((x: any) => x.proposed_by === 'foundry');
       assert.equal(c.tier, 3);
-      const settled = await until<any>(() => m.get(api(`/changes/${c.id}`)), (x) => x.state !== 'checking', 2400);
+      const settled = await until<any>(() => m.get(api(`/changes/${c.id}`)), (x) => x.state !== 'checking', 60_000);
       lines.push(`Change “${settled.title}” v${settled.version}: ${settled.state}${settled.reason ? ` — ${String(settled.reason).replace(/[.\s]+$/, '')}` : ''}.`);
       if (settled.state === 'waiting') {
         assert.equal((await m.send('POST', api(`/changes/${c.id}/ship`), { confirm: true })).status, 200);
-        const live = await until<any>(() => m.get(api(`/changes/${c.id}`)), (x) => (!!x.canary?.started_at && x.canary.applied !== false) || x.state !== 'canary', 800);
+        const live = await until<any>(() => m.get(api(`/changes/${c.id}`)), (x) => (!!x.canary?.started_at && x.canary.applied !== false) || x.state !== 'canary');
         for (let i = 1; i <= 3 && live.state === 'canary'; i++) await m.send('POST', api('/changes/tick'), { now: new Date(Date.parse(live.canary.started_at) + i * 15 * 60_000).toISOString() });
         const end = await m.get(api(`/changes/${c.id}`));
         lines.push(`After its canary: ${end.state}.`);

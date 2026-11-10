@@ -53,19 +53,19 @@ test('M6a: the real server pulls Screenpipe on its own, never stores a private w
       { at: at(t0, 1), app: 'Editor', window: 'plan.md', text: 'GIT-SENTINEL-3307 draft the plan' },
       { at: at(t0, 1), app: 'Browser', window: 'New Incognito Tab - Browser', text: 'INCOGNITO-SENTINEL-1190' },
     );
-    const evs = await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length >= 1, 200);
+    const evs = await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length >= 1);
     assert.deepEqual(evs.map((e: any) => e.text), ['GIT-SENTINEL-3307 draft the plan']);
     assert.equal((await m.get('/api/v1/capture/status')).active, true);
 
     // An outage: one problem, no crash; what Screenpipe kept meanwhile arrives once it's back.
     await sp.down();
-    await until(() => m.get('/api/v1/capture'), (c: any) => c.sources[0].status === 'unreachable', 200);
+    await until(() => m.get('/api/v1/capture'), (c: any) => c.sources[0].status === 'unreachable');
     const problems = (await m.get('/api/v1/problems?open=1')).filter((p: any) => p.source === 'capture');
     assert.equal(problems.length, 1);
     assert.match(problems[0].message, /isn’t answering.*nothing Screenpipe keeps meanwhile is lost/);
     sp.add({ at: at(t0, 2), app: 'Editor', window: 'plan.md', text: 'while it was down' });
     await sp.up();
-    await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length >= 2, 200);
+    await until(() => m.get('/api/v1/capture/events'), (l: any[]) => l.length >= 2);
     assert.equal((await m.get('/api/v1/capture')).sources[0].status, 'on');
     assert.equal((await m.get('/api/v1/problems?open=1')).filter((p: any) => p.source === 'capture').length, 0);
 
@@ -112,17 +112,17 @@ test('M6a: capture replicates to the standby; forgetting holds on both nodes, ba
       { at: at(t0, 3), app: 'Editor', window: 'c', text: 'stays' },
     );
     assert.equal((await hub.send('POST', `/api/v1/capture/sources/${enc(src.id)}/pull`)).body.kept, 3);
-    await until(() => hub.send('POST', '/api/v1/capture/screen').then(() => hub.get('/api/v1/capture/events')), (l: any[]) => l.every((e) => e.sensitivity.state === 'index'), 200);
+    await until(() => hub.send('POST', '/api/v1/capture/screen').then(() => hub.get('/api/v1/capture/events')), (l: any[]) => l.every((e) => e.sensitivity.state === 'index'));
     const evs = await hub.get('/api/v1/capture/events');
     const byText = (t: string) => evs.find((e: any) => e.text.startsWith(t));
     const promoted = (await hub.send('POST', '/api/v1/capture/promote', { event_ids: [byText('MEMORY-SENTINEL').id] })).body.memory;
 
     // The standby has the source (with its consent), the events and the memory.
-    const there = await until(() => standby.get('/api/v1/capture/events'), (l: any[]) => l.length === 3, 400);
+    const there = await until(() => standby.get('/api/v1/capture/events'), (l: any[]) => l.length === 3);
     assert.equal(there.length, 3);
     const standbySource = (await standby.get('/api/v1/capture')).sources[0];
     assert.deepEqual([standbySource.id, standbySource.enabled, !!standbySource.consent], [src.id, true, true]);
-    await until(() => standby.get('/api/v1/memory'), (l: any[]) => l.some((x: any) => x.id === promoted.id), 400);
+    await until(() => standby.get('/api/v1/memory'), (l: any[]) => l.some((x: any) => x.id === promoted.id));
     // Backups on both nodes that hold all of it, as upgrades would leave them.
     for (const n of [hub, standby]) backup(n.home, 'nova-test-v8.db');
     for (const n of [hub, standby]) for (const w of ['EVENT-SENTINEL-6620', 'MEMORY-SENTINEL-7731']) assert.ok(holding(join(n.home, 'backups'), w).length > 0);
@@ -130,10 +130,10 @@ test('M6a: capture replicates to the standby; forgetting holds on both nodes, ba
     // Forget one event, and the promoted memory (which takes its capture with it).
     assert.equal((await hub.send('DELETE', `/api/v1/capture/events/${byText('EVENT-SENTINEL').id}`)).status, 200);
     assert.equal((await hub.send('DELETE', `/api/v1/memory/${promoted.id}`)).status, 200);
-    await until(() => standby.get('/api/v1/capture/events'), (l: any[]) => l.length === 1, 400);
-    await until(() => standby.get('/api/v1/memory'), (l: any[]) => !l.some((x: any) => x.id === promoted.id), 400);
+    await until(() => standby.get('/api/v1/capture/events'), (l: any[]) => l.length === 1);
+    await until(() => standby.get('/api/v1/memory'), (l: any[]) => !l.some((x: any) => x.id === promoted.id));
     for (const w of ['EVENT-SENTINEL-6620', 'MEMORY-SENTINEL-7731']) {
-      const left = await until(async () => [...holding(hub.home, w), ...holding(standby.home, w)], (l) => l.length === 0, 400);
+      const left = await until(async () => [...holding(hub.home, w), ...holding(standby.home, w)], (l) => l.length === 0);
       assert.deepEqual(left, [], `${w}: gone from both nodes' databases, write-ahead logs and backups`);
     }
     assert.deepEqual((await standby.get('/api/v1/capture/events')).map((e: any) => e.text), ['stays']);

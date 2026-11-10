@@ -41,13 +41,13 @@ test('the vault replicates sealed: after a failover, Home Assistant works on the
     assert.equal(connected.status, 200, JSON.stringify(connected.body));
     const rule = (await hub.send('POST', '/api/v1/triggers/rules', { name: 'Front door opened', class: 'event', connector: 'home-assistant', topic: 'binary_sensor.front_door', action: { kind: 'message', text: 'The front door opened.' }, dedup_window_s: 0 })).body.rule;
     assert.ok(rule?.id);
-    await until(() => hub.get('/api/v1/connectors/home-assistant'), (v: any) => v.live === 'listening', 400);
+    await until(() => hub.get('/api/v1/connectors/home-assistant'), (v: any) => v.live === 'listening');
 
     standbyProc = await standby.start(s.env(s.standbyMesh));
-    await until(() => hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_seq > 0 && h.checks.mesh.standby.lag.rows === 0, 400);
+    await until(() => hub.get('/api/v1/health'), (h: any) => h.checks.mesh.standby?.lag?.acked_seq > 0 && h.checks.mesh.standby.lag.rows === 0);
     // The settings (journalled) and the vault (its own sealed entry) are there.
-    await until(async () => { try { return statSync(join(standby.home, 'vault', 'secrets.json')).size; } catch { return 0; } }, (n) => n > 0, 400);
-    await until(async () => { try { return readFileSync(join(standby.home, 'extensions', 'home-assistant', 'config.json'), 'utf8'); } catch { return ''; } }, (t) => t.includes(ha.base), 400);
+    await until(async () => { try { return statSync(join(standby.home, 'vault', 'secrets.json')).size; } catch { return 0; } }, (n) => n > 0);
+    await until(async () => { try { return readFileSync(join(standby.home, 'extensions', 'home-assistant', 'config.json'), 'utf8'); } catch { return ''; } }, (t) => t.includes(ha.base));
     assert.equal(statSync(join(standby.home, 'vault', 'secrets.json')).mode & 0o777, 0o600);
     assert.equal(statSync(join(standby.home, 'vault', 'key')).mode & 0o777, 0o600);
     const key = readFileSync(join(hub.home, 'vault', 'key')).toString('base64');
@@ -65,12 +65,12 @@ test('the vault replicates sealed: after a failover, Home Assistant works on the
     assert.equal(promoted.status, 200, JSON.stringify(promoted.body));
 
     // Home Assistant works again on the new hub, with the token it got through the vault.
-    const view = await until(() => standby.get('/api/v1/connectors/home-assistant'), (v: any) => v.live === 'listening', 400);
+    const view = await until(() => standby.get('/api/v1/connectors/home-assistant'), (v: any) => v.live === 'listening');
     assert.deepEqual([view.connected, view.live, view.account], [true, 'listening', 'Home']);
     const states = await standby.get('/api/v1/connectors/home-assistant/states');
     assert.ok(Array.isArray(states) && states.some((x: any) => x.entity_id === 'light.kitchen'), JSON.stringify(states));
     ha.setState('binary_sensor.front_door', 'on');
-    const fired = await until(() => standby.get(`/api/v1/triggers?rule=${rule.id}`), (l: any[]) => l.length > 0, 400);
+    const fired = await until(() => standby.get(`/api/v1/triggers?rule=${rule.id}`), (l: any[]) => l.length > 0);
     assert.equal(fired[0].class, 'event');
     assert.equal(fired[0].source, 'connector:home-assistant/binary_sensor.front_door');
   } finally {

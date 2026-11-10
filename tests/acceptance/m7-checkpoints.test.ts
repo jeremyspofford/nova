@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { blank, sleep, stop, until } from './support.ts';
+import { RESTART_MS, blank, saidTimes, sleep, stop, until } from './support.ts';
 
 test('restore with no manual restart: the same process comes back on the same ports with the checkpoint’s data, and records the restore', { timeout: 90_000 }, async () => {
   const m = blank('nova-m7-cp-');
@@ -25,15 +25,15 @@ test('restore with no manual restart: the same process comes back on the same po
 
     // Nova restarts by itself: the same process, the same port, the data as it was.
     const ready = () => (nova.out.join('').match(/Nova is ready at/g) ?? []).length;
-    await until(async () => ready(), (n) => n >= 2, 400);
+    await saidTimes(nova, /Nova is ready at/, 2, RESTART_MS, 'Nova did not say it was ready again after the restore');
     assert.equal(ready(), 2, `it said it was ready again:\n${nova.out.join('')}`);
     assert.equal(nova.proc.exitCode, null, 'the process the person started is still the one running');
-    const back = await until(async () => { try { return await memories(); } catch { return null; } }, (x) => !!x && x.length === 1, 400);
+    const back = await until(async () => { try { return await memories(); } catch { return null; } }, (x) => !!x && x.length === 1);
     assert.deepEqual(back, ['The plants get water on Sundays.']);
     const after = await (await fetch(`${nova.mesh}/api/v1/mesh/hello`)).json() as { epoch: number };
     assert.equal(after.epoch, hello.epoch + 1, 'the device door is back on the same address, at a higher epoch');
 
-    const tasks = await until(async () => (await m.get('/api/v1/tasks')) as { owner: string; state: string; title: string; verification: { ok: boolean } | null }[], (ts) => ts.some((t) => t.owner === 'checkpoints' && t.state === 'done'), 400);
+    const tasks = await until(async () => (await m.get('/api/v1/tasks')) as { owner: string; state: string; title: string; verification: { ok: boolean } | null }[], (ts) => ts.some((t) => t.owner === 'checkpoints' && t.state === 'done'));
     const task = tasks.find((t) => t.owner === 'checkpoints')!;
     assert.equal(task.title, 'Restore to “Before the experiment”');
     assert.equal(task.state, 'done');

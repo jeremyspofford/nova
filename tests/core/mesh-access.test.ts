@@ -14,6 +14,7 @@ import type { AddressInfo } from 'node:net';
 import { createNova } from '../../src/server.js';
 import { ConfigError, loadConfig, meshConfig } from '../../src/config.js';
 import { Joiner, call } from './mesh-support.ts';
+import { START_MS, halt, output, said } from '../acceptance/support.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const nowS = () => Math.floor(Date.now() / 1000);
@@ -358,15 +359,17 @@ test('transport: plain HTTP is refused at startup unless a proxy or encrypted ne
 test('the server process announces its mesh address', async () => {
   const home = mkdtempSync(join(tmpdir(), 'nova-meshproc-'));
   const proc = spawn(process.execPath, ['src/server.js'], { cwd: ROOT, env: { PATH: process.env.PATH ?? '', HOME: home, NOVA_HOME: join(home, 'n'), NOVA_PORT: '0', NOVA_MESH_URL: 'http://127.0.0.1:0', NOVA_MESH_TRANSPORT: 'network' } });
-  let out = '';
-  proc.stdout.on('data', (d) => { out += d; });
-  proc.stderr.on('data', (d) => { out += d; });
-  for (let i = 0; i < 200 && !/Devices pair and connect at/.test(out); i++) await new Promise((r) => setTimeout(r, 25));
-  proc.kill('SIGTERM');
-  await new Promise((r) => proc.on('exit', r));
+  const printed = output(proc);
+  try {
+    // As soon as it says so (the server's start, bounded as the acceptance tests bound it).
+    await said(printed, /Devices pair and connect at/, START_MS, 'the mesh listener did not start');
+  } finally {
+    await halt(printed);
+  }
+  const out = printed.out.join('');
   // Port 0: it binds a free port and gives devices that one.
-  const said = /Devices pair and connect at http:\/\/127\.0\.0\.1:(\d+) \(listening on 127\.0\.0\.1:(\d+), over an encrypted network, as you said\)/.exec(out);
-  assert.ok(said && said[1] === said[2] && said[1] !== '0', out);
+  const where = /Devices pair and connect at http:\/\/127\.0\.0\.1:(\d+) \(listening on 127\.0\.0\.1:(\d+), over an encrypted network, as you said\)/.exec(out);
+  assert.ok(where && where[1] === where[2] && where[1] !== '0', out);
   // Something on this machine that forwards to the console port looks like the console: said plainly.
   assert.match(out, /Warning: whoever reaches port \d+ from this computer controls Nova completely\. Don’t point a port forward, tunnel or proxy at it/);
 });

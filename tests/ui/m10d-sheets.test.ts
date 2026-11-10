@@ -27,7 +27,7 @@ test('M10d: the apply sheet shows the plan in full and the budget, the network s
   const shots = shotsDir();
   const api = (p: string) => `/api/v1${p}`;
   const task = (id: string) => m.get(api(`/tasks/${id}`));
-  const settle = (id: string) => until<any>(() => task(id), (x) => ['waiting', 'done', 'failed', 'cancelled'].includes(x.state), 800);
+  const settle = (id: string) => until<any>(() => task(id), (x) => ['waiting', 'done', 'failed', 'cancelled'].includes(x.state));
   try {
     await finishSetup(m);
     const { page, errors } = await device(b, { width: 1280, height: 1000 });
@@ -42,7 +42,7 @@ test('M10d: the apply sheet shows the plan in full and the budget, the network s
       await sheet.waitFor();
       return sheet;
     };
-    const applyOf = async (run: string) => settle((await until<any>(() => m.get(api(`/infra/runs/${run}`)), (x) => x.tasks.some((y: { step: string }) => y.step === 'apply'), 800)).tasks.find((y: { step: string }) => y.step === 'apply').id);
+    const applyOf = async (run: string) => settle((await until<any>(() => m.get(api(`/infra/runs/${run}`)), (x) => x.tasks.some((y: { step: string }) => y.step === 'apply'))).tasks.find((y: { step: string }) => y.step === 'apply').id);
 
     // The apply sheet: the plan in full, priced, against the budget; Apply waits for the box.
     const run = (await m.send('POST', api('/infra/runs'), { project: p.id })).body.run.id;
@@ -75,7 +75,7 @@ test('M10d: the apply sheet shows the plan in full and the budget, the network s
     await sheet2.locator('input[name="confirm"]').check();
     await sheet2.locator('[data-action="approve"]').click();
     await page.locator('.toast', { hasText: 'Approved' }).waitFor();
-    const applied = await until<any>(() => task(apply2.id), (x) => ['done', 'failed'].includes(x.state), 800);
+    const applied = await until<any>(() => task(apply2.id), (x) => ['done', 'failed'].includes(x.state));
     assert.equal(applied.state, 'done', applied.reason);
     assert.equal(existsSync(join(proj.folder, 'terraform.tfstate')), true);
 
@@ -90,7 +90,7 @@ test('M10d: the apply sheet shows the plan in full and the budget, the network s
     const target = (await m.send('POST', api('/network/targets'), { name: 'Example router', kind: 'router', url: net.url })).body;
     await m.send('PUT', api(`/network/targets/${target.id}/token`), { value: token });
     const change = (await m.send('POST', api('/network/changes'), { target: target.id, patch: { firewall: { allow: ['mesh', 'web', 'vpn'] } }, title: 'Let the VPN in' })).body.change;
-    const napply = await settle((await until<any>(() => m.get(api(`/network/changes/${change.id}`)), (x) => x.tasks.some((y: { step: string }) => y.step === 'apply'), 800)).tasks.find((y: { step: string }) => y.step === 'apply').id);
+    const napply = await settle((await until<any>(() => m.get(api(`/network/changes/${change.id}`)), (x) => x.tasks.some((y: { step: string }) => y.step === 'apply'))).tasks.find((y: { step: string }) => y.step === 'apply').id);
     const nsheet = await open(napply.id, 'network-sheet');
     const nsaid = (await nsheet.textContent()) ?? '';
     assert.match(nsaid, /Nova took a snapshot of Example router and worked out this change\. Nothing has changed yet\./);

@@ -69,7 +69,7 @@ test('M7 amendment: Settings › Checkpoints — take one, the list, restore wit
     // Nova restarts by itself; the page says so, then shows the list again.
     await section.locator('.cp-restoring').waitFor();
     await page.waitForFunction(() => !document.querySelector('#checkpoints .cp-restoring') && !!document.querySelector('#checkpoints .cp-row'), null, { timeout: 60_000 });
-    assert.deepEqual(await until(memories, (x) => x.length === 1, 400), ['The plants get water on Sundays.']);
+    assert.deepEqual(await until(memories, (x) => x.length === 1), ['The plants get water on Sundays.']);
     await section.locator('.cp-row', { hasText: 'Before restoring to “Before the experiment”' }).waitFor();
     assert.match((await section.locator('.cp-row', { hasText: 'Before restoring' }).textContent()) ?? '', /Automatic/);
 

@@ -2,33 +2,20 @@
 // Shared by the M4c failover test and its UI test.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { ROOT, blank, sleep, stop, until, type Running } from './support.ts';
+import { ROOT, START_MS, STOP_MS, blank, exited, output, said, stop, until, type Running } from './support.ts';
 import { ensureMark } from '../../src/core/index.ts';
+import { freePort } from '../support/workloads.ts';
 
 export const agent = { NOVA_AGENT_CMD: `FAKE_DELAY=1 node ${join(ROOT, 'scripts/fake-agent.js')}`, NOVA_AGENT_EGRESS: 'none' };
 
-// A port for an address that must be known before its server starts (a standby's, which goes in
-// the roster when it enrolls). Picked below the ephemeral range (Linux 32768+, macOS 49152+), so
-// no server on port 0 and no outgoing connection elsewhere in a parallel run can take it between
-// the check and the bind. Servers that can, listen on port 0 and say which port they got.
-export async function freePort(host = '127.0.0.1'): Promise<number> {
-  for (;;) {
-    const port = 20_000 + Math.floor(Math.random() * 12_000);
-    const s = createServer();
-    const ok = await new Promise<boolean>((r) => { s.once('error', () => r(false)); s.listen(port, host, () => r(true)); });
-    if (ok) {
-      await new Promise((r) => s.close(r));
-      return port;
-    }
-  }
-}
+// Ports are picked below the ephemeral range (tests/support/workloads.ts says why).
+export { freePort } from '../support/workloads.ts';
 
 export async function kill(r: Running) {
   r.proc.kill('SIGKILL');
-  for (let i = 0; i < 200 && r.proc.exitCode === null && r.proc.signalCode === null; i++) await sleep(25);
+  await exited(r.proc, STOP_MS);
 }
 
 // A hub and a standby home, each with a mesh listener on its own loopback port. The standby enrolls
@@ -55,18 +42,19 @@ export async function setup(prefix: string, hubExtra: (home: string) => void = (
     enrolling = spawn(process.execPath, ['src/device/boot.ts', 'join', hubMesh, '--code', code, '--kind', 'standby', '--name', 'Standby', '--nova-home', standby.home, '--address', standbyMesh], {
       cwd: ROOT, env: { PATH: process.env.PATH ?? '', HOME: join(standby.dir, 'user'), NOVA_DEVICE_HOME: join(standby.dir, 'device'), NOVA_DEVICE_POLL_MS: '100' },
     });
-    const said: string[] = [];
-    enrolling.stdout!.on('data', (d) => said.push(String(d)));
-    enrolling.stderr!.on('data', (d) => said.push(String(d)));
-    const waiting = await until<any[]>(() => hub.get('/api/v1/mesh/requests'), (rs) => rs.some((r) => r.kind === 'standby'), 400);
+    const joining = output(enrolling);
+    const shown = () => joining.out.join('');
+    const waiting = await until<any[]>(() => hub.get('/api/v1/mesh/requests'), (rs) => rs.some((r) => r.kind === 'standby'));
     const req = waiting.find((r) => r.kind === 'standby');
-    assert.ok(req, `the standby asked to join:\n${said.join('')}`);
+    assert.ok(req, `the standby asked to join:\n${shown()}`);
     const digits = `${req.confirmation.slice(0, 3)} ${req.confirmation.slice(3)}`;
-    await until(async () => said.join(''), (t) => t.includes(digits) || t.includes(req.confirmation), 200);
-    assert.ok(said.join('').includes(digits) || said.join('').includes(req.confirmation), `the command shows the same digits:\n${said.join('')}`);
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    await said(joining, new RegExp(`${escape(digits)}|${escape(req.confirmation)}`), START_MS, 'the command did not show the digits');
+    assert.ok(shown().includes(digits) || shown().includes(req.confirmation), `the command shows the same digits:\n${shown()}`);
     assert.equal((await hub.send('POST', `/api/v1/mesh/requests/${req.id}/approve`, { confirm: true })).status, 200);
-    for (let i = 0; i < 400 && enrolling.exitCode === null; i++) await sleep(25);
-    assert.equal(enrolling.exitCode, 0, said.join(''));
+    // Approved, the command saves what the hub sent and ends.
+    await exited(enrolling, START_MS);
+    assert.equal(enrolling.exitCode, 0, shown());
     const role = JSON.parse(readFileSync(join(standby.home, 'mesh', 'role.json'), 'utf8'));
     assert.equal(role.roster.roster.hub.url, hubMesh, 'the roster names the hub where devices reach it');
     assert.equal(role.roster.roster.standby.url, standbyMesh, 'and the standby where they look when the hub is gone');

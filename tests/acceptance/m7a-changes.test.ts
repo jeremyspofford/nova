@@ -20,8 +20,8 @@ import { notesSkill, windDown, windDownFiles } from '../support/changes.ts';
 const api = (p: string) => `/api/v1${p}`;
 type Node = ReturnType<typeof blank>;
 const change = (m: Node, id: string) => m.get(api(`/changes/${id}`));
-const settled = (m: Node, id: string, done: (c: any) => boolean) => until<any>(() => change(m, id), done, 1600);
-const finished = (m: Node, task: string) => until<any>(() => m.get(api(`/tasks/${task}`)), (t) => ['done', 'failed', 'cancelled'].includes(t.state), 1600);
+const settled = (m: Node, id: string, done: (c: any) => boolean) => until<any>(() => change(m, id), done, 40_000);
+const finished = (m: Node, task: string) => until<any>(() => m.get(api(`/tasks/${task}`)), (t) => ['done', 'failed', 'cancelled'].includes(t.state), 40_000);
 // The canary's window on the test clock: three looks, the last past its end.
 async function canary(m: Node, id: string, from: string) {
   const start = Date.parse(from);
@@ -100,9 +100,9 @@ test('M7a: the foundry ships a wind-down reminder through every gate, with the t
     assert.match(art, /"Wind down"/);
 
     // The standby has the record, and the release files.
-    const copy = await until<any>(() => s.standby.get(api(`/changes/${proposed.id}`)).catch(() => null), (c) => c?.state === 'live', 800);
+    const copy = await until<any>(() => s.standby.get(api(`/changes/${proposed.id}`)).catch(() => null), (c) => c?.state === 'live');
     assert.equal(copy?.state, 'live', 'the change record replicated');
-    await until(async () => { try { return readFileSync(join(s.standby.home, live.release.dir, 'artifact.json'), 'utf8'); } catch { return ''; } }, (t) => t === art, 800);
+    await until(async () => { try { return readFileSync(join(s.standby.home, live.release.dir, 'artifact.json'), 'utf8'); } catch { return ''; } }, (t) => t === art);
     assert.equal(readFileSync(join(s.standby.home, live.release.dir, 'artifact.json'), 'utf8'), art);
 
     // Weakening a gate is refused.
