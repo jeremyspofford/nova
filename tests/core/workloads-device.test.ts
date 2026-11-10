@@ -12,8 +12,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateDeviceKeys, sha256Hex, CAPTURE_PERMISSIONS as HUB_CAPTURE_PERMISSIONS } from '../../src/core/index.ts';
 import { createServer, type AddressInfo } from 'node:net';
-import { CAPTURE_PERMISSIONS, WORKLOAD_VERBS, Workloads, checkVerbRequest, commandProblem, sidePort, verifyWorkload, type VerbResult } from '../../src/device/workloads.ts';
+import { CAPTURE_PERMISSIONS, WORKLOAD_VERBS, Workloads, checkVerbRequest, commandProblem, lastExit, sidePort, verifyWorkload, type VerbResult } from '../../src/device/workloads.ts';
 import { RUNTIME_CALLS } from '../../src/device/boot.ts';
+import { deviceReport } from '../../src/core/mesh/device-text.ts';
 import { freePort, getJson, manifest, sign, standInAt, standInBytes } from '../support/workloads.ts';
 import { until } from './device-support.ts';
 
@@ -378,4 +379,21 @@ test('a role taken away stops what it allowed, at the device; a killed agent’s
     assert.equal(await until(() => standInAt(port), (x) => !x, 5000), false, 'the leftover was ended');
     await next.close();
   } finally { await k.w.close(); }
+});
+
+// X-001: up to 300 characters of a stopped workload's error output reach the hub's records, and error
+// output can hold a secret. Secret shapes are scrubbed on the device before the tail is cut, and again
+// where the hub cleans every device report (for an agent from before this scrubbing).
+test('a workload’s last words never carry a secret-shaped string, from the device or into the hub’s records', () => {
+  const planted = ['ghp_PLANTEDplantedPLANTED000000000000', 'sk-PLANTEDsecretVALUE0000', 'Bearer PLANTEDtoken000000', 'postgres://nova:PLANTEDpass@db.local/x', 'password: PLANTEDhunter2', 'AKIAPLANTED000000000'];
+  const stderr = `starting\n${planted.map((p) => `Error: connect failed using ${p}`).join('\n')}\n    at Socket.connect (node:net:1:1)\n`;
+  const said = lastExit(1, null, stderr);
+  assert.ok(!said.includes('PLANTED'), `nothing planted survives: ${said}`);
+  assert.match(said, /^Last time it exited with code 1 and wrote: “.*\[redacted\]/);
+  assert.match(said, /connect failed using/, 'the rest of what it said is kept');
+  // The hub's cleaning of a report, for a device whose agent didn't scrub.
+  const report = deviceReport({ workloads: [{ service: 'x', failed: `Last time it exited with code 1 and wrote: “${planted.join(' ')}”.` }] });
+  assert.ok(!JSON.stringify(report).includes('PLANTED'), JSON.stringify(report));
+  // An honest line comes through unchanged.
+  assert.equal(lastExit(2, null, 'Error: port 8080 is in use (code: EADDRINUSE)'), 'Last time it exited with code 2 and wrote: “Error: port 8080 is in use (code: EADDRINUSE)”.');
 });

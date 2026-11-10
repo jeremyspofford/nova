@@ -23,6 +23,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { sha256Hex, verifyDeviceSignature, workloadManifestMessage, type SignedWorkload, type WorkloadManifest } from '../core/mesh/wire.ts';
+import { redactShapes } from './secret-shapes.ts';
 import { assignmentAllowed } from './trust.ts';
 import { Watchdog, type ChildLike } from './watchdog.ts';
 
@@ -575,7 +576,9 @@ function group(c: ChildProcess, failed: (e: Error) => void): Child {
 // no terminal escapes, no control, format or direction characters, no line breaks.
 export function lastExit(code: number | null, signal: NodeJS.Signals | null, stderr: string): string {
   const how = signal ? `it was ended by ${signal}` : `it exited with code ${code ?? 'unknown'}`;
-  const said = plainTail(stderr, STDERR_SAID);
+  // Error output can hold a secret (a connection string, a token in a failed request): secret shapes
+  // are scrubbed from all of what was kept before its end is cut, so none leaves the device (X-001).
+  const said = plainTail(redactShapes(stderr), STDERR_SAID);
   return `Last time ${how} and ${said ? `wrote: “${said}”` : 'wrote nothing to stderr'}.`;
 }
 
