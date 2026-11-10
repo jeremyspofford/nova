@@ -40,6 +40,12 @@ test('M7b: Health shows the supervisor, backups and the last drill, and a proble
     assert.match(words, /The backup folder .*backups isn’t there .* Last backup /);
     assert.match(words, /Passed .*: \d+ of \d+ checks/);
     assert.equal(await page.locator('[data-action="backup-now"]').count(), 1);
+    // How to restore a backup (F-018): Health links to the command's document, which Nova serves.
+    const doc = page.locator('[data-resilience] a[data-restore-doc]');
+    assert.equal(await doc.getAttribute('href'), '/docs/restore');
+    const served = await page.request.get(`${m.base}/docs/restore`);
+    assert.equal(served.status(), 200);
+    assert.match(await served.text(), /node scripts\/restore-backup\.js/);
 
     const pb = page.locator('.playbook[data-playbook="backup-target-missing"]');
     await pb.waitFor();

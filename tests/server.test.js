@@ -132,6 +132,17 @@ test('static files cannot escape ui/', async () => {
   assert.equal((await fetch(`${base}/api/sessions/../../etc`)).status, 404);
 });
 
+test('how to restore a backup is served at the address Health links to', async () => {
+  const res = await fetch(`${base}/docs/restore`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /^text\/plain/);
+  const text = await res.text();
+  assert.match(text, /scripts\/restore-backup\.js/);
+  assert.match(text, /recovery key/);
+  assert.equal((await fetch(`${base}/docs/..%2fpackage.json`)).status, 404);
+  assert.equal((await fetch(`${base}/docs/README`)).status, 404);
+});
+
 test('first run seeds the standing files without overwriting', () => {
   const home = nova.config.home;
   for (const f of ['AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md', 'MEMORY.md']) assert.ok(existsSync(join(home, f)), f);
