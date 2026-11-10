@@ -5,7 +5,7 @@
 // already on screen animates twice.
 import { applyEvent, emptySession } from './reduce.js';
 import { escapeHtml, renderMarkdown } from './markdown.js';
-import { dayKey, icons, memoryIndex, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
+import { dayKey, icons, memoryFilterCount, memoryIndex, memoryMatch, renderActivity, renderBlocks, renderEmpty, renderMemory, renderSchedules, renderPermissions, renderSkills, renderToc, renderToday, renderWorkNote } from './view.js';
 import { apply as applyTheme } from './theme.js';
 import { NOVA_HEADERS, NO_ANSWER_MS, api, fromCache, on as onCore, reach, refused, stream as coreStream } from './core.js';
 import { approvalFor, loadSecurity, renderSecurity, setupPasskey } from './passkey.js';
@@ -982,6 +982,47 @@ function showMemory() {
   });
 }
 
+// Memory's filter (F-062). What is typed lives only here, in the page: never sent, never in the
+// address, never in browser storage. It narrows the rows already loaded and keeps their order; a
+// section or day left with none is hidden. Held items ("Waiting for your OK") are never hidden and
+// never counted, since one may ask to forget a memory.
+let memoryQuery = '';
+function filterMemory() {
+  const box = el.memory.querySelector('#memory-filter');
+  if (!box) return;
+  const rows = [...el.memory.querySelectorAll('.memory-item:not([data-candidate])')];
+  let shown = 0;
+  for (const row of rows) {
+    const hit = memoryMatch(memoryQuery, row.querySelector('.memory-text')?.textContent ?? '');
+    row.hidden = !hit;
+    if (hit) shown++;
+  }
+  for (const list of el.memory.querySelectorAll('.memory-list')) {
+    if (list.closest('#waiting')) continue;
+    const empty = !list.querySelector('.memory-item:not([hidden])');
+    list.hidden = empty;
+    const day = list.previousElementSibling;
+    if (day?.matches('.memory-day')) day.hidden = empty;
+  }
+  for (const section of el.memory.querySelectorAll('.memory-section')) {
+    if (section.id === 'waiting') continue;
+    section.hidden = !!memoryQuery.trim() && !section.querySelector('.memory-item:not([hidden])');
+  }
+  const filtering = !!memoryQuery.trim();
+  const count = el.memory.querySelector('#memory-filter-count');
+  const said = filtering ? memoryFilterCount(shown, rows.length) : '';
+  if (count.textContent !== said) count.textContent = said;
+  el.memory.querySelector('#memory-filter-scope').hidden = !filtering;
+  el.memory.querySelector('.memory-filter-none').hidden = !filtering || shown > 0;
+}
+for (const ev of ['input', 'search']) {
+  el.memory.addEventListener(ev, (e) => {
+    if (e.target.id !== 'memory-filter' || e.target.value === memoryQuery) return;
+    memoryQuery = e.target.value;
+    filterMemory();
+  });
+}
+
 let memoryDeferred = false;
 function renderMemoryView({ enter: entering = false } = {}) {
   if (el.memory.querySelector('.is-editing')) { memoryDeferred = true; return; }
@@ -989,8 +1030,17 @@ function renderMemoryView({ enter: entering = false } = {}) {
   memoryDeferred = false;
   const focused = document.activeElement?.closest?.('.memory-item')?.dataset.id;
   const at = focused ? [...el.memory.querySelectorAll('.memory-item')].findIndex((x) => x.dataset.id === focused) : -1;
-  if (state.memory) el.memory.innerHTML = renderMemory(state.memory);
-  else if (state.memoryError) el.memory.innerHTML = errorEmpty("Memory couldn't be read.", state.memoryError, 'retry-memory');
+  // A re-render (a forget, an edit, a refresh) keeps what is typed and where the caret is.
+  const typing = document.activeElement?.id === 'memory-filter' ? document.activeElement.selectionStart : null;
+  if (state.memory) {
+    el.memory.innerHTML = renderMemory(state.memory);
+    const box = el.memory.querySelector('#memory-filter');
+    if (box) {
+      box.value = memoryQuery;
+      filterMemory();
+      if (typing != null) { box.focus({ preventScroll: true }); box.setSelectionRange(typing, typing); }
+    }
+  } else if (state.memoryError) el.memory.innerHTML = errorEmpty("Memory couldn't be read.", state.memoryError, 'retry-memory');
   else if (!el.memory.querySelector('[data-skeleton], .view-waiting')) showWaiting('memory', el.memory, 'Loading Memory');
   if (state.memory && (entering || waited)) rememberShape('memory', el.memory);
   // An edit gives the memory a new id; focus stays where it was in the list.
@@ -1123,7 +1173,8 @@ function rove(root, selector, { enter: onEnter, del, canEnter = () => true, canD
   root.addEventListener('keydown', (e) => {
     const item = e.target.closest(selector);
     if (!item || e.target !== item) return;
-    const items = [...root.querySelectorAll(selector)];
+    // A row a filter hid isn't a stop.
+    const items = [...root.querySelectorAll(selector)].filter((x) => !x.closest('[hidden]'));
     const i = items.indexOf(item);
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[i + (e.key === 'ArrowDown' ? 1 : -1)]?.focus(); }
     if (e.key === 'Enter' && canEnter(item)) { e.preventDefault(); onEnter(item); }

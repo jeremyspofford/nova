@@ -484,6 +484,25 @@ const KIND_NOTES = {
   Commitments: 'What you or Nova said would happen.',
 };
 
+// The match rule the command palette uses (palette.js): lower case, accents and apostrophes gone,
+// any other mark a space.
+export const matchNorm = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+// Memory's filter (F-062): a row matches when the typed text is inside it, or when every typed word
+// starts a word in it. No spelling correction, no matching by meaning. Nothing typed matches all.
+export function memoryMatch(query, text) {
+  const q = matchNorm(query);
+  if (!q) return true;
+  const t = matchNorm(text);
+  if (t.includes(q)) return true;
+  const words = t.split(' ');
+  return q.split(' ').every((w) => words.some((x) => x.startsWith(w)));
+}
+
+// Said under the filter: where it looked, so a miss isn't read as "Nova doesn't know".
+export const MEMORY_FILTER_SCOPE = 'Looked in memories and day notes. Did not look inside conversations.';
+export const memoryFilterCount = (shown, total) => `${shown} of ${total} shown.`;
+
 function memorySource(e, titles, now) {
   const when = (iso) => shortDay(new Date(iso), now).replace(/^(Today|Yesterday)$/, (w) => w.toLowerCase());
   const bits = [];
@@ -492,9 +511,11 @@ function memorySource(e, titles, now) {
   else if (e.from) {
     const [sid, turn] = e.from.split('/');
     const title = titles?.[sid];
+    // Only a matched conversation is named. Anything else (captured items, a device, a conversation
+    // Nova has no title for) is not guessed at (F-062, F-038): the sentence is about this screen.
     bits.push(title
       ? `from <a class="memory-from" href="/c/${esc(sid)}${turn ? `#t-${esc(turn)}` : ''}">“${esc(clip(title, 48))}”</a>${e.at && !e.time ? `, ${esc(when(e.at))}` : ''}`
-      : `from a conversation${e.at && !e.time ? `, ${esc(when(e.at))}` : ''}`);
+      : 'Nova cannot show where this came from yet.');
   }
   if (e.by === 'you' && e.updated) bits.push(`edited by you ${esc(when(e.updated))}`);
   else if (e.updated) bits.push(`corrected ${esc(when(e.updated))}`);
@@ -549,6 +570,18 @@ export function renderMemory(data, now = new Date()) {
   const out = [`<header class="memory-intro"><p class="empty-date">What Nova knows</p>
 <p class="memory-lede">Nova reads this before every reply. Change anything, or forget it.</p></header>`];
   if (held) out.push(held);
+  // The filter (F-062): it runs in the page over these rows (app.js, filterMemory). What is typed is
+  // never sent, put in the address or stored. Held items above are never filtered or counted.
+  out.push(`<div class="memory-filter">
+<div class="settings-search memory-filter-box" role="search">
+  <span class="settings-search-icon" aria-hidden="true">${ICONS.search}</span>
+  <label class="sr-only" for="memory-filter">Filter what Nova knows</label>
+  <input type="search" class="settings-search-input" id="memory-filter" placeholder="Filter what Nova knows" autocomplete="off" spellcheck="false" aria-describedby="memory-filter-count memory-filter-scope">
+</div>
+<p class="memory-filter-count" id="memory-filter-count" role="status"></p>
+<p class="memory-filter-scope" id="memory-filter-scope" hidden>${MEMORY_FILTER_SCOPE}</p>
+<p class="memory-none memory-filter-none" hidden>Nothing Nova keeps matches that.</p>
+</div>`);
   for (const s of sections) {
     const hid = `ms-${s.title.toLowerCase().replace(/\W+/g, '-')}`;
     out.push(`<section class="memory-section" aria-labelledby="${hid}"><h2 class="memory-heading" id="${hid}">${esc(s.title)}</h2>
