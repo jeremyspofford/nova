@@ -130,9 +130,12 @@ export function privacyFrom(text: string): PrivacyMode | null {
 
 const PRIVACY_WORDS: Record<PrivacyMode, string> = {
   'local-only': 'my model calls stay on your devices',
-  'local-preferred': 'local first, cloud only when local can’t do it, and each cloud call is recorded',
+  'local-preferred': 'local first for my own model work, cloud only when local can’t do it, and each cloud call is recorded',
   'cloud-allowed': 'I may use cloud models when they’re the better tool, within your budget',
 };
+
+// What one cloud chat turn carries (src/context.js builds it), said where the mode is chosen.
+const CHAT_TURN = 'it carries my standing files (including your memory), today’s and yesterday’s day notes, the conversation and any file I read.';
 
 const IMPORT_FOLDER = 'You can put notes or exports in ~/workspace/import/ any time, and tell me.';
 
@@ -283,7 +286,7 @@ export class Setup extends EventEmitter {
         const p = skip ? 'local-only' : privacyFrom(text);
         if (!p) return { reply: 'Keep it local-only, or allow cloud help when local isn’t enough?', next: step };
         set('privacy', 'default', p);
-        return then(`Got it: ${PRIVACY_WORDS[p]}.`, 'discover');
+        return then(`Got it: ${PRIVACY_WORDS[p]}.${this.#chatWords(p)}`, 'discover');
       }
       case 'discover': {
         // Discovery runs only when the person asks (the smart-home ADR §6), and consent fails closed
@@ -344,6 +347,14 @@ export class Setup extends EventEmitter {
     return `${parts.join(' ')}${d.found.length ? ' None of it is connected: that is yours to do, from Settings, when you want.' : ''}`;
   }
 
+  // After the privacy answer: where chat goes under it, when chat is a cloud program. "Local first"
+  // is a rule for model work by role; the chat program is asked on every turn (F-025).
+  #chatWords(p: PrivacyMode): string {
+    if (this.#chat?.egress !== 'remote') return '';
+    if (p === 'local-only') return ` Chat stays off until you add a local model: ${this.#chat.program} runs in the cloud.`;
+    return ` Chat is the exception: every chat turn goes to ${this.#chat.program}, in the cloud, without trying your devices first, and ${CHAT_TURN}`;
+  }
+
   #ask(step: Step, s: SetupState): string {
     const me = identityOf(this.#profile);
     switch (step) {
@@ -371,8 +382,9 @@ export class Setup extends EventEmitter {
         return 'How direct should I be? Telling you when I think something’s wrong isn’t adjustable. But I can say it gently, plainly, or bluntly.';
       case 'privacy': {
         // Truthful about the one thing that would leave: the chat model, if it's a cloud one.
+        // Before the first send: where a cloud chat turn goes, and what it carries (F-027, A-006).
         const chat = this.#chat?.egress === 'remote'
-          ? ` One thing to know: chat is set up to use ${this.#chat.program}, which runs in the cloud. With local-only, chat stays off until you add a local model.`
+          ? ` One thing to know: chat is set up to use ${this.#chat.program}, which runs in the cloud. With local-only, chat stays off until you add a local model. If you allow cloud, every chat turn goes to ${this.#chat.program} without trying your devices first, and ${CHAT_TURN}`
           : '';
         return `Last setting: privacy. Local-only means my model calls stay on your own devices.${chat} I’d keep it local unless you want cloud help when local isn’t enough. Keep it local-only, or allow cloud when needed?`;
       }

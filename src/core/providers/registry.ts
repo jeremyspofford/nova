@@ -455,7 +455,45 @@ export class Providers extends EventEmitter {
       const current = what === 'chat' ? set ?? 'custom-cli' : set;
       return { current, recommended: this.recommend(what) };
     };
-    return { chat: one('chat'), defaults: Object.fromEntries(CLASSES.map((c) => [c, one(c)])) as Record<ProviderClass, ReturnType<typeof one>>, task_tests: this.#testsAllowed() ? 'allow' : 'ask' };
+    return { chat: { ...one('chat'), sends: this.chatSends() }, defaults: Object.fromEntries(CLASSES.map((c) => [c, one(c)])) as Record<ProviderClass, ReturnType<typeof one>>, task_tests: this.#testsAllowed() ? 'allow' : 'ask' };
+  }
+
+  // Where chat goes in each privacy mode, and what a chat turn carries there (F-025, F-027, A-006),
+  // built from the chat model actually chosen, so it stays true for a chat model set to a local role
+  // and for any provider added later. Shown where the privacy mode is chosen, before the first send.
+  // "Local first" is a rule for Nova's own model work by role; a chat model that isn't on a role is
+  // asked on every turn, wherever it sends.
+  chatSends(): { name: string; egress: Where['coarse']; role: string | null; turn: string; modes: Record<PrivacyMode, string> } {
+    const id = this.#choice('chat') ?? 'custom-cli';
+    let x: (Installed & { manifest: ProviderManifest }) | null = null;
+    try { x = this.#entry(id); } catch { x = null; }
+    const c: Config = x ? this.config(id) : ({} as Config);
+    const custom = !x || x.manifest.adapter.implementation === 'custom-cli';
+    const name = custom ? programOf(str(c.command)) || 'the chat command' : x!.manifest.name;
+    const role = !custom && x!.manifest.adapter.implementation === 'openai-compatible' ? roleOf(c) : null;
+    const egress = x ? this.where(id).coarse : 'remote';
+    const turn = 'Each chat turn carries your standing files (AGENTS.md, SOUL.md, IDENTITY.md, USER.md and MEMORY.md, which holds your memory), today’s and yesterday’s day notes, the conversation so far, and the contents of any file Nova reads for it.';
+    let modes: Record<PrivacyMode, string>;
+    if (role) {
+      const cloud = this.#o.models?.cloudName?.() ?? null;
+      const local = `Chat runs on the ${role} model Settings › Models assigns, on your devices.`;
+      modes = {
+        'local-only': `${local} No cloud model is used.`,
+        'local-preferred': cloud ? `Chat runs on the ${role} model on your devices first; when it can’t answer, ${cloud} may, off your devices. ${turn} Each receipt says where it went.` : local,
+        'cloud-allowed': cloud ? `Chat may go to ${cloud}, off your devices, when Nova chooses it, and otherwise runs on the ${role} model on your devices. ${turn} Each receipt says where it went.` : local,
+      };
+    } else if (egress === 'remote') {
+      const off = `Chat goes to ${name}, off your devices, on every turn: it doesn’t try your devices first. ${turn} Each turn is recorded.`;
+      modes = {
+        'local-only': `Chat uses ${name}, which counts as the cloud, so in Local only chat stays off and nothing is sent. Choose a local chat model in Settings › Providers to chat here.`,
+        'local-preferred': off,
+        'cloud-allowed': off,
+      };
+    } else {
+      const words = `Chat uses ${name}. Its setup says it ${egress === 'none' ? 'stays on this computer' : 'stays on your devices'}; Nova takes that on trust and doesn’t check it.`;
+      modes = { 'local-only': words, 'local-preferred': words, 'cloud-allowed': words };
+    }
+    return { name, egress, role, turn, modes };
   }
 
   choose(what: unknown, id: unknown) {

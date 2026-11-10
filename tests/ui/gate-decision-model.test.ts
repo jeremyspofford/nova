@@ -51,8 +51,8 @@ test('Settings › Models: scorecards before a switch, and the decision model’
     assert.equal(await form.locator('input[name="opt_in_screening"]').isChecked(), false);
     assert.equal(await form.locator('input[name="opt_in_box"]').isChecked(), false);
     const words = (await form.textContent()) ?? '';
-    assert.match(words, /Screening: let Jev judge outside content in local modes/);
-    assert.match(words, /Local-only isn’t strictly local for screening while it is on/);
+    assert.match(words, /Screening: let Jev judge outside content in local-first mode/);
+    assert.match(words, /In local-only it is suspended: nothing goes to Jev, and no cloud model is used/);
     assert.match(words, /Box \(preview\)/);
     assert.match(words, /In local-only they never go to a cloud provider/);
     assert.match(words, /Text from Capture \(screen text and meeting transcripts\) never goes to Jev, in any mode/);
@@ -71,8 +71,13 @@ test('Settings › Models: scorecards before a switch, and the decision model’
     assert.equal(after.settings.opt_in.screening, true);
     assert.equal(after.settings.opt_in.box, false, 'the switches are separate');
     // While it is on, its words stay on the page.
-    assert.match((await section.locator('.model-notices').textContent()) ?? '', /Local-only isn’t strictly local for screening while it is on/);
+    assert.match((await section.locator('.model-notices').textContent()) ?? '', /In local-only it is suspended: nothing goes to Jev/);
     assert.equal(await section.locator('form[data-form="decisions"] input[name="opt_in_screening"]').isChecked(), true);
+    // Under local-only the opt-in is suspended (owner ruling D4), and the page says so; the mode
+    // sentence "no cloud model is used" stays, because it is true.
+    assert.equal(after.privacy, 'local-only');
+    assert.match((await section.locator('[data-suspended="screening"]').textContent()) ?? '', /Suspended: your privacy is Local only, so nothing goes to Jev and no cloud model is used/);
+    assert.match((await section.textContent()) ?? '', /Local only: every task stays on your devices, and no cloud model is used\./);
     // The first save asked for an OK (409), which the browser logs; nothing else went wrong.
     assert.deepEqual(errors.filter((e) => !/status of 409/.test(e)), []);
   } finally {

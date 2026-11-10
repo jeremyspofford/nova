@@ -19,16 +19,19 @@ let data = null;
 // The eval scorecards (null: the route didn't answer, so no line is shown), and the decision model.
 let cards = null;
 let decisions = null;
+// Where chat goes in each privacy mode (GET /providers' chat.sends; null: the route didn't answer).
+let chatSends = null;
 // What a save waits on: the choices sent, and the notices Nova gave back before saving them.
 let pending = null;
 // Live download progress by task, from the event stream (model_progress).
 const progress = new Map();
 
 const part = makePart('models', async () => {
-  [data, cards, decisions] = await Promise.all([
+  [data, cards, decisions, chatSends] = await Promise.all([
     api('GET', '/models'),
     api('GET', '/evals/scorecards').catch(() => null),
     api('GET', '/models/decisions').catch(() => null),
+    api('GET', '/providers').then((p) => p?.chat?.sends ?? null).catch(() => null),
   ]);
 });
 export const loadModels = part.load;
@@ -72,13 +75,17 @@ const TASK_ROUTES = [
   ['Vision', null, 'Nothing sends images to a local model yet; a vision model can be planned on a device.'],
   ['Transcription', 'transcriber', ''],
 ];
+// "Local first" is a rule for Nova's own model work by role; chat is said on its own row, from the
+// chat model actually chosen (F-025). Local-only is absolute (owner ruling D4): no opt-in sends.
 const PRIVACY_ROUTES = {
   'local-only': 'Local only: every task stays on your devices, and no cloud model is used.',
-  'local-preferred': 'Local first: your devices answer first; the cloud model helps only when they can’t.',
+  'local-preferred': 'Local first: your devices answer Nova’s own model work first; the cloud model helps only when they can’t. Chat is on its own row.',
   'cloud-allowed': 'Cloud allowed: Nova may choose the cloud model as well as your devices.',
 };
 function routes() {
   const rows = TASK_ROUTES.map(([task, role, note]) => {
+    // Chat that isn't on a role (the chat command, a cloud provider) goes where its program sends it.
+    if (task === 'General chat' && chatSends && !chatSends.role) return `<li class="dm-route" data-route="chat"><div class="conn-head"><p class="settings-label">${esc(task)}</p></div><p class="settings-note">${esc(chatSends.modes?.[data.privacy] ?? '')}</p></li>`;
     const r = role ? data.roles.find((x) => x.role === role) : null;
     const where = !role ? note
       : role === 'transcriber' ? r?.words ?? ''
@@ -181,7 +188,8 @@ ${scorecards ? `<ul class="model-list model-cards">${scorecards}</ul>` : '<p cla
   <div class="field-row"><label class="field-label">Jev key${s.key_set ? ' (one is kept; leave empty to keep it)' : ''}<input class="field" name="jev_key" type="password" autocomplete="off" placeholder="${s.key_set ? 'Kept in the vault' : 'From TypeSafe'}"></label></div>
   <p class="settings-note">The key is kept in Nova’s vault and never shown again. No call is made to Jev until a route and a key are set.</p>
   <div class="field-row"><label class="field-label">Tev1 size<select class="field" name="tev1">${SIZES.map(([v, w]) => `<option value="${v}"${(s.tev1?.model ?? 'auto') === v ? ' selected' : ''}>${esc(w)}</option>`).join('')}</select></label></div>
-  ${toggle('screening', 'Screening: let Jev judge outside content in local modes')}
+  ${toggle('screening', 'Screening: let Jev judge outside content in local-first mode')}
+  ${s.opt_in.screening && d.privacy === 'local-only' ? '<p class="settings-note" data-suspended="screening">Suspended: your privacy is Local only, so nothing goes to Jev and no cloud model is used. It applies again if you choose Local first.</p>' : ''}
   <p class="settings-note">Screening covers pages, mail, files and tool output. Text from Capture (screen text and meeting transcripts) never goes to Jev, in any mode: only your local models and Nova’s own checks screen it.</p>
   ${toggle('box', 'Box (preview): let Jev judge images')}
   ${notices.length ? `<ul class="model-notices">${notices.map((w) => `<li class="settings-note is-unchecked">${esc(w)}</li>`).join('')}</ul>` : ''}
