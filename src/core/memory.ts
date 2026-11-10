@@ -91,14 +91,23 @@ export class Memory {
   #doneListeners: ((records: MemoryRecord[]) => void)[] = [];
   #log: ((message: string) => void) | null;
   #noteListeners: ((texts: string[]) => void)[] = [];
+  #noteKey: (create: boolean) => Buffer | null;
+  #problem: (message: string) => void;
 
   // afterForget: where else the forgotten records must go (the backups); `words`, more words that
-  // must go with them (a forgotten day note's). problem: told when a forget couldn't reach an export.
-  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[], records: MemoryRecord[], words?: string[]) => void; problem?: (message: string) => void }) {
+  // must go with them (a forgotten day note's). noteKey: the hub's key for forgotten notes' keyed
+  // hashes (forgotten-notes.ts: from the vault, made when `create`), or null when it can't be had.
+  // problem: told when a forget couldn't reach an export, or couldn't be recorded whole.
+  constructor(o: {
+    db: Db; home: string; now?: () => Date; afterForget?: (ids: string[], records: MemoryRecord[], words?: string[]) => void;
+    noteKey?: (create: boolean) => Buffer | null; problem?: (message: string) => void;
+  }) {
     this.#db = o.db;
     this.#log = o.problem ?? null;
     this.#now = o.now ?? (() => new Date());
     this.#afterForget = o.afterForget ?? (() => {});
+    this.#noteKey = o.noteKey ?? (() => null);
+    this.#problem = o.problem ?? (() => {});
     this.exportsDir = join(o.home, 'exports');
     // Forgotten content is overwritten on disk, not just unlinked from the table.
     this.#db.raw.exec('PRAGMA secure_delete = ON');
@@ -226,18 +235,24 @@ export class Memory {
 
   // Day notes (memory/YYYY-MM-DD.md) were forgotten: src/memory.js has already taken them out of
   // the files. A note has no record, so the forget leaves a content-free note of itself (its id and
-  // a hash of its words, for a restore to find it by), and its words go the way a record's do:
-  // every backup, encrypted copy, checkpoint and staged restore, and the sync log.
-  forgetNotes(notes: ForgottenNote[], by = 'person'): { forgotten: string[] } {
+  // a keyed hash of its words under the hub's note key, for a restore to find it by; never the words,
+  // nor a plain hash of them), and its words go the way a record's do: every backup, encrypted copy,
+  // checkpoint and staged restore, and the sync log. Without the key the words still go everywhere,
+  // the note keeps what it can (a note's own id), and a problem says a restore could bring back what
+  // it couldn't keep.
+  forgetNotes(notes: ForgottenNote[], by = 'person'): { forgotten: string[]; recorded: boolean } {
     const who = this.#by(by);
     const list = (Array.isArray(notes) ? notes : []).filter((n) => validNoteId(n?.id) && typeof n.text === 'string' && n.text.trim());
-    if (!list.length) return { forgotten: [] };
-    this.#db.tx(() => { for (const n of list) this.#event(NOTE_FORGOTTEN, noteKey(n.id, n.text), who); });
+    if (!list.length) return { forgotten: [], recorded: true };
+    const key = this.#noteKey(true);
+    const keys = list.map((n) => noteKey(n.id, n.text, key)).filter((k) => k !== 'note:-:-');
+    this.#db.tx(() => { for (const k of keys) this.#event(NOTE_FORGOTTEN, k, who); });
     if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     const texts = list.map((n) => n.text);
     this.#afterForget([], [], texts);
     for (const fn of this.#noteListeners) fn(texts);
-    return { forgotten: list.map((n) => n.id) };
+    if (!key) this.#problem(`Nova forgot ${list.length === 1 ? 'a day note' : `${list.length} day notes`} here and in every backup it could reach, but its vault couldn’t give the key it keeps forgotten notes under, so restoring a backup or checkpoint made before could bring ${list.length === 1 ? 'it' : 'them'} back. If you restore one, check your day notes and forget ${list.length === 1 ? 'it' : 'them'} again.`);
+    return { forgotten: list.map((n) => n.id), recorded: !!key };
   }
 
   // Forgotten day notes put back by undo: a restore leaves them as they are now.
@@ -245,9 +260,10 @@ export class Memory {
     const who = this.#by(by);
     const list = (Array.isArray(notes) ? notes : []).filter((n) => validNoteId(n?.id) && typeof n.text === 'string' && n.text.trim());
     if (!list.length) return;
+    const k = this.#noteKey(false);
     this.#db.tx(() => {
       for (const n of list) {
-        const key = noteKey(n.id, n.text);
+        const key = noteKey(n.id, n.text, k);
         if (this.#db.get('SELECT 1 FROM memory_event WHERE memory_id = ? AND kind = ?', key, NOTE_FORGOTTEN)) this.#event(NOTE_RESTORED, key, who);
       }
     });

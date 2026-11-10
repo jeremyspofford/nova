@@ -1,7 +1,7 @@
 // Forgetting a day note goes through the same lifecycle as forgetting a memory (owner's standing
 // order 4): every nightly backup, encrypted copy and checkpoint is cleaned, a folder that isn't there
 // owes it until it is back, and a restore of an older copy can't bring it back. What the home keeps
-// of the forget is an id and a hash, never the words. A memory's reworded twins in the day notes go
+// of the forget is an id and a keyed hash, never the words. A memory's reworded twins in the day notes go
 // from the backups too; the drill finds a forgotten note left in a backup's files; capture never
 // says "deleted everywhere" while a backup folder still owes the forget. Throwaway homes only.
 import { test } from 'node:test';
@@ -12,7 +12,8 @@ import { DatabaseSync } from 'node:sqlite';
 import type { AddressInfo } from 'node:net';
 import { restoreInto, type Core } from '../../src/core/index.ts';
 import { carryOver } from '../../src/core/resilience/restore.ts';
-import { scrubWords } from '../../src/core/forgotten-notes.ts';
+import { NOTE_KEY_NAME, scrubWords } from '../../src/core/forgotten-notes.ts';
+import { createHash, createHmac } from 'node:crypto';
 import { Vault } from '../../src/core/vault.ts';
 import { Memory } from '../../src/memory.js';
 import { createNova } from '../../src/server.js';
@@ -83,7 +84,8 @@ for (const kind of ['note', 'hand'] as const) {
       // What the home keeps of the forget: a content-free note, never the words.
       const ev = c.db.all<{ kind: string; memory_id: string }>("SELECT kind, memory_id FROM memory_event WHERE kind = 'note-forgotten'");
       assert.equal(ev.length, 1);
-      assert.match(ev[0]!.memory_id, new RegExp(`^note:${id}:[0-9a-f]{64}$`));
+      // A hand-written note's id is made from its words, so only the keyed hash is kept for it.
+      assert.match(ev[0]!.memory_id, new RegExp(`^note:${kind === 'note' ? id : '-'}:[0-9a-f]{64}$`));
       assert.deepEqual(inDb(c, 'blue flowerpot'), [], 'no table holds the words');
       assert.equal(c.log.problems({ open: true }).length, 0, JSON.stringify(c.log.problems({ open: true })));
     } finally {
@@ -150,7 +152,8 @@ test('a restore of a backup taken before a note forget doesn’t bring the note 
   const c = open(w.home);
   try {
     const m = files(c, w.home);
-    const gone = m.note({ text: NOTE }, new Date(`${DAY}T09:00:00Z`));
+    // Written by hand: its id is made from its words, so only the keyed hash can find it.
+    const gone = addNote(m, w.home, 'hand');
     const undone = m.note({ text: 'Lunch with the neighbours on Saturday at noon' }, new Date(`${DAY}T10:00:00Z`));
     c.resilience.setSettings({ target: w.target });
     const r = c.resilience.nightly.run();
@@ -158,7 +161,7 @@ test('a restore of a backup taken before a note forget doesn’t bring the note 
     const before = join(w.dir, 'before');
     cpSync(r.path!, before, { recursive: true });
 
-    m.forget(gone.id!);
+    m.forget(gone);
     const back = m.forget(undone.id!);
     m.restore(back); // undo
     const staged = join(w.dir, 'staged');
@@ -180,6 +183,68 @@ test('a restore of a backup taken before a note forget doesn’t bring the note 
     } finally {
       d.close();
     }
+  } finally {
+    await c.close();
+  }
+});
+
+test('a backup alone can’t confirm a guessed note: its tombstones are keyed, and the key isn’t in it', async () => {
+  const w = world('nova-nf-guess-');
+  const c = open(w.home);
+  try {
+    const m = files(c, w.home);
+    const hand = addNote(m, w.home, 'hand');
+    const own = m.note({ text: 'Dentist appointment moved to the ninth' }, new Date(`${DAY}T11:00:00Z`)).id!;
+    m.forget(hand);
+    m.forget(own);
+    c.resilience.setSettings({ target: w.target });
+    const r = c.resilience.nightly.run();
+
+    // Everything the backup holds: its database, and every file in it.
+    const d = new DatabaseSync(join(r.path!, 'nova.db'), { readOnly: true });
+    const stones = (d.prepare("SELECT memory_id FROM memory_event WHERE kind = 'note-forgotten'").all() as { memory_id: string }[]).map((x) => x.memory_id);
+    d.close();
+    assert.equal(stones.length, 2);
+    assert.ok(stones.some((s) => s.startsWith('note:-:')), 'a hand-written note’s id (made from its words) isn’t kept');
+    // Every unkeyed digest of the guessed words someone holding the backup could compute.
+    const guesses = [NOTE, NOTE.toLowerCase(), ` ${NOTE} `, `- ${NOTE}`, 'Dentist appointment moved to the ninth'];
+    const digests = guesses.flatMap((g) => [g, `nova-note\0${g}`, `nova-note\0${g.trim()}`].flatMap((t) => ['sha256', 'sha1', 'sha512', 'md5'].map((a) => createHash(a).update(t).digest('hex'))));
+    for (const s of stones) for (const h of digests) assert.equal(s.includes(h) || s.includes(h.slice(0, 8)), false, `${s} is an unkeyed hash of the words`);
+    // The key that makes them is in the vault, and nothing that opens the vault is in the backup.
+    const key = c.vault.get(NOTE_KEY_NAME)!;
+    assert.ok(key, 'the note key is one of Nova’s own keys in the vault');
+    const man = JSON.parse(readFileSync(join(r.path!, 'manifest.json'), 'utf8')) as { files: { path: string }[] };
+    assert.equal(man.files.some((f) => f.path === 'vault/key'), false, 'the vault’s key is never in a backup');
+    const raw = Buffer.from(key, 'base64');
+    for (const f of [...man.files.map((x) => join(r.path!, 'files', x.path)), join(r.path!, 'nova.db')]) {
+      const b = readFileSync(f);
+      assert.equal(b.includes(raw) || b.includes(Buffer.from(key)) || b.includes(Buffer.from(raw.toString('hex'))), false, `${f} holds the note key`);
+    }
+    // With the key (the live hub), the tombstone does match the words: that is what a restore uses.
+    assert.ok(stones.includes(`note:-:${createHmac('sha256', raw).update(`nova-note\0${NOTE}`).digest('hex')}`));
+  } finally {
+    await c.close();
+  }
+});
+
+test('a restore whose hub can’t give the note key is refused, never applied with the forget skipped', async () => {
+  const w = world('nova-nf-nokey-');
+  const c = open(w.home);
+  try {
+    const m = files(c, w.home);
+    const gone = addNote(m, w.home, 'hand');
+    c.resilience.setSettings({ target: w.target });
+    const r = c.resilience.nightly.run();
+    const before = join(w.dir, 'before');
+    cpSync(r.path!, before, { recursive: true });
+    m.forget(gone);
+    const staged = join(w.dir, 'staged');
+    restoreInto(before, staged);
+    const locked = { get: () => { throw new Error('locked'); }, put: () => { throw new Error('locked'); }, status: () => ({ ok: false }), list: () => [] } as unknown as Vault;
+    assert.throws(() => carryOver({
+      home: w.home, staged, live: c.db, hubId: c.mesh.identity.id, now: new Date(),
+      vault: locked, vaultAt: (h) => new Vault({ home: h, mode: 'file', keychain: null }),
+    }), /forgotten note can only be found with the key/);
   } finally {
     await c.close();
   }
@@ -224,12 +289,12 @@ test('the drill finds a forgotten note left in an older backup’s files', async
   const c = open(w.home);
   try {
     const m = files(c, w.home);
-    const n = m.note({ text: NOTE }, new Date(`${DAY}T09:00:00Z`));
+    const n = addNote(m, w.home, 'hand');
     c.resilience.setSettings({ target: w.target, keep: 5 });
     const old = c.resilience.nightly.run();
     const day = join(old.path!, 'files', 'memory', `${DAY}.md`);
     const before = readFileSync(day);
-    m.forget(n.id!);
+    m.forget(n);
     c.resilience.nightly.run();
     assert.equal(has(day, NOTE), false);
     // Something put the uncleaned day note back into the older backup (a sync tool, a restore).
