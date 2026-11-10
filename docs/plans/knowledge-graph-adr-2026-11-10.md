@@ -18,9 +18,16 @@ and `docs/plans/mcp-host-adr-2026-11-09.md`. The board, the merge map, the owner
 (`consolidation-decisions-2026-11-10.md`) and both audit packages are in the owner's builder packet and
 the audit worktrees, not in this repository; they are cited by section, not by line.
 
-**Status:** Proposed: awaiting owner ruling. 2026-11-10. Docs only: nothing in Nova changes in this
-step. The owner's record requires a second-model review of this ADR before any graph code (`:5`);
-open question 10 asks which. Every claim about today's code was read at `4be7973b2` (main after PR
+**Status:** Accepted 2026-11-10 (owner). Docs only: nothing in Nova changes in this step. The owner's
+answers to every open question are recorded under "Owner ruling" at the end. The second-model review
+the owner's record requires (`:5`) is a fresh Gemini chat over the whole record, run by the owner
+(question 10).
+
+**Gate before slice 1b:** slice 1b (the projection module and its route) waits until the fresh-Gemini
+review's findings have come back and each is answered in this record or in a short amendment to it. PR 1
+(the graph-table guard) and slice 1a may proceed now.
+
+Every claim about today's code was read at `4be7973b2` (main after PR
 #474) and carries a `file:line`. The audits read `d948aa0a`; where Batch 2 has changed the code since,
 this record says so.
 
@@ -174,7 +181,8 @@ CREATE INDEX graph_node_ref ON graph_node (ref_table, ref_id);
 CREATE TABLE graph_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); -- projection version, built_at, built_on
 ```
 
-Three departures from the owner's G1 text, each an open question: the tables are named in the singular
+Three departures from the owner's G1 text, each ruled yes by the owner (question 3) and made as an
+amendment to G1 (see "Owner ruling"): the tables are named in the singular
 like every other Nova table (`graph_node`, not `graph_nodes`; question 3); there is **no `deleted_at`
 column**, because a forget deletes the row and a row that says "something was here" is itself a leak
 (question 3); and the evidence pointer is two columns, `source_table` and `source_id`, so it can be
@@ -438,11 +446,49 @@ range once its diagram and user trials are taken out. A hypothesis until built.
   obligations.
 - Questions that need richer pointers (what a task used, what a run touched, why a decision was made)
   stay unanswerable until producers record them prospectively. Nothing will be back-filled by inference.
-- The owner's G1 text needs three small amendments (questions 3 and 4).
+- The owner's G1 text carries the amendments ruled under questions 3 and 4.
 
-## Open questions for the owner
+## Owner ruling, 2026-11-10
 
-Each has the answer this record recommends. **[Security]** marks a question that changes what can leak.
+"The record is accepted." Each answer below is the owner's wording, against the question it answers.
+
+| # | Question | Owner's answer |
+|---|---|---|
+| 1 | Derived projection, recorded-pointer edges only | "Q1 yes." |
+| 2 | Two stages, read-time first | "Q2 yes — read-time projection first; stage 2 only on its three conditions." |
+| 3 | Amend G1 | "Q3 yes — amend G1 (singular names, no deleted_at, existing content-free forget marks are G4's tombstone, with the switched-off limit stated)." |
+| 4 | The retrieval line | "Q4 yes — amend the retrieval line as proposed (FTS5 on measured need; vectors not planned while the bundled SQLite refuses extensions)." |
+| 5 | Model derivation | "Q5 yes — any future model derivation is local in every privacy mode, and the past is never sent." |
+| 6 | Hand-written links | "Q6 not in v1." |
+| 7 | Slice 1 shape | "Q7 yes — slice 1 is a list inside Memory; the diagram stays behind the picture gate." |
+| 8 | F-038 placement | "Q8 F-038 straight after slice 1a." F-038 is its own PR, next after slice 1a. |
+| 9 | Where stage 2 lives | "Q9 nova.db." |
+| 10 | Second-model review | "Q10: the second-model review is a FRESH Gemini chat, the whole record, with §4 (Forgetting) and the Security section called out — the owner will run it and bring back anything it raises." |
+| 11 | People, organisations, topics | "Q11 yes." |
+| 12 | PR #207 | "Q12 leave PR #207 untouched." |
+
+"Merge the ADR once its own checks pass. Then: PR 1 (the graph-table guard) and slice 1a may proceed.
+Slice 1b (the projection module and route) waits until the Gemini review has come back and any findings
+it raises are answered in this record or a short amendment."
+
+### The G1 amendments, as ruled
+
+These replace the matching words of G1 in `docs/plans/owner-graph-engineering-addendum-2026-11-03.md`,
+which carries a note pointing here. The rest of G1 stands.
+
+- **Names (Q3).** The tables are `graph_node` and `graph_edge`, singular like every other Nova table.
+- **No `deleted_at` (Q3).** Graph rows carry no tombstone column. A forget deletes the derived rows.
+- **The tombstone (Q3).** G4's tombstone is the existing content-free forget marks: the "forgotten"
+  memory event, the day note's keyed-hash "note-forgotten" event, and `capture_tombstone`. **Limit,
+  stated:** the hub deletes at once, and a machine that is switched off learns of the forget when it
+  next connects.
+- **Retrieval (Q4).** The line "FTS5 plus sqlite-vec remains the default retrieval path" is replaced by:
+  "Retrieval today is a shared-word scan. FTS5 is available in the bundled SQLite and is adopted on a
+  measured need. Vectors are not planned while the bundled SQLite refuses extensions."
+
+## Open questions for the owner (answered above)
+
+Each has the answer this record recommended. **[Security]** marks a question that changes what can leak.
 
 1. **The graph is a derived projection, never a store of truth, with version 1 edges from recorded
    pointers only?** *Recommended: yes.*
