@@ -63,7 +63,10 @@ const git = (home, ...args) => new Promise((ok) => {
 const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'memory/.rendered.json', 'skills/', 'workspace/interstitial/', 'connectors/', 'nova.db*', 'logs/', 'backups/', 'extensions/', 'exports/', 'kept/', 'workers/', 'mesh/', 'vault/', 'broker/', 'nova.pid',
   // Checkpoints hold the identity and the vault key; the home's mark holds the key that seals a
   // factory reset (M7 amendment). A reset's marker and report are this machine's alone too.
-  'checkpoints/', '.nova-home', '.nova-home.tmp', 'factory-reset.json*', 'reset-report.json'];
+  'checkpoints/', '.nova-home', '.nova-home.tmp', 'factory-reset.json*', 'reset-report.json',
+  // What capture keeps (originals a device sent, under capture/raw/) is the person's screen and
+  // words: a copy in history would outlive forgetting it and retention (F-013).
+  'capture/'];
 
 function ignorePrivate(home) {
   const path = join(home, '.gitignore');
@@ -108,11 +111,12 @@ export async function ensureGit(home, o = {}) {
   if (existsSync(join(home, '.git'))) {
     // A home from before these were untracked: stop tracking them from here on. mesh/ is checked
     // every time, not only when .gitignore changed, since its keys must never be committed again.
-    const meshTracked = !!(await git(home, 'ls-files', '--', 'mesh', 'vault'))?.trim();
+    // capture/ likewise: what a device captured must never be committed again either.
+    const meshTracked = !!(await git(home, 'ls-files', '--', 'mesh', 'vault', 'capture'))?.trim();
     if (changed || meshTracked) {
-      await git(home, 'rm', '-r', '-q', '--cached', '--ignore-unmatch', 'MEMORY.md', 'memory', 'skills', 'connectors', 'mesh', 'vault');
+      await git(home, 'rm', '-r', '-q', '--cached', '--ignore-unmatch', 'MEMORY.md', 'memory', 'skills', 'connectors', 'mesh', 'vault', 'capture');
       await git(home, 'add', '-A');
-      await commit(home, 'Nova: memory, skills, connections and keys kept out of history');
+      await commit(home, 'Nova: memory, skills, connections, keys and capture kept out of history');
     }
     if (await keysInHistory(home)) o.problem?.(KEYS_IN_HISTORY);
     else o.resolved?.(KEYS_IN_HISTORY);
