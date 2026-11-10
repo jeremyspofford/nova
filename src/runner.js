@@ -361,7 +361,7 @@ export class Runner extends EventEmitter {
     // The log keeps where each note came from, not its words: what is
     // forgotten later stays gone from the conversation view too. A helper's
     // context is scoped to its brief, so it recalls nothing.
-    const recall = run.helper ? [] : this.memory.search(question);
+    let recall = run.helper ? [] : this.memory.search(question);
     if (recall.length) this.record(sessionId, { type: 'recall', ...tag, notes: recall.map(({ id, source }) => ({ id, source })) });
     run.recall = recall;
     run.question = question;
@@ -396,6 +396,9 @@ export class Runner extends EventEmitter {
       // MEMORY.md may have been edited by hand since Nova last wrote it: take that in first.
       if (this.memory.records) this.memory.sync();
       const system = buildSystem(this.config, new Date(), { tools, skills, schedules, scheduled, helper, briefing, approvals: this.approvals, services: this.services, ...(this.identity ? { identity: this.identity.persona() } : {}) });
+      // The recalled notes as they are now: one forgotten (or edited) since the turn began, or since
+      // the last step, never reaches this prompt as it was (A-023).
+      if (recall.length) { recall = this.memory.current(recall); run.recall = recall; }
       const prompt = buildPrompt(session, recall, this.config, this.identity?.name() ?? 'Nova');
       // A context receipt for every model call (CONTRACTS §2): what went into it, by reference and
       // hash, and where it went. Written before the call, so it exists even if the call fails.
