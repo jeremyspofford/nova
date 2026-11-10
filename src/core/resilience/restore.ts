@@ -56,6 +56,9 @@ export interface CarryOptions {
   // The staged home's vault, opened the way this Nova opens its own.
   vaultAt: (home: string) => Vault;
   vault: Vault;
+  // Put the vault as it is now in place of the staged one (F-014). False for an emergency promotion
+  // from a backup, whose vault rule is its own.
+  keepVault?: boolean;
 }
 
 export function carryOver(o: CarryOptions): Carried {
@@ -189,17 +192,19 @@ export function carryOver(o: CarryOptions): Carried {
     out.identity = 'This node’s identity and keys are as they are now (keys are never put back).';
   } else out.identity = 'This node’s identity comes from the checkpoint.';
 
-  // ---- Nova's own vault keys (the backups' seal and the encrypted copies' key) ----
-  try {
-    const names = o.vault.status().ok ? o.vault.list('nova/') : [];
-    if (names.length) {
-      const v = o.vaultAt(o.staged);
-      for (const n of names) { const val = o.vault.get(n); if (val !== null && v.get(n) !== val) v.put(n, val); }
-      out.vault = `Nova’s own ${names.length === 1 ? 'key' : 'keys'} (${names.join(', ')}) carried over; your saved secrets are as they were then.`;
-    } else out.vault = 'Your saved secrets are as they were then.';
-  } catch (e) {
-    out.vault = `Nova couldn’t carry its own keys into the restored vault (${(e as Error).message}); your saved secrets are as they were then.`;
-  }
+  // ---- the vault: now's, whole (F-014) ----
+  // Deleting a secret rotates the vault's key, so the guarantee is that it is gone for good. A
+  // checkpoint from before held the old key and the deleted secret (checkpoints no longer take the
+  // vault at all, but older ones did), so a restore never puts the vault back: secrets, Nova's own
+  // keys and the key itself are as they are now. A secret added since the checkpoint stays.
+  if (o.keepVault === false) return out;
+  const vaultNow = join(o.home, 'vault');
+  const vaultThen = join(o.staged, 'vault');
+  rmSync(vaultThen, { recursive: true, force: true });
+  if (existsSync(vaultNow)) {
+    cpSync(vaultNow, vaultThen, { recursive: true });
+    out.vault = 'Your saved secrets are as they are now: a restore never brings back one you deleted.';
+  } else out.vault = 'You have no saved secrets now, and a restore never brings back one you deleted.';
   return out;
 }
 
