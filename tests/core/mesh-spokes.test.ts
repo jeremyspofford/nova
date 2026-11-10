@@ -290,7 +290,7 @@ test('join.sh and device-agent.tar are public, and the archive unpacks to the ag
     const list = spawnSync('tar', ['-tf', join(dir, 'agent.tar')], { encoding: 'utf8' });
     assert.equal(list.status, 0, list.stderr);
     const files = list.stdout.trim().split('\n').filter((f) => !f.endsWith('/')).sort();
-    assert.deepEqual(files, ['package.json', 'src/core/mesh/wire.ts', 'src/core/models/hardware.ts', 'src/device/boot.ts', 'src/device/carrier.ts', 'src/device/power.ts', 'src/device/queue.ts', 'src/device/rollout.ts', 'src/device/runtime.ts', 'src/device/trust.ts', 'src/device/watchdog.ts', 'src/device/workloads.ts']);
+    assert.deepEqual(files, ['package.json', 'src/core/mesh/wire.ts', 'src/core/models/hardware.ts', 'src/device/boot.ts', 'src/device/carrier.ts', 'src/device/power.ts', 'src/device/queue.ts', 'src/device/rollout.ts', 'src/device/runtime.ts', 'src/device/secret-shapes.ts', 'src/device/trust.ts', 'src/device/watchdog.ts', 'src/device/workloads.ts']);
     assert.equal(spawnSync('tar', ['-xf', join(dir, 'agent.tar'), '-C', dir]).status, 0);
     assert.equal(readFileSync(join(dir, 'src/core/mesh/wire.ts'), 'utf8'), readFileSync(join(import.meta.dirname, '../../src/core/mesh/wire.ts'), 'utf8'));
     assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).type, 'module');

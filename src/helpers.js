@@ -13,17 +13,18 @@
 // hears so when Nova starts again.
 import { EventEmitter } from 'node:events';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { inHome, inSecretDir } from './home.js';
+import { join } from 'node:path';
 import { reduce, titleFrom } from '../ui/js/reduce.js';
 import { WORKER, begun, openTasks } from './chat-run.js';
 import { sha256 } from './core/index.ts';
+import { homeTarget } from './tools.js';
 
 const MAX_TASK = 8000;
 const MAX_FILES = 5;
 const MAX_FILE = 20_000;
-// Secrets, and the conversations (a helper gets the brief, not the person's other talks).
-const PRIVATE = (rel) => inSecretDir(rel) ?? (rel === 'sessions' || rel.startsWith('sessions/') ? 'sessions' : null);
+// The conversations, on top of what read_file refuses (a helper gets the brief, not the person's
+// other talks). Compared on the path as read_file's guard resolved it: folded, links followed.
+const CONVERSATIONS = (posix) => posix === 'sessions' || posix.startsWith('sessions/');
 
 export class HelperError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -71,12 +72,20 @@ export class Helpers extends EventEmitter {
   }
 
   readFile(path) {
-    const abs = inHome(this.runner.config.home, path);
-    const rel = relative(this.runner.config.home, abs);
-    if (PRIVATE(rel.split(sep).join('/'))) throw new HelperError(`${path} can't be passed to a helper.`);
+    // The same guard read_file uses (F-039): one check, the same refusal, so a file read_file won't
+    // show can't reach a helper's prompt either (secrets, device keys, Nova's database, checkpoints,
+    // backups, history; through a link or a differently cased name too).
+    let abs;
+    let rel;
+    try {
+      ({ abs, rel } = homeTarget(this.runner.config.home, path));
+    } catch (e) {
+      throw new HelperError(/outside Nova's home/.test(e.message) ? e.message : `${path} can't be passed to a helper: ${e.message}.`);
+    }
+    if (CONVERSATIONS(rel.normalize('NFC').toLowerCase())) throw new HelperError(`${path} can't be passed to a helper: conversations stay where they are.`);
     if (!existsSync(abs) || statSync(abs).isDirectory()) throw new HelperError(`There's no file at ${path} to pass along.`);
     const text = readFileSync(abs, 'utf8');
-    return { path: rel.split(sep).join('/'), text: text.length > MAX_FILE ? `${text.slice(0, MAX_FILE)}\n[truncated: the file is ${text.length} characters]` : text };
+    return { path: rel, text: text.length > MAX_FILE ? `${text.slice(0, MAX_FILE)}\n[truncated: the file is ${text.length} characters]` : text };
   }
 
   // ---- state, read from the ledger ---------------------------------------------

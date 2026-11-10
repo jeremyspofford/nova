@@ -3,7 +3,7 @@
 // deletion of the whole chain, leaving only a content-free audit event. Export is plain files
 // (ADR-4) the person owns.
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CoreError } from './errors.ts';
 import { sha256 } from './workspace.ts';
@@ -74,6 +74,9 @@ const date = (v: unknown, what: string): string => {
   return d.toISOString();
 };
 
+// Said with every export (F-011): where Nova's forgetting reaches an export, and where it doesn't.
+export const EXPORT_BOUNDARY = 'These files are yours, in plain text. While they stay in Nova’s exports folder, forgetting a memory removes it from them too. A copy you move, open elsewhere or send is outside Nova’s reach: forgetting won’t touch it.';
+
 export class Memory {
   readonly exportsDir: string;
   #db: Db;
@@ -81,10 +84,13 @@ export class Memory {
   #afterForget: (ids: string[], records: MemoryRecord[]) => void;
   #forgetListeners: ((records: MemoryRecord[]) => void)[] = [];
   #doneListeners: ((records: MemoryRecord[]) => void)[] = [];
+  #log: ((message: string) => void) | null;
 
-  // afterForget: where else the forgotten records must go (the backups).
-  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[], records: MemoryRecord[]) => void }) {
+  // afterForget: where else the forgotten records must go (the backups). problem: told when a forget
+  // couldn't reach an export.
+  constructor(o: { db: Db; home: string; now?: () => Date; afterForget?: (ids: string[], records: MemoryRecord[]) => void; problem?: (message: string) => void }) {
     this.#db = o.db;
+    this.#log = o.problem ?? null;
     this.#now = o.now ?? (() => new Date());
     this.#afterForget = o.afterForget ?? (() => {});
     this.exportsDir = join(o.home, 'exports');
@@ -165,9 +171,39 @@ export class Memory {
     // Old pages in the write-ahead log could still hold the content; fold them in now.
     if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     this.#afterForget(ids, records);
+    this.#scrubExports(records);
     for (const fn of this.#forgetListeners) fn(records);
     for (const fn of this.#doneListeners) fn(records);
     return { forgotten: ids };
+  }
+
+  // A forget reaches the exports still in Nova's own exports folder (F-011): the record leaves
+  // memory.json and its line leaves memory.md. A copy moved or sent elsewhere is beyond Nova's reach;
+  // the export says so when it is made (EXPORT_BOUNDARY).
+  #scrubExports(records: MemoryRecord[]): void {
+    if (!records.length || !existsSync(this.exportsDir)) return;
+    const ids = new Set(records.map((r) => r.id));
+    const lines = records.map((r) => `- ${r.content.replace(/\s+/g, ' ')} (`);
+    for (const name of readdirSync(this.exportsDir)) {
+      if (!name.startsWith('memory-')) continue;
+      const json = join(this.exportsDir, name, 'memory.json');
+      const markdown = join(this.exportsDir, name, 'memory.md');
+      try {
+        if (existsSync(json)) {
+          const doc = JSON.parse(readFileSync(json, 'utf8')) as { records?: { id: string }[] };
+          if (Array.isArray(doc.records) && doc.records.some((r) => ids.has(r.id))) {
+            writeFileSync(json, `${JSON.stringify({ ...doc, records: doc.records.filter((r) => !ids.has(r.id)) }, null, 2)}\n`);
+          }
+        }
+        if (existsSync(markdown)) {
+          const text = readFileSync(markdown, 'utf8');
+          const kept = text.split('\n').filter((l) => !lines.some((p) => l.startsWith(p)));
+          if (kept.length !== text.split('\n').length) writeFileSync(markdown, kept.join('\n'));
+        }
+      } catch (e) {
+        this.#log?.(`Nova couldn’t remove a forgotten memory from the export in exports/${name}: ${(e as Error).message}. Delete that folder to be sure it is gone.`);
+      }
+    }
   }
 
   // On a standby: the hub forgot these, and sync has already deleted the rows here (the hub's own
@@ -177,6 +213,7 @@ export class Memory {
     const records = rows.map((r) => this.#shape(r as unknown as Row));
     if (this.#db.path !== ':memory:') this.#db.raw.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     this.#afterForget(records.map((r) => r.id), records);
+    this.#scrubExports(records);
     for (const fn of this.#forgetListeners) fn(records);
     for (const fn of this.#doneListeners) fn(records);
   }
@@ -236,7 +273,7 @@ export class Memory {
 
   // Plain files the person owns: every field as JSON, and a readable page grouped by kind.
   // `o.dir`: a folder to write them into instead (a factory reset's export, resilience/reset.ts).
-  export(o: { dir?: string } = {}): { dir: string; json: string; markdown: string; count: number } {
+  export(o: { dir?: string } = {}): { dir: string; json: string; markdown: string; count: number; boundary: string } {
     const at = this.#now().toISOString();
     const dir = o.dir ?? join(this.exportsDir, `memory-${at.replace(/[:.]/g, '-')}`);
     const records = this.active().map(({ active: _a, low_confidence: _l, ...r }) => r);
@@ -261,7 +298,7 @@ export class Memory {
       }
     }
     writeFileSync(markdown, `${lines.join('\n')}\n`);
-    return { dir, json, markdown, count: records.length };
+    return { dir, json, markdown, count: records.length, boundary: EXPORT_BOUNDARY };
   }
 
   #validate(input: MemoryInput, id: string): Row {

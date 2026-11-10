@@ -257,7 +257,7 @@ test('promotion is deliberate, with provenance back to capture; forgetting eithe
     assert.equal(made.status, 201);
     const m = made.body.memory;
     assert.equal(m.content, `${word} the plumber comes Tuesday`);
-    assert.deepEqual([m.source, m.observed_at, m.recorded_by, m.user_state], [`capture:${first.id}`, first.at, 'console', 'confirmed']);
+    assert.deepEqual([m.source, m.observed_at, m.recorded_by, m.user_state], [`capture:${first.id}`, first.at, 'console', 'unreviewed']);
     assert.deepEqual((await h.c('GET', `/capture/events/${first.id}`)).body.promoted, [m.id]);
     assert.equal((await h.c('GET', `/capture/memory/${m.id}`)).body[0].present, true);
 

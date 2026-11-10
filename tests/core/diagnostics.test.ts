@@ -167,6 +167,9 @@ test('the bundle holds no canary from anywhere Nova keeps a secret, no personal 
 
 test('Nova has no way to send the bundle anywhere: the builder imports no network module and writes no file', () => {
   const src = readFileSync(join(import.meta.dirname, '..', '..', 'src', 'core', 'diagnostics', 'index.ts'), 'utf8');
-  assert.deepEqual([...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]).sort(), ['../api.ts', '../index.ts', 'node:fs', 'node:os', 'node:path']);
+  assert.deepEqual([...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]).sort(), ['../../device/secret-shapes.ts', '../api.ts', '../index.ts', 'node:fs', 'node:os', 'node:path']);
   assert.doesNotMatch(src, /\bfetch\(|writeFile|appendFile|createWriteStream|node:http|node:net|node:child_process/);
+  // The secret shapes it shares with the device agent import nothing at all.
+  const shapes = readFileSync(join(import.meta.dirname, '..', '..', 'src', 'device', 'secret-shapes.ts'), 'utf8');
+  assert.doesNotMatch(shapes, /^\s*import\b|\bimport\(|\brequire\(/m);
 });
