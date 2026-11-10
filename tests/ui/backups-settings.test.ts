@@ -330,6 +330,28 @@ test('Backups offline save failure keeps draft and allows a real retry', async (
   assert.deepEqual((await m.get('/api/v1/backups')).settings, { target, keep: 23, encrypted_target: null });
 }));
 
+// #484: the save's own profile change starts a background Backups read. Under load that read can
+// answer after the save has finished; it must not erase "Backup settings saved.". The hold makes
+// that order certain: every GET /backups after the click waits until the save has said it saved.
+test('Backups background read answering after a save keeps the saved notice', async () => appCase(async ({ page, target }) => {
+  await openBackups(page);
+  await page.locator('#settings-backups [name="target"]').fill(target);
+  const held: import('playwright-core').Route[] = [];
+  let holding = true;
+  await page.route('**/api/v1/backups', r => { if (holding && r.request().method() === 'GET') held.push(r); else void r.continue(); });
+  await page.locator('[data-action="backups-save"]').click();
+  await page.getByText('Backup settings saved.', { exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector('#settings-backups .backups-settings')?.getAttribute('aria-busy') === 'false');
+  for (let i = 0; i < 200 && held.length === 0; i++) await page.waitForTimeout(50);
+  assert.ok(held.length > 0, 'the save started a background Backups read');
+  const answered = page.waitForResponse(r => r.url().endsWith('/api/v1/backups') && r.request().method() === 'GET');
+  holding = false;
+  for (const r of held.splice(0)) await r.continue();
+  await (await answered).finished();
+  await page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+  assert.equal(await page.getByText('Backup settings saved.', { exact: true }).count(), 1, 'a later read keeps the saved notice');
+}));
+
 // Real mesh listener/cookie principal: viewer cannot PUT, paired approver receives only the
 // initial setup key; repeated display still belongs to the console after explicit confirmation.
 test('Backups real paired viewer and approver enforce roles, initial-only key and live role loss', async () => {

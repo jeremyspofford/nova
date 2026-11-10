@@ -33,7 +33,9 @@ test('deploy, promote with the typed word, list and go back, from the command li
     const no = await cli(s.dir, 'service', 'promote', 'stand-in', '1.0.0');
     assert.equal(no.code, 2);
     assert.match(no.out, /Not promoted: it needs your confirmation \(type stand-in@1\.0\.0/);
-    assert.equal(await whoami(port), null);
+    // #488: in one full run something answered here. Say whose it is (its home and pid) if it happens again.
+    const early = await whoami(port);
+    assert.equal(early, null, `port ${port} answered before promotion: ${JSON.stringify(early)}; this test home ${dir}`);
     const wrong = await cli(s.dir, 'service', 'promote', 'stand-in', '1.0.0', '--confirm', 'yes');
     assert.equal(wrong.code, 2);
     const yes = await cli(s.dir, 'service', 'promote', 'stand-in', '1.0.0', '--confirm', 'stand-in@1.0.0');
