@@ -71,6 +71,10 @@ class BadRequest extends Unreachable {}
 const UI_NAME = new Map<string, string>();
 const UI_NAMES = ['accessibility', 'ui'] as const;
 // Screenpipe answered but refused Nova: it wants an API key, or not the one Nova sent.
+// Nova's vault (the Credential Broker) holds the key and wouldn't send it: not bound to this
+// address, locked, waiting for an OK, or not running. Said in the broker's own plain words.
+export class VaultRefused extends Error {}
+
 export class KeyRefused extends Error {
   constructor(hadKey: boolean) {
     super(hadKey
@@ -112,17 +116,23 @@ interface Page { items: RawEvent[]; count: number; newest: string | null; total:
 const latest = (a: string | null, b: string | null) => (a === null ? b : b === null ? a : a > b ? a : b);
 const plus = (t: string, ms: number) => new Date(Date.parse(t) + ms).toISOString();
 
+// A request that carries the source's key without the key passing through here: the Credential
+// Broker sends it (docs/plans/vault-broker.md §9 row 8) and answers with what Screenpipe said.
+export type KeyedRequest = (path: string, headers: Record<string, string>) => Promise<Response>;
+
 export class Screenpipe {
   readonly url: string;
   #fetch: Fetch;
   #lookbackMs: number;
   #apiKey: string | null;
+  #keyed: KeyedRequest | null;
 
-  constructor(o: { url: string; apiKey?: string | null; fetch?: Fetch; lookbackMs?: number }) {
+  constructor(o: { url: string; apiKey?: string | null; keyed?: KeyedRequest | null; fetch?: Fetch; lookbackMs?: number }) {
     this.url = o.url.replace(/\/+$/, '');
     this.#fetch = o.fetch ?? fetch;
     this.#lookbackMs = o.lookbackMs ?? DEFAULT_LOOKBACK_MS;
     this.#apiKey = o.apiKey || null;
+    this.#keyed = o.keyed ?? null;
   }
 
   async #get(path: string): Promise<unknown> {
@@ -130,11 +140,12 @@ export class Screenpipe {
     try {
       // A redirect could take the pull somewhere the address didn't say: refused.
       const headers: Record<string, string> = { accept: 'application/json', ...(this.#apiKey ? { authorization: `Bearer ${this.#apiKey}` } : {}) };
-      res = await this.#fetch(`${this.url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS), headers });
+      res = this.#keyed ? await this.#keyed(path, headers) : await this.#fetch(`${this.url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS), headers });
     } catch (e) {
+      if (e instanceof VaultRefused) throw e;
       throw new Unreachable(`Screenpipe at ${this.url} isn’t answering (${(e as Error)?.cause instanceof Error ? ((e as Error).cause as Error).message : (e as Error).message}).`);
     }
-    if (res.status === 401 || res.status === 403) { await res.body?.cancel().catch(() => {}); throw new KeyRefused(this.#apiKey !== null); }
+    if (res.status === 401 || res.status === 403) { await res.body?.cancel().catch(() => {}); throw new KeyRefused(this.#apiKey !== null || this.#keyed !== null); }
     if (res.status === 400) { await res.body?.cancel().catch(() => {}); throw new BadRequest(`Screenpipe at ${this.url} answered 400.`); }
     if (!res.ok) throw new Unreachable(`Screenpipe at ${this.url} answered ${res.status}.`);
     const tooMuch = () => new Unreachable(`Screenpipe at ${this.url} answered with too much at once (over ${Math.round(MAX_BYTES / 1024 / 1024)} MB), so Nova didn’t read it.`);
