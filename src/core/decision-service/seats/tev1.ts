@@ -76,14 +76,15 @@ export class Tev1Seat implements Seat {
   readonly egress: Egress = 'local';
   readonly tev1Limits: Tev1Limits;
   #o: Tev1Options;
-  #client: SystemOne;
+  // Made the first time it is needed: an address that isn't local (a host name saved in the
+  // profile) leaves Tev1 unavailable with the reason, and never stops Nova from starting (F-046).
+  #client: SystemOne | null = null;
   #detail: Tev1Detail = { available: false, model: null, digest: null, ollama: null, size_why: '', why: 'Nova hasn’t checked for Tev1 yet.', checked_at: null };
   #checking: Promise<Tev1Detail> | null = null;
   #now: () => Date;
 
   constructor(o: Tev1Options) {
     this.#o = o;
-    this.#client = this.#make(this.#url());
     this.tev1Limits = Object.freeze({ ...LIMITS, ...(o.limits ?? {}) });
     this.#now = o.now ?? (() => new Date());
   }
@@ -91,13 +92,13 @@ export class Tev1Seat implements Seat {
   #url(): string { return typeof this.#o.url === 'function' ? this.#o.url() : this.#o.url; }
 
   #make(url: string): SystemOne {
-    if (!localUrl(url)) throw new Error(`Tev1 runs in Ollama on this device or the person’s own network; ${new URL(url).host} could be anywhere.`);
+    if (!localUrl(url)) throw new Error(`Tev1 runs in Ollama on this device or the person’s own network; ${new URL(url).host} could be anywhere. Give Ollama’s address as localhost or a loopback or private IP address.`);
     return new SystemOne(url, { maxQuestions: MAX_QUESTIONS, maxBodyBytes: MAX_BODY_BYTES, ...(this.#o.timeoutMs ? { timeoutMs: this.#o.timeoutMs } : {}) });
   }
 
   get client(): SystemOne {
     const url = this.#url().replace(/\/+$/, '');
-    if (url !== this.#client.url) this.#client = this.#make(url);
+    if (!this.#client || url !== this.#client.url) this.#client = this.#make(url);
     return this.#client;
   }
 

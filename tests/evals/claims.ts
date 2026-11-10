@@ -35,7 +35,7 @@ export const CLAIMS: evals.Claim[] = [
   // ---- onboarding (M10f): every claim backed by the suite, or worded to the evidence it names ------
   { id: 'onboard.import-waits-for-ok', where: 'src/core/setup.ts', text: 'then waits in Memory for your OK: none of it is remembered until you keep it', needs: ['import', 'memory-review'] },
   { id: 'onboard.first-action-review', where: 'src/core/onboard/first.ts', text: 'It waits in Memory for your OK. Keep what is right; nothing is remembered until you do.', needs: ['import', 'memory-review'] },
-  { id: 'onboard.first-action-import-folder', where: 'src/core/onboard/first.ts', text: 'in ~/workspace/import/, then tell Nova. They wait in Memory for your OK.', needs: ['first-run', 'import'] },
+  { id: 'onboard.first-action-import-folder', where: 'src/core/onboard/first.ts', text: 'in {import}, then tell Nova. They wait in Memory for your OK.', needs: ['first-run', 'import'] },
   { id: 'onboard.discovery-finds-only', where: 'src/core/setup.ts', text: 'Looking lists what answers; connecting any of it is a separate step, yours to take.', needs: [],
     strong: 'Looking only finds them: nothing is connected, and nothing is read.', eval: 'claim.discovery-connects-nothing', priority: 1,
     note: 'Unit tests show it (tests/core/onboard.test.ts: one GET per known service, nothing connected, sources listed without opening a file); no golden task does, so the words say what the person sees.' },

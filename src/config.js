@@ -64,6 +64,20 @@ export function loadConfig(env = process.env, root = ROOT) {
 // A setting Nova refuses to start with; the message says why, in plain words.
 export class ConfigError extends Error {}
 
+// NOVA_OLLAMA_URL: where the hub's Ollama answers. Nova's local models (and Tev1, the local decision
+// model) must stay on the person's own machines, and a host name could resolve anywhere, so only
+// localhost or a loopback or private IP address is accepted, as before (F-046). Refused in one plain
+// line that names the setting and the forms it takes, never a stack trace. `isLocal` is
+// src/core/decision-service/seats/tev1.ts localUrl, passed in so this file stays plain JavaScript.
+export function ollamaUrlFrom(raw, isLocal) {
+  const forms = 'localhost or a loopback or private IP address, like http://127.0.0.1:11434 or http://192.168.1.50:11434';
+  let url;
+  try { url = new URL(raw); } catch { throw new ConfigError(`NOVA_OLLAMA_URL isn't an address: ${raw}. It takes ${forms}.`); }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new ConfigError(`NOVA_OLLAMA_URL must be an http(s) address, not ${raw}. It takes ${forms}.`);
+  if (!isLocal(raw)) throw new ConfigError(`NOVA_OLLAMA_URL is ${raw}, and Nova can't tell that ${url.host} is on your own machines: a name could point anywhere. It takes ${forms}. To use Ollama on another machine at home, give its IP address.`);
+  return raw;
+}
+
 // NOVA_MESH_URL=https://host:port with NOVA_TLS_CERT and NOVA_TLS_KEY; or http://host:port only with
 // NOVA_MESH_TRANSPORT=proxy (a TLS proxy carries it) or network (an encrypted network, such as a
 // tailnet, does). Plain HTTP with no such statement is refused: anyone on the way could read and

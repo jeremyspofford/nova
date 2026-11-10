@@ -93,7 +93,7 @@ const TIER2_CONFIRM = /^\/changes\/[^/]+\/rollback$/;
 import { Restarter } from './resilience/restart.ts';
 import { stopChildren } from './children.ts';
 import { Foundry } from './changes/foundry.ts';
-import { Self } from './self.ts';
+import { IMPORT_DIR, Self } from './self.ts';
 import { Build } from './build.ts';
 import { changelogView } from './changelog.ts';
 import { pipelineView } from './pipeline.ts';
@@ -112,6 +112,7 @@ export { render as renderIdentity } from './identity.ts';
 export { permits } from './workers.ts';
 // The memory gate's template, for its consumer (runner keep()): its field caps, never a seat.
 export { MEMORY_GATE_V1 } from './decision-service/index.ts';
+export { localOllamaUrl } from './decision-service/index.ts';
 export { ENVELOPE_VERSION, reportOf } from './envelope.ts';
 export { sha256, writeAtomic, writeJson } from './workspace.ts';
 export { SKILL_DATA } from './backups.ts';
@@ -386,7 +387,7 @@ export function createCore(o: CoreOptions) {
       kept: () => new Set([...memory.active().map((r) => r.content.toLowerCase()), ...ingest.candidates().filter((c) => c.op === 'remember' && c.content).map((c) => c.content!.toLowerCase())]),
     }, { userHome, now: now() }),
   };
-  const setup = new Setup({ profile, ledger, now, onboarding, ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
+  const setup = new Setup({ profile, ledger, now, onboarding, importDir: join(o.home, IMPORT_DIR), ...(o.detectedTimezone ? { detectedTimezone: o.detectedTimezone } : {}), ...(o.chat ? { chat: o.chat } : {}) });
   const extensions = new Extensions({ db, home: o.home, novaVersion: o.version, now });
   // Every extension's declared capabilities are in the approvals registry while it is installed:
   // checked on install (no clash with Nova's own or another's), registered, and dropped on removal.

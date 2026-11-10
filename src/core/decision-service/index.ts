@@ -11,7 +11,7 @@ import { CAPTURE_SENSITIVE_V1, sensitiveApp, findSecrets, redact as redactFindin
 import { MEMORY_GATE_V1 } from './templates/memory-gate.ts';
 import { VERIFY_TRANSFER_V1, OUTBOUND_CHECK_V1 } from './templates/interstitial.ts';
 import { JevSeat } from './seats/jev.ts';
-import { Tev1Seat, type Tev1Detail } from './seats/tev1.ts';
+import { Tev1Seat, localUrl, type Tev1Detail } from './seats/tev1.ts';
 import { LegacySeat } from './seats/legacy.ts';
 import { fileVerdicts, type VerdictStore } from './verdicts.ts';
 import { DEFAULT_SETTINGS, notices, recommend, scorecard, validateSettings, OPT_IN_WORDS, type DecisionSettings, type Notice, type Recommendation } from './settings.ts';
@@ -29,6 +29,8 @@ export { sensitiveApp, findSecrets, redactFindings };
 export { MemoryLog, DbLog, type DecisionLog, type RecordDb } from './log.ts';
 export { validate } from './registry.ts';
 export { memoryVerdicts, type VerdictStore, type VerdictRecord } from './verdicts.ts';
+// Whether an Ollama address is on the person's own machines (Tev1's rule), for NOVA_OLLAMA_URL at start.
+export const localOllamaUrl = (url: string): boolean => localUrl(url);
 export type { AskOptions, RemoteReceipt } from './service.ts';
 export type { DecisionSettings, Notice, Recommendation, Registered };
 export type { Decided, DecisionRecord, ServiceTemplate, Feature, OptIn, Finding, Precheck, Question, Answer, FieldSpec, Policy, Outcome, Autonomy, Quality, Trust, SeatId } from './types.ts';
