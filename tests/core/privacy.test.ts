@@ -146,6 +146,8 @@ test('a model command given as a path still gets a valid receipt (review finding
   const home = mkdtempSync(join(tmpdir(), 'nova-privacy-'));
   const nova = createNova({ ...loadConfig({ NOVA_HOME: home, NOVA_AGENT_CMD: '/usr/local/bin/Claude-Code -p', NOVA_TZ: 'UTC' }), port: 0 });
   try {
+    // A remote receipt is held to the person's live setting (A-001); this one is allowed by it.
+    nova.core.profile.set('privacy', 'default', 'cloud-allowed', 'settings');
     const r = nova.runner.receipt('s1', { helper: null, unattended: null, skills: new Map() }, 'cloud-allowed', { system: 's', prompt: 'p', recall: [] });
     assert.equal(r.egress, 'remote:claude-code');
     assert.equal(nova.core.receipts.record(r).egress, 'remote:claude-code');
