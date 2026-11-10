@@ -128,6 +128,50 @@ export async function ensureGit(home, o = {}) {
   return true;
 }
 
+// ---- captured originals in old history (F-013; owner ruling 2026-11-10) ----------------------------
+// capture/ is kept out of history from now on (UNTRACKED), but commits from before still hold the
+// originals they saved. The person may remove them, deliberately, with scripts/scrub-capture-history.js:
+// never automatically. These are what it uses.
+
+// What the home's history (every branch and the reflog) still holds under capture/: how many commits
+// touched it, and which paths.
+export async function captureInHistory(home) {
+  if (!existsSync(join(home, '.git'))) return { commits: 0, paths: [] };
+  const out = await git(home, 'log', '--all', '--reflog', '--format=%H', '--name-only', '--', 'capture');
+  const lines = (out ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const commits = new Set(lines.filter((l) => /^[0-9a-f]{40}$/.test(l)));
+  const paths = [...new Set(lines.filter((l) => l.startsWith('capture/')))].sort();
+  return { commits: commits.size, paths };
+}
+
+const run = (home, args, env = {}) => new Promise((ok, fail) => {
+  execFile('git', ['-C', home, ...args], { timeout: 30 * 60_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...env } }, (err, stdout, stderr) => (err ? fail(new Error(String(stderr || err.message).trim().split('\n').at(-1))) : ok(stdout)));
+});
+
+// Rewrites the home's history so no commit holds capture/, then drops the old copies git keeps (the
+// pre-rewrite refs, the reflog, unreachable objects), and checks. What is on disk is untouched.
+// Returns what it removed. Refuses while Nova runs this home (it commits as it works).
+export async function scrubCaptureHistory(home) {
+  if (!existsSync(join(home, '.git'))) return { commits: 0, paths: [], rewritten: false };
+  if (runningPid(home)) throw new Error('Nova is running this home. Stop it first; nothing was changed.');
+  const before = await captureInHistory(home);
+  if (!before.commits) return { ...before, rewritten: false };
+  // capture/ ignored and untracked first (as every start does), then whatever is uncommitted goes in,
+  // so the rewrite starts from a clean tree. Every commit is kept, only without capture/: none is
+  // dropped, so a history whose only change was captured files still has its commits.
+  await ensureGit(home);
+  await git(home, 'add', '-A');
+  await commit(home, 'Nova: before removing captured originals from history');
+  await run(home, ['filter-branch', '--force', '--index-filter', 'git rm -r -q --cached --ignore-unmatch capture', '--', '--all'], { FILTER_BRANCH_SQUELCH_WARNING: '1' });
+  const refs = (await run(home, ['for-each-ref', '--format=%(refname)', 'refs/original/'])).split('\n').filter(Boolean);
+  for (const r of refs) await run(home, ['update-ref', '-d', r]);
+  await run(home, ['reflog', 'expire', '--expire=now', '--all']);
+  await run(home, ['gc', '--prune=now', '--quiet']);
+  const after = await captureInHistory(home);
+  if (after.commits) throw new Error(`${after.commits} commits still hold captured files after the rewrite. Nothing more was changed; run it again or ask for help.`);
+  return { ...before, rewritten: true };
+}
+
 let queue = Promise.resolve();
 export function commitHome(home, message) {
   queue = queue.then(async () => {
