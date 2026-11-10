@@ -124,7 +124,7 @@ export * from './mesh/wire.ts';
 export { ReportThrottle, SlidingWindowLimiter } from './mesh/limiter.ts';
 export { rateKey } from './mesh/enroll.ts';
 export { PURPOSE_WORDS, WORKLOAD_PURPOSES, checkPurposes, purposeChange } from './mesh/purposes.ts';
-export { BROWSER_TASK_HEADER, SESSION_COOKIE, allows, fromBrowserTask, loopbackAddress } from './mesh/access.ts';
+export { APPROVER_ONLY, BROWSER_TASK_HEADER, SESSION_COOKIE, allows, fromBrowserTask, loopbackAddress } from './mesh/access.ts';
 export { RUNTIME_FILES, joinScript, tar } from './mesh/agent.ts';
 export type { Device } from './mesh/devices.ts';
 export type { Pairing } from './mesh/enroll.ts';
@@ -1198,6 +1198,8 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
         if (section === 'privacy' && params.key === 'default') {
           const to = PRIVACY_MODES.indexOf(body.value as PrivacyModeOf);
           if (to < 0) throw new CoreError('validation', 'Privacy is local-only, local-preferred or cloud-allowed.');
+          // Only the hub's own screen or an approver device may loosen it (D2); confirm is never the authorization.
+          if (to > PRIVACY_MODES.indexOf(profile.privacyDefault()) && allows('approver', who.principal) !== 'ok') throw new CoreError('forbidden', `Letting more of your work leave your devices loosens a gate. ${APPROVER_ONLY}`);
           if (to > PRIVACY_MODES.indexOf(profile.privacyDefault()) && body.confirm !== true) throw new CoreError('validation', 'Letting more of your work leave your devices loosens a gate (tier 3): confirm it every time (confirm: true).');
         }
         if (section === 'providers' || (section === 'policy' && params.key === 'task_tests')) throw new CoreError('validation', 'Providers are set through /api/v1/providers, so their settings are checked.');
@@ -1250,7 +1252,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     },
     { method: 'GET', path: '/tasks/{id}', summary: 'One task, with its brief, report and verification.', handle: ({ params }) => ledger.get(params.id!) },
     { method: 'GET', path: '/tasks/{id}/events', summary: 'Everything that happened to a task, in order.', handle: ({ params }) => ledger.events(params.id!) },
-    { method: 'POST', path: '/tasks/{id}/approve', summary: 'Give the OK a tier-2 or tier-3 task is waiting for. Tier 3 needs {confirm: true}.', body: '{confirm?}', handle: ({ params, body }) => ledger.approve(params.id!, { confirm: body.confirm === true }) },
+    { method: 'POST', path: '/tasks/{id}/approve', access: 'approver', summary: 'Give the OK a tier-2 or tier-3 task is waiting for. Tier 3 needs {confirm: true}. The hub’s own screen or a device allowed to approve only.', body: '{confirm?}', handle: ({ params, body, who }) => ledger.approve(params.id!, { confirm: body.confirm === true, by: by(who) }) },
     { method: 'POST', path: '/tasks/{id}/retry', summary: 'Try a blocked or partly done task again.', handle: ({ params }) => ledger.retry(params.id!) },
     { method: 'POST', path: '/tasks/{id}/cancel', summary: 'Stop a task. It ends cancelled, with the reason.', body: '{reason?}', handle: ({ params, body }) => ledger.cancel(params.id!, typeof body.reason === 'string' && body.reason.trim() ? body.reason : 'Cancelled by you.') },
     { method: 'GET', path: '/workers', summary: 'Who can do delegated work, where their data goes, and whether they are healthy.', handle: () => [...ledger.workers.values()].map(info) },
