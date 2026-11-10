@@ -45,7 +45,8 @@ import {
   KINDS, SPACE, allowedBack, checkAllow, checkExclusions, checkSignals, checkSwitch, classify, describeExclusion, excludedBy, instant, isPrivate,
   type Allow, type Exclusion, type Facts, type Kind, type Signal, type Switch,
 } from './rules.ts';
-import { DEFAULT_LOOKBACK_MS, DEFAULT_URL, KeyRefused, Screenpipe, Unreachable, type Cursor, type RawEvent } from './screenpipe.ts';
+import { DEFAULT_LOOKBACK_MS, DEFAULT_URL, KeyRefused, Screenpipe, Unreachable, VaultRefused, type Cursor, type KeyedRequest, type RawEvent } from './screenpipe.ts';
+import type { Answer, BrokerClient, Target } from '../broker/client.ts';
 import { sha256 } from '../workspace.ts';
 
 export { KINDS, type Kind } from './rules.ts';
@@ -261,6 +262,10 @@ export interface CaptureOptions {
   // before the triage decision reads it. A block proposes nothing; otherwise the decision reads the
   // screened form.
   screen?: (r: { text: string; kind: Kind; origin: string }) => Promise<{ verdict: string; extract: string }>;
+  // The Credential Broker, when Nova runs under the supervisor (docs/plans/vault-broker.md §9 row 8):
+  // a key the broker holds is used through it, so its value never reaches core. Absent, or a key it
+  // doesn't hold: the older vault below, as before.
+  broker?: () => Pick<BrokerClient, 'listRefs' | 'use'> | null;
   // Where a Screenpipe's API key is kept: the vault, never the source's config.
   secrets?: { get(name: string): string | null; put(name: string, value: string): unknown; delete(name: string): unknown; has(name: string): boolean };
   fetch?: typeof fetch;
@@ -1232,6 +1237,30 @@ export class Capture extends EventEmitter {
     return p;
   }
 
+  // A source's key held by the Credential Broker, as a request the broker sends with it (§9 row 8):
+  // null when there is no broker, or it holds no key under this source's name (the older vault then
+  // answers, as before). The broker checks the binding (this source's origin, GET only) and the
+  // standing consent itself; its refusal is said in its own words, and nothing is sent without it.
+  async #keyed(id: string, url: string): Promise<KeyedRequest | null> {
+    const broker = this.#o.broker?.();
+    if (!broker) return null;
+    const ref = `secret://${keyName(id)}`;
+    const listed = await broker.listRefs({ prefix: keyName(id) }).catch((e: Error) => ({ error: 'failed', words: e.message } as Answer));
+    if (listed.error) throw new VaultRefused(`Nova’s vault isn’t answering (${listed.words ?? listed.error}), so ${this.#source(id).name}’s key can’t be used.`);
+    const refs = (listed.refs ?? []) as { aliases?: string[] }[];
+    if (!refs.some((r) => r.aliases?.includes(ref))) return null;
+    const origin = new URL(url).origin;
+    const name = this.#source(id).name;
+    return async (path, headers) => {
+      const { authorization: _none, ...plain } = headers;
+      const a = await broker.use(ref, { kind: 'http', origin } as Target, { method: 'GET', path, headers: plain }, { caller: 'capture' });
+      if (a.refused) throw new VaultRefused(`Nova’s vault holds ${name}’s key and didn’t use it for ${origin}: ${a.words ?? a.refused}.${a.refused === 'not_bound' ? ` Bind the key to ${origin} (GET) with a standing consent for capture to use it.` : ''}`);
+      if (a.error) throw new VaultRefused(`Nova’s vault couldn’t send ${name}’s request (${a.words ?? a.error}).`);
+      const o = a.outcome as { status: number; headers?: Record<string, string>; body?: string };
+      return new Response(o.status === 204 || o.status === 304 ? null : (o.body ?? ''), { status: o.status, headers: o.headers ?? {} });
+    };
+  }
+
   async #pull(id: string): Promise<{ kept: number; dropped: Record<string, number> } | { error: string }> {
     const s = this.#source(id);
     if (s.adapter !== 'screenpipe' || !s.enabled || s.paused) return { kept: 0, dropped: {} };
@@ -1248,9 +1277,15 @@ export class Capture extends EventEmitter {
     const since = cursor.since ?? s.consent_at ?? this.#now().toISOString();
     let got;
     try {
-      const apiKey = this.#o.secrets?.get(keyName(id)) ?? null;
-      got = await new Screenpipe({ url, apiKey, lookbackMs: this.#lookback(s) * 60_000, ...(this.#o.fetch ? { fetch: this.#o.fetch } : {}) }).pull(cursor.read ?? {}, since);
+      // The broker first: a key it holds is used through it, and core never reads it.
+      const keyed = await this.#keyed(id, url);
+      const apiKey = keyed ? null : this.#o.secrets?.get(keyName(id)) ?? null;
+      got = await new Screenpipe({ url, apiKey, keyed, lookbackMs: this.#lookback(s) * 60_000, ...(this.#o.fetch ? { fetch: this.#o.fetch } : {}) }).pull(cursor.read ?? {}, since);
     } catch (e) {
+      if (e instanceof VaultRefused) {
+        if (!this.#outage.has(id)) this.#outage.set(id, this.#o.log.problem('capture', `${e.message} Nothing new is captured from it until then; nothing Screenpipe keeps meanwhile is lost.`).id);
+        return this.#status(id, 'needs_key', e.message);
+      }
       if (e instanceof KeyRefused) {
         if (!this.#outage.has(id)) this.#outage.set(id, this.#o.log.problem('capture', `${e.message} Nothing new is captured from it until it lets Nova in; nothing Screenpipe keeps meanwhile is lost.`).id);
         return this.#status(id, 'needs_key', e.message);

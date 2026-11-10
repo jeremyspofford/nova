@@ -694,6 +694,8 @@ export function createCore(o: CoreOptions) {
   let captureSync: CaptureSync | null = null;
   const capture = new Capture({
     db, log, profile, memory, backups, decisions, templates, now,
+    // The first consumer on the Credential Broker (§9 row 8): Screenpipe's key, when the broker holds it.
+    broker: () => o.broker ?? null,
     self: () => meshIdentity.id,
     deviceName: (id) => devices.find(id)?.name ?? null,
     timezone: () => profile.get<string>('user', 'timezone') ?? o.detectedTimezone ?? 'UTC',
