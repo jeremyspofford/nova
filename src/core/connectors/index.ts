@@ -21,7 +21,8 @@ import type { Route } from '../api.ts';
 import type { PrivacyMode, Tier } from '../envelope.ts';
 import type { Approvals } from '../approvals/index.ts';
 import type { Task, TaskInput } from '../ledger.ts';
-import { permits } from '../workers.ts';
+import { createHash } from 'node:crypto';
+import { egressOf, permits } from '../workers.ts';
 
 export interface ConnectorStatus {
   connected: boolean;
@@ -147,7 +148,17 @@ export interface ConnectorsOptions {
   now: () => Date;
   // The approvals registry: a connector built into Nova registers its manifest's capabilities.
   approvals?: Approvals;
+  // Writes a receipt for each service call (F-031), before the call runs; it may refuse by throwing
+  // (Receipts refuses a remote call under local-only), and then the call doesn't run.
+  receipt?: (r: ServiceReceipt) => void;
 }
+
+// One call to a connected service, as its receipt records it: which service and action, local or
+// remote, the privacy setting it ran under, and a fingerprint of what it was given (never the text).
+export interface ServiceReceipt { task_id: string; provider: string; model: string; purpose: string; privacy_mode: PrivacyMode; egress: 'local' | `remote:${string}`; context_items: { kind: 'file'; ref: string; sha256: string }[] }
+
+// The name a remote service's receipts carry (`remote:<name>`), from its manifest id.
+export const serviceEgressName = (id: string): string => id.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 64) || 'service';
 
 export class Connectors extends EventEmitter {
   #o: ConnectorsOptions;
@@ -155,7 +166,9 @@ export class Connectors extends EventEmitter {
   #started = false;
   #removing = new Set<string>();
   // While an action runs (act): whose, the tier its capability is at, and the task it made.
-  #acting: { id: string; floor: Tier; made: Task | null } | null = null;
+  #acting: { id: string; floor: Tier; made: Task | null; action: string } | null = null;
+  // The action each task made by act() runs, by task id, until its receipt is written.
+  #actions = new Map<string, string>();
 
   constructor(o: ConnectorsOptions) {
     super();
@@ -199,7 +212,7 @@ export class Connectors extends EventEmitter {
     // A built-in connector is in the extension host once the person connects it (and leaves it
     // when they disconnect), so the host lists what they chose, not everything Nova could do.
     // Records change on the hub only (start(), below): a standby's come from the hub.
-    if (c.worker) this.#o.addWorker(c.worker);
+    if (c.worker) this.#o.addWorker(this.#receipted(c, c.worker));
     if (c.confirm) this.#o.addConfirmation(m.id, c.confirm);
     if (this.#started) this.#ready(c);
     return c;
@@ -355,7 +368,7 @@ export class Connectors extends EventEmitter {
     // Fails closed: an action whose capability isn't in the registry doesn't run.
     if (this.#o.approvals && !this.#o.approvals.has(a.capability)) throw new CoreError('conflict', `${c.manifest.name}’s action ${a.id} has no approval tier Nova knows, so it doesn’t run.`);
     const floor = this.#o.approvals ? this.#o.approvals.effective(a.capability) : 0;
-    const acting: { id: string; floor: Tier; made: Task | null } = { id: c.manifest.id, floor: floor as Tier, made: null };
+    const acting: { id: string; floor: Tier; made: Task | null; action: string } = { id: c.manifest.id, floor: floor as Tier, made: null, action: a.id };
     this.#acting = acting;
     let task: Task;
     try {
@@ -365,6 +378,9 @@ export class Connectors extends EventEmitter {
     }
     // The task must be the one it delegated just now, through the gate above.
     if (!acting.made || acting.made.id !== task?.id) throw new CoreError('conflict', `${c.manifest.name} didn’t run ${a.id} as a task of its own, so Nova doesn’t count it as done.`);
+    // Which action the task is, for its receipt when it runs (kept in memory, a few hundred at most).
+    this.#actions.set(task.id, a.id);
+    if (this.#actions.size > 500) this.#actions.delete(this.#actions.keys().next().value!);
     return task;
   }
 
@@ -383,6 +399,34 @@ export class Connectors extends EventEmitter {
   }
 
   // ---- inside ------------------------------------------------------------------------------
+
+  // Every task a connector's worker runs is a call to its service: it gets a receipt, written in
+  // this one generic step before the call runs, so any connector registered later is receipted with
+  // no code of its own (F-031; no per-service path). Local or remote is the stricter of what the
+  // worker declares for this brief and where the connector says its calls go now.
+  #receipted(c: Connector, w: Worker): Worker {
+    const receipt = this.#o.receipt;
+    if (!receipt) return w;
+    const wrapped: Worker = Object.create(w) as Worker;
+    wrapped.run = (brief, signal) => {
+      let remote = false;
+      try { remote = egressOf(w, brief) === 'remote' || c.egress() === 'remote'; } catch { remote = true; }
+      // A task the ledger starts at once runs while act() is still on the stack.
+      const action = this.#actions.get(brief.task_id) ?? (this.#acting?.id === c.manifest.id ? this.#acting.action : null);
+      this.#actions.delete(brief.task_id);
+      receipt({
+        task_id: brief.task_id,
+        provider: `service:${c.manifest.id}`,
+        model: action ?? c.manifest.id,
+        purpose: `service: ${c.manifest.name}${action ? `, ${action}` : ''}`,
+        privacy_mode: brief.privacy_mode,
+        egress: remote ? `remote:${serviceEgressName(c.manifest.id)}` : 'local',
+        context_items: [{ kind: 'file', ref: `brief:${brief.task_id}`, sha256: createHash('sha256').update(JSON.stringify(brief.inputs ?? {})).digest('hex') }],
+      });
+      return w.run(brief, signal);
+    };
+    return wrapped;
+  }
 
   #startOne(c: Connector): void {
     try { c.start?.(); } catch (e) { this.#o.log.problem('connectors', `${c.manifest.name} couldn’t start.`, { detail: (e as Error)?.stack ?? String(e) }); }

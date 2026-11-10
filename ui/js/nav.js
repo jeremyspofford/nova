@@ -17,6 +17,8 @@ export const DESTINATIONS = Object.freeze([
   { id: 'about', label: 'About Nova', path: '/about', parent: 'settings' },
   { id: 'changelog', label: 'What’s new', path: '/changelog', parent: 'settings' },
   { id: 'pipeline', label: 'Where Nova stands', path: '/pipeline', parent: 'settings' },
+  // Settings › Privacy leads to it: what each model call and service call was told, and where it went.
+  { id: 'receipts', label: 'Receipts', path: '/receipts', parent: 'settings' },
 ]);
 
 export const destination = (id) => DESTINATIONS.find((d) => d.id === id) ?? null;

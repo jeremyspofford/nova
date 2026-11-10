@@ -38,7 +38,7 @@ const TYPES = {
 export const DOCS = { '/docs/restore': 'docs/restore.md' };
 
 // The paths the app page (ui/index.html) answers, besides a conversation's /c/<id>.
-export const APP_PAGES = ['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture', '/topology', '/about', '/changelog', '/pipeline'];
+export const APP_PAGES = ['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture', '/topology', '/about', '/changelog', '/pipeline', '/receipts'];
 
 // The local model manager's settings from the environment (M6b): NOVA_OLLAMA_URL is where the
 // hub's Ollama answers when the profile doesn't say; NOVA_HARDWARE_FILE (JSON, tests and the gate's

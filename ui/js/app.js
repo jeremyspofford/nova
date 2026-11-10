@@ -42,7 +42,7 @@ const el = {
   home: $('home'), tasks: $('tasks-view'), memory: $('memory'), automations: $('automations'), rules: $('rules'),
   skills: $('skills'), schedules: $('schedules'), activity: $('activity'), health: $('health-view'), settings: $('settings-view'),
   aside: $('aside'), mainLink: $('main-link'), mainDot: $('main-dot'), capture: $('capture-view'), topology: $('topology-view'),
-  about: $('about-view'), changelog: $('changelog-view'), pipeline: $('pipeline-view'),
+  about: $('about-view'), changelog: $('changelog-view'), pipeline: $('pipeline-view'), receipts: $('receipts-view'),
 };
 
 const state = {
@@ -293,10 +293,11 @@ function route() {
   else if (r.dest === 'capture') showCaptureView();
   else if (r.dest === 'topology') showTopologyView();
   else if (['about', 'changelog', 'pipeline'].includes(r.dest)) showAboutView(r.dest);
+  else if (r.dest === 'receipts') showReceiptsView();
   else showCore(r.dest);
 }
 
-const VIEWS = { home: 'home', chat: 'thread', tasks: 'tasks', memory: 'memory', automations: 'automations', skills: 'skills', activity: 'activity', health: 'health', settings: 'settings', capture: 'capture', topology: 'topology', about: 'about', changelog: 'changelog', pipeline: 'pipeline' };
+const VIEWS = { home: 'home', chat: 'thread', tasks: 'tasks', memory: 'memory', automations: 'automations', skills: 'skills', activity: 'activity', health: 'health', settings: 'settings', capture: 'capture', topology: 'topology', about: 'about', changelog: 'changelog', pipeline: 'pipeline', receipts: 'receipts' };
 function setView(view) {
   const was = state.view;
   state.view = view;
@@ -665,7 +666,7 @@ const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state
 
 // Every view's heading names it, Home's too (UX review 1, F5: never an empty heading); beside a
 // rail, and on a phone's Home, it is there for screen readers only (layout.css).
-const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture', topology: 'Topology', about: 'About Nova', changelog: 'What’s new', pipeline: 'Where Nova stands' };
+const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture', topology: 'Topology', about: 'About Nova', changelog: 'What’s new', pipeline: 'Where Nova stands', receipts: 'Receipts' };
 function renderChrome() {
   const title = state.view === 'chat' ? (!state.id ? 'New chat' : state.missing === 'gone' ? 'Conversation not found' : state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
@@ -2082,6 +2083,20 @@ function showAboutView(view) {
     el[view].querySelector('[data-about-reopen]')?.addEventListener('click', () => { if (state.view === view) showAboutView(view); }, { once: true });
   });
 }
+// Receipts (receipts.js, loaded the first time it opens): the owner's composition with real receipts.
+let receiptsBound = false;
+function showReceiptsView() {
+  leaveChat('receipts');
+  enter(el.receipts);
+  el.receipts.focus({ preventScroll: true });
+  import('./receipts.js').then((m) => {
+    if (!receiptsBound) { receiptsBound = true; m.bind(el.receipts, { openTask: (id) => core.openTask(id) }); }
+    return m.show(el.receipts);
+  }).catch(() => {
+    el.receipts.innerHTML = `<header class="view-head"><h2 class="view-title">${escapeHtml(TITLES.receipts)}</h2></header><div class="empty-state"><p class="empty-title">This page couldn’t open</p><p class="empty-sub">Nova’s server didn’t answer. Open it again once Nova is back.</p></div>`;
+  });
+}
+el.receipts.addEventListener('click', (e) => { followLink(e); });
 el.capture.addEventListener('click', (e) => { followLink(e); });
 // The indicator opens the Capture view in place, from any page.
 $('capture-ind').addEventListener('click', (e) => { followLink(e); });
