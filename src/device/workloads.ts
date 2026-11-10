@@ -149,7 +149,9 @@ export interface WorkloadsOptions {
   probeTimeoutMs?: number;
 }
 
-interface Instance { service: string; version: string; role: RunningView['role']; ports: Record<string, number>; since: string; failed: string | null; watchdog: Watchdog<ChildLike> }
+// A workload's process as the watchdog sees it, plus the last of what it wrote to stderr.
+interface Child extends ChildLike { stderr(): string }
+interface Instance { service: string; version: string; role: RunningView['role']; ports: Record<string, number>; since: string; failed: string | null; watchdog: Watchdog<Child> }
 interface ServiceState { live: string | null; previous: string | null }
 
 export class Workloads {
@@ -352,7 +354,8 @@ export class Workloads {
     if ((this.#o.uid?.() ?? process.getuid?.() ?? null) === 0) return this.#refuse(service, version, 'This agent is running as root, and it never runs a workload as root. Run it as your own user.');
     if (isCapture(m) && !this.#o.captureOn()) return { ok: false, waiting: true, said: `${service} ${version} wasn’t started: capture is off on this device. Deploying it didn’t turn capture on; turning on one of its capture sources on the hub does.` };
     const ports: Record<string, number> = {};
-    for (const p of m.ports) ports[p.name] = role === 'live' ? p.port : await freePort();
+    const avoid = this.#reservedPorts();
+    for (const p of m.ports) { ports[p.name] = role === 'live' ? p.port : await sidePort(avoid); avoid.add(ports[p.name]!); }
     const dir = join(this.root, service);
     const state = role === 'live' ? join(dir, 'data') : join(dir, 'scratch', version);
     if (role !== 'live') rmSync(state, { recursive: true, force: true });
@@ -373,13 +376,19 @@ export class Workloads {
     if (this.#o.authorize && !this.#o.authorize({ verb: role === 'live' ? 'switch' : 'start', service, version })) return this.#refuse(service, version, 'The hub has not authorized this workload to start in that role.');
     const inst: Instance = {
       service, version, role, ports, since: new Date().toISOString(), failed: null,
-      watchdog: new Watchdog<ChildLike>({
-        start: () => group(spawn(file, args, { cwd: slot, env, stdio: 'ignore', detached: true }), (e) => { inst.failed = `It couldn’t be started: ${e.message}`; this.#say(`${service} ${version}: ${inst.failed}`); }),
+      watchdog: new Watchdog<Child>({
+        // stderr only, read into a short tail so a copy that keeps dying can say why; stdin and
+        // stdout stay closed to it.
+        start: () => group(spawn(file, args, { cwd: slot, env, stdio: ['ignore', 'ignore', 'pipe'], detached: true }), (e) => { inst.failed = `It couldn’t be started: ${e.message}`; this.#say(`${service} ${version}: ${inst.failed}`); }),
         backoffMs: this.#o.backoffMs ?? 500, maxBackoffMs: 30_000,
       }),
     };
-    inst.watchdog.on('safe_mode', () => { inst.failed = 'It stopped three times in a minute, so the device agent stopped trying.'; this.#say(`${service} ${version}: ${inst.failed}`); });
-    inst.watchdog.on('start', () => this.#recordPids(service));
+    // The last exit, said in a line: a crash is told before any restart, so `current` is the one that died.
+    let current: Child | null = null;
+    let last = '';
+    inst.watchdog.on('start', (c: Child) => { current = c; this.#recordPids(service); });
+    inst.watchdog.on('crash', ({ code, signal }: { code: number | null; signal: NodeJS.Signals | null }) => { last = lastExit(code, signal, current?.stderr() ?? ''); });
+    inst.watchdog.on('safe_mode', () => { inst.failed = `It stopped three times in a minute, so the device agent stopped trying.${last ? ` ${last}` : ''}`; this.#say(`${service} ${version}: ${inst.failed}`); });
     this.#running.set(key, inst);
     inst.watchdog.run();
     this.#say(`Started ${service} ${version}${role === 'live' ? '' : ` ${role === 'shadow' ? 'as a shadow (its output is never read)' : 'alongside the live version'}`} on 127.0.0.1:${env.PORT}.`);
@@ -467,6 +476,17 @@ export class Workloads {
 
   #slot(service: string, version: string): string { return join(this.root, service, 'v', version); }
 
+  // Ports a copy started alongside must not take: every port an installed manifest on this device
+  // names (its live version starts there, maybe later) and every port a running copy was given.
+  #reservedPorts(): Set<number> {
+    const out = new Set<number>();
+    for (const i of this.#running.values()) for (const p of Object.values(i.ports)) out.add(p);
+    let names: string[] = [];
+    try { names = readdirSync(this.root).filter((n) => SERVICE.test(n)); } catch { /* none yet */ }
+    for (const service of names) for (const v of this.#installed(service)) for (const p of this.#manifest(service, v)?.ports ?? []) out.add(p.port);
+    return out;
+  }
+
   #manifest(service: string, version: string): WorkloadManifest | null {
     try { return (JSON.parse(readFileSync(join(this.#slot(service, version), 'manifest.json'), 'utf8')) as SignedWorkload).manifest; } catch { return null; }
   }
@@ -510,33 +530,103 @@ export class Workloads {
   #say(line: string): void { this.#o.say?.(line); }
 }
 
+// How much of a child's stderr is kept (the end of it), and how much of that is ever said.
+const STDERR_KEPT = 8192;
+const STDERR_SAID = 300;
+// How long an exit waits for the rest of stderr: a descendant that left the group may hold it open.
+const STDERR_DRAIN_MS = 250;
+
 // A child in its own process group: stopping it stops everything it started.
-function group(c: ChildProcess, failed: (e: Error) => void): ChildLike {
+function group(c: ChildProcess, failed: (e: Error) => void): Child {
   // A program that can't be started at all (gone, not executable) says so here, never as a crash
   // of this agent.
   c.on('error', failed);
-  // The leader may exit while descendants still hold the group's resources. End that group
-  // before the watchdog forgets this child or starts another, including TERM-resistant children.
-  c.on('exit', () => { try { if (c.pid) process.kill(-c.pid, 'SIGKILL'); } catch { /* the group is gone */ } });
+  // stderr is always read (a full pipe would stall the program), and only its end is kept.
+  let tail = Buffer.alloc(0);
+  let open = !!c.stderr;
+  const drained: (() => void)[] = [];
+  c.stderr?.on('data', (b: Buffer) => { tail = Buffer.concat([tail, b]); if (tail.length > STDERR_KEPT) tail = tail.subarray(tail.length - STDERR_KEPT); });
+  c.stderr?.on('error', () => { /* its end is what was read */ });
+  c.stderr?.on('close', () => { open = false; for (const f of drained.splice(0)) f(); });
+  const exits: ((code: number | null, signal: NodeJS.Signals | null) => void)[] = [];
+  c.on('exit', (code, signal) => {
+    // The leader may exit while descendants still hold the group's resources. End that group
+    // before the watchdog forgets this child or starts another, including TERM-resistant children.
+    try { if (c.pid) process.kill(-c.pid, 'SIGKILL'); } catch { /* the group is gone */ }
+    // The watchdog hears of the exit once the last of stderr is read (or shortly after, at most).
+    let told = false;
+    const timer = setTimeout(() => tell(), STDERR_DRAIN_MS);
+    const tell = () => { if (told) return; told = true; clearTimeout(timer); for (const fn of exits) fn(code, signal); };
+    if (open) drained.push(tell); else tell();
+  });
   return {
     get pid() { return c.pid; },
-    on: (event: 'exit', fn: (code: number | null, signal: NodeJS.Signals | null) => void) => c.on(event, fn),
+    on: (_event: 'exit', fn: (code: number | null, signal: NodeJS.Signals | null) => void) => exits.push(fn),
     kill: (signal?: NodeJS.Signals) => {
       try { if (c.pid) { process.kill(-c.pid, signal ?? 'SIGTERM'); return true; } } catch { /* the group is gone */ }
       return c.kill(signal);
     },
+    stderr: () => tail.toString('utf8'),
   };
 }
 
-// A port on 127.0.0.1 nothing is using now, for a copy started alongside.
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+// A workload's last exit, in one line a person can read on the hub: how it ended and the end of
+// what it wrote to stderr. Its stderr is the workload's own text, so it is bounded and made plain:
+// no terminal escapes, no control, format or direction characters, no line breaks.
+export function lastExit(code: number | null, signal: NodeJS.Signals | null, stderr: string): string {
+  const how = signal ? `it was ended by ${signal}` : `it exited with code ${code ?? 'unknown'}`;
+  const said = plainTail(stderr, STDERR_SAID);
+  return `Last time ${how} and ${said ? `wrote: “${said}”` : 'wrote nothing to stderr'}.`;
+}
+
+export function plainTail(text: string, max: number): string {
+  const lines = text
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // CSI: colours, cursor moves
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, '') // OSC: titles, links
+    .split(/[\r\n\u0085\u2028\u2029]+/)
+    .map((l) => l.replace(/[\p{C}\p{Zl}\p{Zp}�]/gu, ' ').replace(/\s+/g, ' ').trim())
+    // A stack frame says where, not what: Node's, Java's and the like ("at …"), and Node's own last line.
+    .filter((l) => l && !/^at\s/.test(l) && !/^Node\.js v\d/.test(l));
+  const line = lines.join(' | ');
+  // Cut on code points, so no half of a pair is left.
+  const chars = [...line];
+  return chars.length <= max ? line : `…${chars.slice(chars.length - max + 1).join('')}`;
+}
+
+// A loopback port for a copy started alongside (or as a shadow). It is picked from 20000–32000,
+// below every default ephemeral range (Linux 32768–60999, macOS and Windows 49152–65535), and out
+// of Linux's configured one when it reaches lower. A port picked by binding port 0 and closing it is
+// the OS's to hand out again: any other program's port-0 bind can be given it before the workload
+// binds it by number. Out here only a program that asks for that number itself can collide.
+// It is skipped when a manifest on this device names it or a copy holds it, and it is checked to
+// bind (Windows also reserves ranges for Hyper-V and WSL: those fail to bind and are skipped).
+export async function sidePort(avoid: ReadonlySet<number>, random: () => number = Math.random): Promise<number> {
+  const [lo, hi] = [20_000, 32_000];
+  const eph = ephemeralRange();
+  for (let i = 0; i < 200; i++) {
+    const port = lo + Math.floor(random() * (hi - lo));
+    // Configured to cover all of it (rare): then any port of the range is better than none.
+    if (eph && i < 100 && port >= eph[0] && port <= eph[1]) continue;
+    if (avoid.has(port)) continue;
+    if (await binds(port)) return port;
+  }
+  throw new Error(`No free port for a copy started alongside was found between ${lo} and ${hi}.`);
+}
+
+// Linux's configured ephemeral range; elsewhere the defaults (both above 32000) hold.
+function ephemeralRange(): [number, number] | null {
+  if (process.platform !== 'linux') return null;
+  try {
+    const [a, b] = readFileSync('/proc/sys/net/ipv4/ip_local_port_range', 'utf8').trim().split(/\s+/).map(Number);
+    return a && b ? [a, b] : null;
+  } catch { return null; }
+}
+
+function binds(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
     const s = createServer();
-    s.on('error', reject);
-    s.listen(0, '127.0.0.1', () => {
-      const port = (s.address() as { port: number }).port;
-      s.close(() => resolve(port));
-    });
+    s.once('error', () => resolve(false));
+    s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)));
   });
 }
 
