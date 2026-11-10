@@ -146,7 +146,7 @@ const PATTERNS: RegExp[] = [
 ];
 
 // Nova's own protocol tags (tools.js, context.js) and the gate's data fence, opening or closing.
-export const PROTOCOL_NAMES = ['tool_call', 'tool_result', 'remember', 'forget', 'note', 'handoff', 'user', 'nova', 'skill', 'connector', 'file', 'memory_search', 'conversation', 'followup', 'outside', 'system'];
+export const PROTOCOL_NAMES = ['tool_call', 'tool_result', 'remember', 'forget', 'note', 'handoff', 'user', 'nova', 'skill', 'connector', 'file', 'memory', 'memory_search', 'conversation', 'followup', 'outside', 'system'];
 const PROTOCOL = new RegExp(String.raw`<\s*\/?\s*(?:${PROTOCOL_NAMES.join('|')})\b[^<>\n]{0,200}>?`, 'gi');
 
 function merge(spans: Span[]): Span[] {
