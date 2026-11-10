@@ -191,7 +191,7 @@ What the ingest gate's battery (`ingest-screen`) screens, and which seat may see
 
 | Class | When it is screened | Cloud Jev allowed |
 |---|---|---|
-| Web pages, mail, files, tool output | when they arrive, before a model acts on them | cloud mode; in local modes, only with the person's screening opt-in (owner decision 1) |
+| Web pages, mail, files, tool output | when they arrive, before a model acts on them | cloud mode; in local-first, only with the person's screening opt-in (owner decision 1); never in local-only (owner ruling D4) |
 | **Capture-derived text (OCR and transcripts)** | see below | **only in cloud mode, and only with a per-source opt-in that is off by default.** Never in local-first or local-only |
 
 **Capture-derived text: the owner's decision of 2026-10-31,** verbatim in `docs/builder-packet/INPUT-2026-10-31-CAPTURE-SCREENING-DECISION.md`. It has two jobs, and neither justifies streaming capture text to a cloud provider by default.
@@ -351,6 +351,7 @@ The input's use-case map is phased below as the record. **These are side PRs. Th
    - The toggle is off by default.
    - While it's on, screened content leaves the machine, and the setting says so in plain words: local-only isn't strictly local for screening while it is on.
    - This replaces the ingest gate plan's "never in the cloud" for this one case, by the owner's choice.
+   - **Superseded for local-only by owner ruling D4 (2026-11-10):** local-only is absolute. The toggle applies in local-first only; a toggle saved earlier stays saved but is suspended while local-only is on, so nothing goes to Jev and "no cloud model is used" is simply true. Receipts refuse a remote call under local-only with no opt-in exception.
 2. **Route and models: decided, the person chooses.** Providers and models for every seat are the person's choice.
    - Nova shows its recommendation, and a plain notice when the chosen provider or model isn't one it recommends.
    - Each model's eval scorecard (Amendment B Part 4) is shown before switching.

@@ -138,7 +138,7 @@ test('the person’s choices: recommendations, a notice for anything not recomme
   assert.match(n[1]!.words, /gateway\.example\.com isn’t TypeSafe’s own API \(api\.typesafe\.ai\)/);
   assert.match(n[2]!.words, /smaller than this device can run/);
   assert.equal(n[3]!.words, OPT_IN_WORDS.screening);
-  assert.match(OPT_IN_WORDS.screening, /Local-only isn’t strictly local for screening while it is on/);
+  assert.match(OPT_IN_WORDS.screening, /In local-only it is suspended: nothing goes to Jev, and no cloud model is used/);
   assert.match(OPT_IN_WORDS.box, /In local-only they never go to a cloud provider/);
   assert.match(notices({ ...DEFAULT_SETTINGS, jev: { base_url: 'https://api.typesafe.ai', model: 'jev-latest' } }, { hardware: null })[0]!.words, /alias that moves/);
   const v = memoryVerdicts([{ template_id: 'ingest-screen', version: 1, seat: 'jev', model: 'jev-1.14.0', status: 'pass', why: 'ok', run_at: null, ref: 'r' }]);

@@ -265,7 +265,8 @@ test('Models screen (app): live recompute, an over-budget warning, a sleeping de
       const models = page.locator('#models');
       await models.locator('.dm-routes').waitFor();
       assert.equal(await models.locator('.dm-route').count(), 6, 'each task class');
-      assert.match(await models.locator('.dm-route').first().innerText(), /General chat[\s\S]*qwen3:8b on /);
+      // Chat on the chat command goes where that program sends it, not to the reasoner (F-025).
+      assert.match(await models.locator('.dm-route').first().innerText(), /General chat[\s\S]*Chat (uses|goes to) /);
       assert.match(await models.locator('.dm-route').nth(1).innerText(), /Coding[\s\S]*goes where thinking and writing does/);
       assert.match(await models.innerText(), /Local only: every task stays on your devices/);
       assert.equal(await models.locator('.model-device').count(), 2, 'every device');

@@ -4,10 +4,13 @@
 // applies the template's policy, and logs one record. Seats are never reached any other way.
 //
 // Routing (ADR §2 with the owner's decisions 1, 3 and 4):
-//   text  cloud:        jev → tev1 → sorting model (until retired) → stub
-//         local modes:  tev1 → jev (only with the "screening" opt-in) → sorting model → stub
+//   text  cloud:          jev → tev1 → sorting model (until retired) → stub
+//         local-preferred: tev1 → jev (only with the "screening" opt-in) → sorting model → stub
+//         local-only:     tev1 → sorting model → stub; never a cloud seat, whatever the opt-ins
 //   image cloud / local-preferred: jev (only with the "box" opt-in) → stub
 //         local-only:   a local seat that reads images (none today) → stub; never a cloud seat
+// Local-only is absolute (owner ruling D4, 2026-11-10): an opt-in saved earlier stays saved but is
+// suspended while local-only is on, so "no cloud model is used" is simply true.
 // A decision seat decides only with a passing eval verdict for the exact template version and
 // model; otherwise it answers as a shadow (evidence in the record, not used). The sorting model
 // decides as it does today ("legacy") until any decision seat passes the template's eval.
@@ -36,7 +39,7 @@ export interface ServiceOptions {
   privacy: () => PrivacyMode;
   log: DecisionLog;
   // Called BEFORE a state goes to a cloud seat, once per decision (CONTRACTS §2). It may refuse by
-  // throwing (Receipts refuses a remote call under local-only unless the opt-in is named); then
+  // throwing (Receipts refuses every remote call under local-only, opt-in or not); then
   // nothing is sent and the refusal is recorded.
   receipt?: (r: RemoteReceipt) => void;
   // Asks of a seat that hasn't passed a template's eval (evidence only), per seat per day.
@@ -124,6 +127,8 @@ export class DecisionService {
       return { ok: true, opt_in: 'box', why: 'The Box opt-in is on.' };
     }
     if (mode === 'cloud-allowed') return { ok: true, opt_in: null, why: 'Cloud mode.' };
+    // D4: local-only means no cloud model, so a saved opt-in waits until local-only is off.
+    if (mode === 'local-only') return { ok: false, opt_in: null, why: s.opt_in[t.feature as 'screening'] ? `The ${t.feature} opt-in is suspended while local-only is on: no cloud model is used.` : `local-only keeps ${t.feature} on this device; no cloud model is used.` };
     if (s.opt_in[t.feature as 'screening']) return { ok: true, opt_in: t.feature as OptInFeature, why: `The ${t.feature} opt-in is on in ${mode}.` };
     return { ok: false, opt_in: null, why: `${mode} keeps ${t.feature} on this device unless its opt-in is on.` };
   }

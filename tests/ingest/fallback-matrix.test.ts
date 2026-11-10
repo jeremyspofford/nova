@@ -2,7 +2,8 @@
 // regression corpus (tests/ingest/corpus) runs through the new path, the real core with the
 // Decision Service, in every privacy mode, with each seat state:
 //   - unavailable: Tev1 is set up but its Ollama doesn't answer, and Jev is set up with a key but
-//     its route fails (in local modes the screening opt-in is ON, so the cloud is really tried);
+//     its route fails (in local modes the screening opt-in is ON, so in local-first the cloud is really
+//     tried; in local-only the opt-in is suspended, owner ruling D4, and nothing reaches it);
 //   - untrusted: Tev1 and Jev both answer (stand-ins on loopback that see nothing wrong, 0.02),
 //     with no passing eval verdict (opt-in ON in local modes again);
 //   - trusted stand-in: Tev1 and Jev both have a passing verdict (in memory, for this test only),
@@ -88,13 +89,19 @@ for (const mode of MODES) {
           assert.notEqual(g.verdict, 'pass', `${it.id}: nothing passes on an untrusted or missing answer`);
           assert.equal(g.model, null, `${it.id}: no model's answer was used`);
         }
-        // The seats were really tried: the cloud only as the mode and the opt-in allow.
+        // The seats were really tried: the cloud only as the mode and the opt-in allow. In
+        // local-only the opt-in is suspended (owner ruling D4), so Jev is never sent anything.
         if (state === 'untrusted') assert.ok(r.tev1!.requests.length > 0, 'Tev1 answered, as evidence');
-        assert.ok(r.jev!.requests.length > 0, 'Jev was tried (cloud mode, or the screening opt-in in a local mode)');
         const records = r.core.db.all<{ trust: string; egress: string; opt_in: string | null; privacy_mode: string }>("SELECT trust, egress, opt_in, privacy_mode FROM decision_record WHERE template_id = 'ingest-screen'");
         assert.ok(records.length > 0 && records.every((x) => x.trust === 'none' && x.privacy_mode === mode));
         const remote = r.core.receipts.list({ egress: 'remote', limit: 1000 });
-        assert.ok(remote.length > 0 && remote.every((x) => x.provider === 'jev' && x.opt_in === (mode === 'cloud-allowed' ? null : 'screening')), JSON.stringify(remote.slice(0, 2)));
+        if (mode === 'local-only') {
+          assert.equal(r.jev!.requests.length, 0, 'local-only: nothing went to the cloud seat, opt-in or not');
+          assert.deepEqual(remote, []);
+        } else {
+          assert.ok(r.jev!.requests.length > 0, 'Jev was tried (cloud mode, or the screening opt-in in local-first)');
+          assert.ok(remote.length > 0 && remote.every((x) => x.provider === 'jev' && x.opt_in === (mode === 'cloud-allowed' ? null : 'screening')), JSON.stringify(remote.slice(0, 2)));
+        }
       } finally { await r.close(); }
     });
   }
@@ -125,18 +132,37 @@ for (const mode of MODES) {
   });
 }
 
-test('local-only with the screening opt-in on: Jev screens, and the receipt and the record name the opt-in', async () => {
-  const r = await rig('local-only', 'trusted', 0.02, { optIn: true });
+test('local-preferred with the screening opt-in on: Jev screens, and the receipt and the record name the opt-in', async () => {
+  const r = await rig('local-preferred', 'trusted', 0.02, { optIn: true });
   try {
-    // Tev1 trusted and local comes first in local-only; with Tev1 gone, the opted-in Jev decides.
+    // Tev1 trusted and local comes first in local-first; with Tev1 gone, the opted-in Jev decides.
     await r.tev1!.close();
     r.core.profile.set('models', 'decision', { jev: { base_url: r.jev!.url, model: 'jev-1.14.0' }, tev1: null, opt_in: { screening: true, box: true } }, 'settings');
     const s = await r.core.ingest.screen({ text: 'Mix flour and water. Bake for an hour.', source: { kind: 'web', origin: 'www.example.org' } });
     assert.equal(s.verdict, 'pass');
     assert.equal(s.model, 'jev:jev-1.14.0');
     const remote = r.core.receipts.list({ egress: 'remote' });
-    assert.deepEqual(remote.map((x) => [x.provider, x.privacy_mode, x.opt_in]), [['jev', 'local-only', 'screening']]);
+    assert.deepEqual(remote.map((x) => [x.provider, x.privacy_mode, x.opt_in]), [['jev', 'local-preferred', 'screening']]);
     const rec = r.core.db.get<{ egress: string; opt_in: string; trust: string }>("SELECT egress, opt_in, trust FROM decision_record WHERE template_id = 'ingest-screen'")!;
     assert.deepEqual({ ...rec }, { egress: 'remote:typesafe', opt_in: 'screening', trust: 'verdict' });
+  } finally { await r.close(); }
+});
+
+// Owner ruling D4 (2026-11-10): local-only is absolute. With Jev set up, trusted, the key saved and
+// the screening opt-in on, local-only still sends nothing to it: the opt-in is suspended.
+test('local-only with the screening opt-in on: zero requests reach Jev, and no remote receipt', async () => {
+  const r = await rig('local-only', 'trusted', 0.02, { optIn: true });
+  try {
+    await r.tev1!.close();
+    r.core.profile.set('models', 'decision', { jev: { base_url: r.jev!.url, model: 'jev-1.14.0' }, tev1: null, opt_in: { screening: true, box: true } }, 'settings');
+    const got = await screenAll(r.core);
+    assert.equal(got.size, ALL.length);
+    await r.core.ingest.screen({ text: 'Mix flour and water. Bake for an hour.', source: { kind: 'web', origin: 'www.example.org' } });
+    assert.equal(r.jev!.requests.length, 0, 'nothing went to the cloud seat');
+    assert.deepEqual(r.core.receipts.list({ egress: 'remote' }), []);
+    const recs = r.core.db.all<{ egress: string; opt_in: string | null }>("SELECT egress, opt_in FROM decision_record WHERE template_id = 'ingest-screen'");
+    assert.ok(recs.length > 0);
+    for (const rec of recs) { assert.doesNotMatch(rec.egress, /^remote/); assert.equal(rec.opt_in, null); }
+    assert.equal(r.core.profile.privacyDefault(), 'local-only');
   } finally { await r.close(); }
 });

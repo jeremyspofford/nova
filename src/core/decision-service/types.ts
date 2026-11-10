@@ -71,7 +71,7 @@ export interface Policy {
 export type Feature = 'screening' | 'box' | 'capture' | 'private';
 // The features an opt-in can name ('private' never has one).
 export type OptInFeature = Exclude<Feature, 'private'>;
-// The person's per-feature switches for cloud Jev in local modes (settings.ts). Capture has none:
+// The person's per-feature switches for cloud Jev in local-first (settings.ts; suspended in local-only). Capture has none:
 // its cloud opt-in is per capture source (not built yet).
 export type OptIn = 'screening' | 'box';
 // What a deterministic pre-pass found (kinds and positions, never the matched text).

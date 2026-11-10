@@ -750,7 +750,7 @@ export function bindBackups(root, changed) {
 
 const PRIVACY = [
   ['local-only', 'Local-only', 'Model calls stay on your own devices.'],
-  ['local-preferred', 'Local first', 'Local first; cloud help only when local isn’t enough, and recorded.'],
+  ['local-preferred', 'Local first', 'Nova’s own model work runs on your devices first; cloud help only when local isn’t enough, and recorded. Chat goes where its chat model sends it, below.'],
   ['cloud-allowed', 'Cloud allowed', 'Nova may use cloud services within your policy.'],
 ];
 const DIRECTNESS = [['gentle', 'Gently'], ['balanced', 'Plainly'], ['blunt', 'Bluntly']];
@@ -770,7 +770,18 @@ export function renderPrivacy() {
   return `<section class="memory-section" id="privacy" aria-labelledby="set-privacy"><h2 class="memory-heading" id="set-privacy">Privacy</h2>
 <p class="memory-lede">The default for every task. A task can be stricter, never looser.</p>
 <fieldset class="set-field"><legend class="sr-only">Privacy mode</legend><div class="choices">${PRIVACY.map(([v, l]) => `<label class="choice"><input type="radio" name="privacy" value="${v}"${privacy() === v ? ' checked' : ''}><span class="choice-name">${l}</span></label>`).join('')}</div></fieldset>
-<p class="settings-note">${esc(PRIVACY.find(([v]) => v === privacy())?.[2] ?? '')}</p></section>`;
+<p class="settings-note">${esc(PRIVACY.find(([v]) => v === privacy())?.[2] ?? '')}</p>${chatPrivacyNote()}</section>`;
+}
+
+// Where chat goes, and what a chat turn carries, said where the mode is chosen and before the first
+// send (F-025, F-027, A-006): the hub builds the words from the chat model actually chosen. Under
+// local-only, what choosing the cloud would mean for chat is said before the person chooses it.
+function chatPrivacyNote() {
+  const s = store.providers?.chat?.sends;
+  if (!s?.modes) return '';
+  const now = s.modes[privacy()] ?? '';
+  const ifCloud = privacy() === 'local-only' && s.modes['local-preferred'] !== now ? ` With Local first or Cloud allowed: ${s.modes['local-preferred']}` : '';
+  return `<p class="settings-note" data-chat-privacy>${esc(`${now}${ifCloud}`)}</p>`;
 }
 
 export async function saveProfile(section, key, value) {
@@ -1317,9 +1328,11 @@ export function renderProviders() {
     // Before the person switches: the recommended model's scorecard, or that it has none
     // (Amendment B Part 4).
     const card = better && what === 'chat' ? store.chatCard : null;
+    // A cloud chat program's line says what each turn carries (F-027).
+    const carries = what === 'chat' && data.chat.sends?.egress === 'remote' ? ` ${data.chat.sends.turn}` : '';
     return settingsRow({
       title,
-      note: better ? `Nova recommends ${name(rec.id)}. ${rec.why}${card ? ` ${card.words}` : ''}` : rec.why,
+      note: `${better ? `Nova recommends ${name(rec.id)}. ${rec.why}${card ? ` ${card.words}` : ''}` : rec.why}${carries}`,
       control: better ? `<button type="button" class="btn small${standout ? ' primary' : ''}" data-action="provider-choose" data-for="${what}" data-provider="${esc(rec.id)}">Use ${esc(name(rec.id))}</button>` : '',
     });
   };

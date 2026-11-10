@@ -135,7 +135,9 @@ for (const mode of MODES) {
           // and the untrusted seats did answer (as evidence) or were tried and failed.
           assert.equal(screen.max !== null, state === 'trusted', `${label}: max ${screen.max}`);
           if (state === 'untrusted') assert.ok(r.s.tev1.requests.length > 0, `${label}: Tev1 answered`);
-          if (state !== 'trusted') assert.ok(r.s.jev.requests.length > 0, `${label}: Jev was tried`);
+          // Local-only is absolute (owner ruling D4): the opt-in is suspended, so Jev gets nothing.
+          if (state !== 'trusted' && mode !== 'local-only') assert.ok(r.s.jev.requests.length > 0, `${label}: Jev was tried`);
+          if (mode === 'local-only') assert.equal(r.s.jev.requests.length, 0, `${label}: nothing went to the cloud, opt-in or not`);
           // What the chat model was shown never carried the page's instructions.
           for (const c of r.m.calls) assert.doesNotMatch(c.prompt, /ignore your previous instructions|AI agents reading this page/i, label);
           // The cloud saw the page only where the person allowed it: cloud mode, or the opt-in.

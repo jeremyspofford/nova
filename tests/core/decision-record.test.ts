@@ -1,5 +1,5 @@
 // Track 1's parts of DS1 (docs/plans/ds1.md NOTES 3 and 5; docs/plans/gate-decision-service.md):
-// receipts accept the person's screening opt-in under local-only (never Box), and the decision
+// receipts refuse every remote call under local-only, opt-in or not (owner ruling D4), and the decision
 // record has its table, written by the DbLog sink with no content in it. The receipt's opt_in is
 // carried to a standby like the rest of the receipt.
 import { test } from 'node:test';
@@ -19,19 +19,18 @@ function setup() {
 
 const jev = (over: Partial<ReceiptInput> = {}): ReceiptInput => ({ provider: 'jev', model: 'jev-1.14.0', purpose: 'decision: ingest-screen@1', privacy_mode: 'local-only', egress: 'remote:typesafe', context_items: [], ...over });
 
-test('local-only refuses a remote receipt unless it names the screening opt-in, for Jev', () => {
+test('local-only refuses every remote receipt, even one naming the screening opt-in (D4)', () => {
   const { receipts, log } = setup();
   assert.throws(() => receipts.record(jev()), /Local-only mode doesn't allow/);
-  const r = receipts.record(jev({ opt_in: 'screening' }));
-  assert.equal(r.opt_in, 'screening');
-  assert.equal(receipts.get(r.id).opt_in, 'screening', 'stored with the receipt');
-  assert.deepEqual(receipts.list({ egress: 'remote' }).map((x) => [x.provider, x.privacy_mode, x.opt_in]), [['jev', 'local-only', 'screening']]);
-  // Box is never allowed under local-only, opt-in or not; nor another provider naming the opt-in.
+  assert.throws(() => receipts.record(jev({ opt_in: 'screening' })), /Local-only mode doesn't allow/);
   assert.throws(() => receipts.record(jev({ opt_in: 'box' })), /Local-only mode doesn't allow/);
   assert.throws(() => receipts.record(jev({ provider: 'some-cloud', opt_in: 'screening' })), /Local-only mode doesn't allow/);
   assert.throws(() => receipts.record(jev({ opt_in: 'anything' as never })), /opt_in must be one of screening, box, capture/);
-  assert.equal(log.problems({ open: true }).length, 3, 'each refusal is a problem');
+  assert.equal(log.problems({ open: true }).length, 4, 'each refusal is a problem');
+  assert.deepEqual(receipts.list({ egress: 'remote' }), []);
   // Elsewhere an opt-in is recorded as given, and a receipt without one has none.
+  const r = receipts.record(jev({ privacy_mode: 'local-preferred', opt_in: 'screening' }));
+  assert.equal(receipts.get(r.id).opt_in, 'screening', 'stored with the receipt');
   assert.equal(receipts.record(jev({ privacy_mode: 'local-preferred', opt_in: 'box' })).opt_in, 'box');
   assert.equal(receipts.record(jev({ privacy_mode: 'cloud-allowed' })).opt_in, null);
 });
@@ -44,7 +43,7 @@ test('migration 0019: the decision_record table, receipt.opt_in, and the receipt
   // Not replicated: no sync triggers on decision_record. Receipts are, with the new column.
   assert.equal(db.all("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'decision_record'").length, 0);
   db.run('UPDATE sync_state SET logging = 1 WHERE id = 1');
-  const r = receipts.record(jev({ opt_in: 'screening' }));
+  const r = receipts.record(jev({ privacy_mode: 'local-preferred', opt_in: 'screening' }));
   const row = db.get<{ row: string }>("SELECT row FROM sync_log WHERE tbl = 'receipt' AND pk = ? ORDER BY seq DESC", r.id)!;
   assert.equal((JSON.parse(row.row) as { opt_in: string }).opt_in, 'screening');
 });
