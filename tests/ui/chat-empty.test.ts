@@ -176,3 +176,51 @@ test('an empty chat: one orb, a greeting, the composer centred, suggestions that
     await stop(nova);
   }
 });
+
+// The mark at its sizes (owner, 2026-11-10): "do not ship the 691 KB SVG everywhere". A view with
+// only small icons (a thread: the rail on a desktop, the top bar on a phone) loads the 128 px source
+// and never the large one; an empty chat's hero loads the large source, the full master ("hero and
+// other large renders keep the full master"). The service worker precaches only the small one.
+test('the mark’s sources: small icons draw from mark-128 and never load the master; a hero loads it', async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') return t.skip(b);
+  const m = blank('nova-ui-mark-sizes-');
+  const nova = await m.start();
+  try {
+    await finishSetup(m);
+    writeFileSync(join(m.home, 'sessions', `${CHAT}.jsonl`), `${LOG.map((e) => JSON.stringify(e)).join('\n')}\n`);
+    for (const [size, vp, where] of [['1440x900', WIDE, '.rail-home'], ['390x844', PHONE, '#topbar-orb']] as const) {
+      const d = await device(b, { ...vp, serviceWorkers: 'block' });
+      const marks: string[] = [];
+      d.page.on('request', (r) => { const p = new URL(r.url()).pathname; if (p.startsWith('/icons/mark')) marks.push(p); });
+      await d.page.goto(`${m.base}/c/${CHAT}`);
+      await ready(d.page);
+      const small = d.page.locator(`${where} .status-icon[data-presence]`);
+      await d.page.waitForFunction((sel) => /^(webgl|canvas2d)$/.test(document.querySelector(`${sel} .status-icon[data-presence]`)?.getAttribute('data-renderer') ?? ''), where);
+      assert.ok(await small.isVisible(), `${size}: the thread shows its small icon`);
+      assert.deepEqual([...new Set(marks)], ['/icons/mark-128.webp'], `${size}: a thread loads the small source only`);
+      // It draws the artwork: lit at its centre, clear in its corners.
+      const lit = await small.locator('canvas').evaluate((c: HTMLCanvasElement) => {
+        const px = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data, at = (x: number, y: number) => px[(y * c.width + x) * 4 + 3]!;
+        return { centre: at(c.width >> 1, Math.round(c.height * 0.3)), corner: at(0, 0) };
+      });
+      assert.ok(lit.centre > 200 && lit.corner === 0, `${size}: the small icon is the artwork on transparency (${JSON.stringify(lit)})`);
+      // An empty chat: its hero asks for the large source, and draws from it once it is there.
+      await d.page.goto(`${m.base}/new`);
+      await ready(d.page);
+      await d.page.locator('#thread .chat-hero .status-icon[data-presence]').waitFor();
+      const large = await d.page.evaluate(() => document.querySelector<HTMLImageElement>('img[data-nova-mark][data-src]')!.dataset.src!);
+      await d.page.waitForFunction(() => document.querySelector<HTMLImageElement>('img[data-nova-mark][data-src]')!.naturalWidth > 128);
+      assert.equal(large, '/icons/mark.svg', 'the hero’s source is the full master');
+      assert.ok(marks.includes(large), `${size}: the hero loads the large source (${large})`);
+      assert.deepEqual(d.errors, [], `${size}: no errors in the page`);
+      await d.ctx.close();
+    }
+    const sw = await (await fetch(`${m.base}/sw.js`)).text();
+    assert.ok(sw.includes("'/icons/mark-128.webp'"), 'the worker precaches the small source');
+    assert.ok(!/\/icons\/mark(-512\.webp|\.svg)/.test(sw), 'and not the large one or the master');
+  } finally {
+    await b.close();
+    await stop(nova);
+  }
+});

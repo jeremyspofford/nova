@@ -10,7 +10,13 @@ It writes:
   ui/icons/mark.svg              the in-app mark: the master, pixel for pixel (lossless WebP, transparent
                                  pixels' colour dropped), in an SVG with a transparent background.
                                  1024 px intrinsic size, a power of two, so status-icon.js can mipmap it.
-  ui/icon.svg                    the favicon: 256 px and, at 24 px and under, a 64 px downscale
+                                 For large renders only: the 112 px hero, the styleguide's 96 and 180 px.
+  ui/icons/mark-128.webp         the in-app mark for small renders (rail 32, top bar 24, rows 16): a
+                                 lossless 128 px downscale, at least 4x every small size (owner, 2026-11-10:
+                                 small uses get a small source, not the master)
+  ui/icons/mark-<HERO>.webp      only if HERO is a size: the hero's source, a lossless downscale
+  ui/index.html                  its large <img data-nova-mark data-src>: the hero's source (HERO)
+  ui/icon.svg                   the favicon: 256 px and, at 24 px and under, a 64 px downscale
   ui/icons/icon-32.png           32 px, transparent
   ui/icons/icon-192.png          192 px, transparent (web, purpose any)
   ui/icons/icon-512.png          512 px, transparent (Android, purpose any)
@@ -37,6 +43,12 @@ MASTER = ROOT / 'ui/icons/mark-master-1024.png'
 # The dark tile colour of the previous mark (sampled from its field, ui/icons/mark-1024.webp): the
 # background wherever a platform needs one.
 TILE = (10, 10, 15)
+# The hero's source, the one switch: 'master' draws the 112 px hero from mark.svg, as the owner
+# ruled on 2026-11-10 ("hero and other large renders keep the full master"); a size such as 512
+# draws it from a lossless downscale of that size instead, and the app then never loads mark.svg.
+HERO = 'master'
+# The in-app mark's downscales, beside the master in mark.svg. Powers of two, so they mipmap.
+MARK_SIZES = (128,) + (() if HERO == 'master' else (HERO,))
 
 
 def load():
@@ -102,6 +114,10 @@ def main():
         f'<image width="1024" height="1024" href="{data_uri("image/webp", lossless)}"/></svg>\n'
     ).encode())
 
+    # The in-app mark's size-switched sources (status-icon.js picks one by rendered size).
+    for size in MARK_SIZES:
+        write(f'ui/icons/mark-{size}.webp', webp_lossless(scaled(img, size)))
+
     for size in (32, 192, 512):
         write(f'ui/icons/icon-{size}.png', png(scaled(img, size)))
 
@@ -122,6 +138,15 @@ def main():
         f'<image class="s" width="512" height="512" href="{data_uri("image/png", small)}"/>\n'
         '</svg>\n'
     ).encode())
+
+    # The app's large source, which shell.js loads only when a hero is shown.
+    hero_src = '/icons/mark.svg' if HERO == 'master' else f'/icons/mark-{HERO}.webp'
+    index_path = ROOT / 'ui/index.html'
+    index = index_path.read_text(encoding='utf-8')
+    large = re.compile(r'<img data-nova-mark data-src="[^"]*"')
+    if not large.search(index):
+        raise SystemExit('ui/index.html has no <img data-nova-mark data-src="...">')
+    index_path.write_text(large.sub(f'<img data-nova-mark data-src="{hero_src}"', index, count=1), encoding='utf-8')
 
     pair_path = ROOT / 'ui/pair.html'
     pair = pair_path.read_text(encoding='utf-8')

@@ -146,7 +146,7 @@ function composer(id) {
 
 function card(style, on) {
   const [name, note, thumb] = style === 'mark'
-    ? ['Mark', 'Today’s. Nova’s mark, one artwork: each state changes its light and motion.', '<img class="ss-img" src="/icons/mark.svg" width="48" height="48" alt="">']
+    ? ['Mark', 'Today’s. Nova’s mark, one artwork: each state changes its light and motion.', '<img class="ss-img" src="/icons/mark-128.webp" width="48" height="48" alt="">']
     : ['Sheet', 'Your state sheet: a tile for each state, crossfading in 800 ms. Listening and speaking have no tile yet.', `<span class="ss-quad">${['idle', 'working', 'thinking', 'paused'].map((t) => tileImg(t, 24)).join('')}</span>`];
   return `<button type="button" class="ds-card ss-card" data-ss-pick="${style}" aria-pressed="${on}"><span class="ss-thumb" aria-hidden="true">${thumb}</span><span class="ds-text"><span class="ds-name">${name}</span><span class="ds-note">${note}</span>${on ? '<span class="ds-tags"><span class="pill">This device</span></span>' : ''}</span></button>`;
 }

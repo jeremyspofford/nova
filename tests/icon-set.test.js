@@ -43,22 +43,39 @@ test('the in-app mark is the master in a transparent SVG, embedded losslessly', 
   const hrefs = [...svg.matchAll(/href="([^"]*)"/g)].map((m) => m[1]);
   assert.equal(hrefs.length, 1);
   assert.match(hrefs[0], /^data:image\/webp;base64,/);
-  const webp = Buffer.from(hrefs[0].split(',')[1], 'base64');
-  assert.equal(webp.subarray(0, 4).toString('latin1'), 'RIFF');
-  assert.equal(webp.subarray(8, 12).toString('latin1'), 'WEBP');
-  // VP8L is WebP's lossless bitstream; its header holds width − 1 and height − 1 in 14 bits each.
-  assert.equal(webp.subarray(12, 16).toString('latin1'), 'VP8L', 'lossless WebP');
-  const bits = webp.readUInt32LE(21);
-  assert.deepEqual([(bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1], [1024, 1024]);
-  assert.equal((bits >> 28) & 1, 1, 'the image carries alpha');
+  losslessWebp(Buffer.from(hrefs[0].split(',')[1], 'base64'), 1024, 'mark.svg');
 });
 
-test('every page that draws the mark loads mark.svg (and /pair carries it inline)', () => {
-  for (const page of ['ui/index.html', 'ui/styleguide.html']) {
-    assert.match(read(page).toString('utf8'), /<img data-nova-mark src="\/icons\/mark\.svg"/, page);
-  }
+// A lossless WebP with alpha, at `px` square. VP8L is WebP's lossless bitstream; its header holds
+// width − 1 and height − 1 in 14 bits each, then the alpha flag.
+function losslessWebp(webp, px, name) {
+  assert.equal(webp.subarray(0, 4).toString('latin1'), 'RIFF', name);
+  assert.equal(webp.subarray(8, 12).toString('latin1'), 'WEBP', name);
+  assert.equal(webp.subarray(12, 16).toString('latin1'), 'VP8L', `${name}: lossless WebP`);
+  const bits = webp.readUInt32LE(21);
+  assert.deepEqual([(bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1], [px, px], `${name}: ${px} px`);
+  assert.equal((bits >> 28) & 1, 1, `${name}: carries alpha`);
+}
+
+test('the mark’s small source is a lossless downscale, small enough for every small use', () => {
+  // Owner, 2026-11-10: small uses get a small source, never the master.
+  losslessWebp(read('ui/icons/mark-128.webp'), 128, 'mark-128.webp');
+  assert.ok(read('ui/icons/mark-128.webp').length < 32 * 1024, 'the small source stays under 32 KB');
+});
+
+test('the app loads the small source now and the master only for a hero; the styleguide has both', () => {
+  // The hero keeps the full master (owner, 2026-11-10); scripts/app-icon.py HERO is the switch.
+  const index = read('ui/index.html').toString('utf8');
+  assert.deepEqual([...index.matchAll(/<img data-nova-mark ([^>]*)>/g)].map((m) => m[1]), [
+    'src="/icons/mark-128.webp" alt="" hidden',
+    'data-src="/icons/mark.svg" alt="" hidden',
+  ]);
+  const styleguide = read('ui/styleguide.html').toString('utf8');
+  assert.deepEqual([...styleguide.matchAll(/<img data-nova-mark src="([^"]+)"/g)].map((m) => m[1]), ['/icons/mark-128.webp', '/icons/mark.svg']);
   assert.match(read('ui/pair.html').toString('utf8'), /<img data-nova-mark src="data:image\/webp;base64,/);
-  assert.match(read('ui/sw.js').toString('utf8'), /'\/icons\/mark\.svg'/, 'the service worker keeps the mark offline');
+  const sw = read('ui/sw.js').toString('utf8');
+  assert.match(sw, /'\/icons\/mark-128\.webp'/, 'the service worker keeps the small source offline');
+  assert.doesNotMatch(sw, /\/icons\/mark(-512\.webp|\.svg)/, 'and never precaches the large ones');
   for (const gone of ['ui/icons/mark-1024.webp', 'ui/icons/mark-vortex-512.webp', 'ui/assets/nova-mark.webp']) {
     assert.ok(!existsSync(join(ROOT, gone)), `${gone} (the old tiled mark) is gone`);
   }
