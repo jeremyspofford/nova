@@ -56,6 +56,9 @@ export interface CarryOptions {
   // The staged home's vault, opened the way this Nova opens its own.
   vaultAt: (home: string) => Vault;
   vault: Vault;
+  // Put the vault as it is now in place of the staged one (F-014). False for an emergency promotion
+  // from a backup, whose vault rule is its own.
+  keepVault?: boolean;
 }
 
 export function carryOver(o: CarryOptions): Carried {
@@ -194,6 +197,7 @@ export function carryOver(o: CarryOptions): Carried {
   // checkpoint from before held the old key and the deleted secret (checkpoints no longer take the
   // vault at all, but older ones did), so a restore never puts the vault back: secrets, Nova's own
   // keys and the key itself are as they are now. A secret added since the checkpoint stays.
+  if (o.keepVault === false) return out;
   const vaultNow = join(o.home, 'vault');
   const vaultThen = join(o.staged, 'vault');
   rmSync(vaultThen, { recursive: true, force: true });

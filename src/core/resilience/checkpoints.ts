@@ -435,7 +435,10 @@ export const RESTORE_DIR = '.restore';
 const MARKER = 'marker.json';
 const DROPPED = /^\.restore-dropped-/;
 // What a restore never swaps: they stay as they are now (the checkpoints themselves among them).
-const STAYS = new Set(Object.keys(SKIP_TOP));
+// The vault is not among them although checkpoints never hold it: a checkpoint restore stages now's
+// vault itself (restore.ts carryOver, F-014), and an emergency promotion from a backup stages its own
+// (applyCold: connectors sign in again), so each swaps in the vault its rule decided.
+const STAYS = new Set(Object.keys(SKIP_TOP).filter((n) => n !== 'vault'));
 
 export interface StagedFile { path: string; sha256: string }
 
@@ -713,7 +716,9 @@ function carryNow(home: string, staged: string, o: FinishOptions, node: string |
     // An emergency promotion: this node becomes the hub, so its own record is the one kept from now.
     let hubId = node ?? live.get<{ hub_id: string | null }>('SELECT hub_id FROM mesh_state WHERE id = 1')?.hub_id ?? null;
     if (!hubId) { try { hubId = (JSON.parse(readFileSync(join(home, 'mesh', 'identity.json'), 'utf8')) as { id: string }).id; } catch { hubId = ''; } }
-    return carryOver({ home, staged, live, hubId, now: o.now?.() ?? new Date(), vault: vaultAt(home), vaultAt });
+    // An emergency promotion from a backup (node set) has its own vault rule (applyCold: the backup
+    // never held the key, so connectors sign in again); a checkpoint restore keeps now’s vault.
+    return carryOver({ home, staged, live, hubId, now: o.now?.() ?? new Date(), vault: vaultAt(home), vaultAt, keepVault: node === null });
   } finally {
     live.close();
   }
