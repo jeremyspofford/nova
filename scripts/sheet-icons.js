@@ -3,7 +3,7 @@
 // (docs/builder-packet/ui-references/nova-agent-state-system-sheet-2026-11-08.jpg, 1536×1024) has
 // eight tiles, and on the review page the owner kept them "as another style theme for users to
 // choose from". They are the owner's artwork, not code (nova-mark-artwork-not-code-amendment-
-// 2026-11-08.md): this script only crops them, as scripts/app-icon.js crops the mark's tile. It
+// 2026-11-08.md): this script only crops them (the mark's own set is scripts/app-icon.py). It
 // draws nothing, redraws nothing and scales nothing: each tile is copied pixel for pixel, its rounded
 // frame and all, onto a transparent square, its corners cut on the tile's own rounded edge. The
 // sheet's tiles are 232 px tall and 237 to 244 px wide, so 246 px (the widest tile and a pixel of

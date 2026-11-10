@@ -127,16 +127,26 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         if (expected) assert.equal(renderer, expected, 'the shader renders where WebGL is');
 
         // The 180 px hero is drawn whole: a fresh offscreen canvas is 300 × 150, and sizing it by its
-        // width alone once left the bottom of anything taller than 150 px blank (#393).
+        // width alone once left the bottom of anything taller than 150 px blank (#393). The artwork
+        // has a shape of its own (transparent round it, 2026-11-10), so the hero's bottom rows are
+        // measured against the same rows of the artwork itself, drawn plainly at the same size.
         const rows = await p.evaluate(() => {
           const c = document.querySelector<HTMLCanvasElement>('[data-si-hero] canvas')!;
-          const d = c.getContext('2d')!.getImageData(0, Math.round(c.height * 0.8), c.width, Math.round(c.height * 0.15)).data;
-          let n = 0;
-          for (let i = 3; i < d.length; i += 4) if (d[i]! > 64) n++;
-          return { share: n / (d.length / 4), css: c.getBoundingClientRect().width };
+          const lit = (ctx: CanvasRenderingContext2D) => {
+            const d = ctx.getImageData(0, Math.round(c.height * 0.8), c.width, Math.round(c.height * 0.15)).data;
+            let n = 0;
+            for (let i = 3; i < d.length; i += 4) if (d[i]! > 64) n++;
+            return n / (d.length / 4);
+          };
+          const ref = document.createElement('canvas');
+          ref.width = c.width; ref.height = c.height;
+          const g = ref.getContext('2d')!;
+          g.drawImage(document.querySelector<HTMLImageElement>('img[data-nova-mark]')!, 0, 0, c.width, c.height);
+          return { share: lit(c.getContext('2d')!), art: lit(g), css: c.getBoundingClientRect().width };
         });
         assert.equal(rows.css, 180, 'the hero is 180 px');
-        assert.ok(rows.share > 0.5, `the hero's bottom rows are drawn (${(rows.share * 100).toFixed(0)}% lit)`);
+        assert.ok(rows.art > 0.3, `the artwork reaches the bottom rows (${(rows.art * 100).toFixed(0)}% lit)`);
+        assert.ok(Math.abs(rows.share - rows.art) < 0.08, `the hero's bottom rows are drawn as the artwork's are (${(rows.share * 100).toFixed(0)}% lit, the artwork ${(rows.art * 100).toFixed(0)}%)`);
         // It is the artwork: the page's own <img data-nova-mark>, loaded once.
         assert.equal(await p.evaluate(() => document.querySelectorAll('img[data-nova-mark]').length), 1);
 

@@ -27,8 +27,14 @@ test('a browser on the numbered nova-shell-v70 worker upgrades to the hash-named
   m.base = `http://127.0.0.1:${(nova.server.address() as AddressInfo).port}`;
   const normal = nova.server.listeners('request')[0] as RequestListener;
   let serveLegacy = true;
+  // Files the old worker's shell names that Nova no longer ships (the tiled mark, mark-1024.webp,
+  // replaced by mark.svg on 2026-11-10). A browser on v70 cached them when it installed; here the
+  // old worker installs now, so it gets a stand-in for each, or its addAll would fail.
+  const current = shellPaths(readFileSync(join(ROOT, 'ui/sw.js'), 'utf8')) as string[];
+  const gone = (shellPaths(legacy) as string[]).filter((path) => !current.includes(path));
   const serve: RequestListener = (req, res) => {
     if (serveLegacy && req.url === '/sw.js') { res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' }); res.end(legacy); }
+    else if (serveLegacy && gone.includes(req.url ?? '')) { res.writeHead(200, { 'content-type': 'application/octet-stream' }); res.end(); }
     else normal.call(nova.server, req, res);
   };
   nova.server.removeListener('request', normal); nova.server.on('request', serve);
