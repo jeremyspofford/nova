@@ -30,7 +30,12 @@ import { shellHash, withShellHash } from './sw-version.js';
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
+  '.md': 'text/plain; charset=utf-8',
 };
+
+// Documents Nova serves as they are written, by a fixed address (never a path from the request):
+// Health links to how to restore a backup.
+export const DOCS = { '/docs/restore': 'docs/restore.md' };
 
 // The paths the app page (ui/index.html) answers, besides a conversation's /c/<id>.
 export const APP_PAGES = ['/', '/chat', '/new', '/tasks', '/memory', '/automations', '/skills', '/schedules', '/activity', '/health', '/settings', '/capture', '/topology', '/about', '/changelog', '/pipeline'];
@@ -356,6 +361,7 @@ export function createNova(config = loadConfig(), deps = {}) {
     const statusBar = (html) => { try { return html.replace(STATUS_BAR_TAG, statusBarTag(core.design.active(appearance))); } catch { return html; } };
     if (APP_PAGES.includes(path) || path.startsWith('/c/')) return serveFile(res, join(ui, 'index.html'), core.reset.clearHeaders(principal, req.headers.cookie), statusBar);
     if (path === '/styleguide') return serveFile(res, join(ui, 'styleguide.html'));
+    if (Object.hasOwn(DOCS, path)) return serveFile(res, join(config.root, DOCS[path]));
     if (path === '/sw.js') return serveFile(res, join(ui, 'sw.js'), {}, (js) => withShellHash(js, config.dev ? shellHash(ui) : shellVersion));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
     if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {

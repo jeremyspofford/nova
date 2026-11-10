@@ -535,7 +535,7 @@ function keepingRunning() {
 <dl class="facts" data-resilience>
   <dt>Supervisor</dt><dd>${sup ? `${esc(MODE_WORDS[sup.mode] ?? sup.mode)}${sup.server?.restarts ? `; restarted ${sup.server.restarts} time${sup.server.restarts === 1 ? '' : 's'}` : ''}.${sup.safe_mode ? ` ${esc(sup.safe_mode.reason)}` : ''}` : 'Not running under the supervisor. node src/supervisor/main.ts run keeps Nova running and takes releases.'}</dd>
   ${rel ? `<dt>Release</dt><dd>${esc(releaseName(rel.current))}${rel.previous ? `; ${esc(releaseName(rel.previous))} is kept to go back to` : ''}.${lastDeploy ? ` Last deploy: ${lastDeploy}.` : ''}</dd>` : ''}
-  <dt>Backups</dt><dd>${esc(backupLine + strays)} <a class="link" href="/settings#backups">Backup settings</a></dd>
+  <dt>Backups</dt><dd>${esc(backupLine + strays)} <a class="link" href="/settings#backups">Backup settings</a> <a class="link" href="/docs/restore" data-restore-doc>How to restore a backup</a></dd>
   <dt>Restore drill</dt><dd>${esc(drillLine)}${d?.task_id ? ` <a class="link" href="/tasks" data-action="open-task" data-task="${esc(d.task_id)}">Its evidence</a>` : ''}</dd>
   ${r.clock?.held ? `<dt>Clock</dt><dd>${esc(r.clock.held)}</dd>` : ''}
 </dl>

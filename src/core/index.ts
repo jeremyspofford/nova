@@ -158,6 +158,9 @@ export { Build, readLatest, words as buildWords, LATEST_MAX_BYTES } from './buil
 export type { BuildIdentity, Latest, VersionView } from './build.ts';
 export type { Sandbox } from './resilience/sandbox.ts';
 export { restoreInto, backupFiles, sha256File, openEncrypted } from './resilience/backup.ts';
+// Restoring a nightly backup or an encrypted copy into a new home (scripts/restore-backup.js).
+export { restoreFromBackup } from './resilience/restore-backup.ts';
+export type { RestoreBackupOptions, RestoreBackupResult } from './resilience/restore-backup.ts';
 // Factory reset (M7 amendment §2): finished at start, before the database opens (server.js too).
 export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries, supervisorResetPending } from './resilience/reset.ts';
 export { HOME_MARK, ensureMark, unsafeHome } from './resilience/home-mark.ts';
