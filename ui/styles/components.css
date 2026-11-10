@@ -356,6 +356,7 @@ body[data-rail="open"] .rail-stamp-full { display: inline; }
   color: var(--text-primary);
 }
 .card-title .icon { color: var(--accent-primary); }
+.card-title .nova-mark { flex: none; }
 .card-body { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .card-kicker { font: var(--type-weight-regular) var(--type-caption)/var(--type-line-tight) var(--font-body); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
 .card-lead { font: var(--type-weight-strong) var(--type-body)/var(--type-line-body) var(--font-body); color: var(--text-primary); overflow-wrap: anywhere; }

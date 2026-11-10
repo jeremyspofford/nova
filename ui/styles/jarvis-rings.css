@@ -5,7 +5,7 @@
    light-dark() picks whichever of a token pair is light (or dark) in the mode on show, so the
    surface stays near-black and the ink light in either mode. */
 
-.jv-surface, .jv-core {
+.jv-surface, .jv-core, .mark-hud {
   --jv-ink: light-dark(var(--bg-raised), var(--text-primary));
   --jv-black: light-dark(var(--text-primary), var(--bg-base));
   --jv-hue: color-mix(in oklch, var(--orb-core) 70%, var(--status-ok));
@@ -19,6 +19,19 @@
   --jv-amp: 0;
   --jv-k: 0;
 }
+
+/* Nova's mark in the HUD's one cyan family (UI item 24): the same SVG (ui/js/status-icon.js), its
+   stops taken from the Jarvis colours instead of the theme's nebula, on the HUD's near-black. The
+   left ribbon runs deep to bright cyan, the right a lighter step of it, so the two still read apart. */
+.jv-surface, .mark-hud {
+  --mark-variant-left-outer: color-mix(in oklch, var(--jv-c) 68%, var(--jv-bg));
+  --mark-variant-left-mid: color-mix(in oklch, var(--jv-c) 80%, var(--jv-bg));
+  --mark-variant-left-inner: var(--jv-c);
+  --mark-variant-right-outer: color-mix(in oklch, var(--jv-hue) 78%, var(--jv-bg));
+  --mark-variant-right-mid: var(--jv-hue);
+  --mark-variant-right-inner: color-mix(in oklch, var(--jv-c) 55%, var(--jv-ink));
+}
+.mark-hud { background: var(--jv-bg); }
 
 /* ---- the rings ---- */
 .jv-core { position: relative; display: inline-grid; flex: none; vertical-align: middle; }

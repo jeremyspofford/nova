@@ -5,6 +5,7 @@ import { escapeHtml as esc } from './markdown.js';
 import { ORB_WORDS, STATUS, isOpen, label, needsApproval, severity, statusOf, taskIconState } from './status.js';
 import { qrSvg } from './qr.js';
 import { waitingLine } from './wait.js';
+import { markSvg } from './status-icon.js';
 
 // ---- icons: Nova's one icon set (DESIGN-SYSTEM §2.1) ------------------------------------------
 // Line drawings in currentColor on a 24-unit grid, all at one stroke weight (ICON_STROKE in
@@ -1189,19 +1190,22 @@ const ABOUT_LINE = {
 };
 const ABOUT_LINKS = [['/changelog', 'What’s new', 'Every change, newest first'], ['/pipeline', 'Where Nova stands', 'Merged, in progress and planned work'], ['/health', 'Health', 'What is working right now']];
 
+// About Nova's heading carries Nova's mark (the SVG N, UI item 24): what it is, not its state.
+const aboutMark = () => markSvg({ size: 32 });
+
 // About Nova: the version, the running build against the latest merged one ("redeploy pending" when
 // it is behind), when it was built (or, said as such, when it started), and the way on.
 // `state`: 'ready' | 'loading' | 'failed'.
 export function aboutCard({ build = null, state = 'ready' } = {}) {
   const links = `<ul class="about-links" aria-label="More about Nova">${ABOUT_LINKS.map(([href, name, line]) => `<li><a class="about-link" href="${href}"><span class="about-link-text"><span class="about-link-name">${name}</span><span class="about-link-line">${line}</span></span>${ICONS.chevron}</a></li>`).join('')}</ul>`;
-  if (state === 'failed') return `<section class="card about-card" aria-labelledby="about-card-title" data-about-state="failed"><h3 class="card-title" id="about-card-title">Nova</h3><p class="about-state" data-tone="unknown" role="status"><span class="about-dot" aria-hidden="true"></span><span>Nova’s server didn’t answer, so this page can’t say which build is running.</span></p>${links}</section>`;
-  if (state === 'loading' || !build) return `<section class="card about-card" aria-labelledby="about-card-title" data-waiting><h3 class="card-title" id="about-card-title">Nova</h3>${waitingLine('Asking Nova which build is running', { key: 'view-about' })}</section>`;
+  if (state === 'failed') return `<section class="card about-card" aria-labelledby="about-card-title" data-about-state="failed"><h3 class="card-title" id="about-card-title">${aboutMark()}Nova</h3><p class="about-state" data-tone="unknown" role="status"><span class="about-dot" aria-hidden="true"></span><span>Nova’s server didn’t answer, so this page can’t say which build is running.</span></p>${links}</section>`;
+  if (state === 'loading' || !build) return `<section class="card about-card" aria-labelledby="about-card-title" data-waiting><h3 class="card-title" id="about-card-title">${aboutMark()}Nova</h3>${waitingLine('Asking Nova which build is running', { key: 'view-about' })}</section>`;
   const tone = buildTone(build);
   const when = build.built_at ? ['Built', utcWords(build.built_at)] : build.started_at ? ['Started', `${utcWords(build.started_at)}. No build date was given, so this is when Nova started.`] : null;
   const latest = build.latest ? `<span class="about-mono">${esc(build.latest.commit.slice(0, 8))}</span>, merged ${esc(utcWords(build.latest.merged_at))}` : 'Not known';
   const facts = [['Version', esc(build.version)], ['Running build', build.commit_short ? `<span class="about-mono">${esc(build.commit_short)}</span>` : 'Not known'], ...(when ? [[when[0], esc(when[1])]] : []), ['Latest merged', latest]];
   return `<section class="card about-card" aria-labelledby="about-card-title" data-about-state="${tone}">
-<h3 class="card-title" id="about-card-title">Nova ${esc(build.version)}</h3>
+<h3 class="card-title" id="about-card-title">${aboutMark()}Nova ${esc(build.version)}</h3>
 <p class="about-state" data-tone="${tone}" role="status"><span class="about-dot" aria-hidden="true"></span><span>${esc(build.words)}</span></p>
 <p class="about-line">${ABOUT_LINE[tone]}</p>
 <dl class="about-facts">${facts.map(([k, v]) => `<div class="about-fact"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>

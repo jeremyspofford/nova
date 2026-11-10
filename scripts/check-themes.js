@@ -15,7 +15,7 @@
 // Usage: node scripts/check-themes.js [design-systems/x.json ...]
 import { readFileSync, readdirSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
-import { AT_THE_BAR, BUILTIN_DIR, LEAD_DESIGN_SYSTEM, ORB_STATES, contrast, iosStatusBar, packageScaleFindings, validatePackage } from '../src/core/index.ts';
+import { AT_THE_BAR, BUILTIN_DIR, LEAD_DESIGN_SYSTEM, MARK_TOKENS, ORB_STATES, contrast, iosStatusBar, markContrast, packageScaleFindings, validatePackage } from '../src/core/index.ts';
 
 export { contrast };
 
@@ -31,12 +31,20 @@ export function checkPackage(pkg) {
   const v = validatePackage(pkg);
   const bar = barCheck(pkg);
   if (bar.problems.length) return { ...v, ok: false, problems: [...v.problems, ...bar.problems] };
+  // The mark's stops (UI item 24): a package may leave them out at runtime, but every package
+  // authored against this gate gives its own, so the mark is designed for it rather than borrowed.
+  const tokens = pkg && typeof pkg === 'object' && pkg.tokens && typeof pkg.tokens === 'object' ? pkg.tokens : null;
+  const markless = tokens ? MARK_TOKENS.filter((n) => !(n in tokens)) : [];
+  if (markless.length) return { ok: false, problems: [...v.problems, `The mark’s stops must be declared: ${markless.join(', ')} (light looks deepened to 4.5:1, dark looks the full nebula at 3:1).`], warnings: v.warnings };
   if (pkg && typeof pkg === 'object' && pkg.ios_status_bar === undefined) {
     const problems = [...v.problems, 'ios_status_bar must be declared: translucent (a dark design draws behind the iPhone status bar), default (iOS keeps its own strip), or { light, dark } for a package with both looks.'];
     return { ok: false, problems, warnings: v.warnings.filter((w) => !w.startsWith('ios_status_bar isn’t declared')) };
   }
   return v;
 }
+
+// A package's looks: its own tokens, and each mode's on top.
+const looksOf = (pkg) => ({ default: pkg.tokens, ...Object.fromEntries(Object.entries(pkg.modes ?? {}).map(([m, v]) => [m, { ...pkg.tokens, ...v }])) });
 
 // What the installed iPhone app's status bar is, in words for the check's line.
 export function statusBarLine(pkg) {
@@ -65,7 +73,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     } else {
       const bar = barCheck(pkg);
       const where = bar.at ? `on the designed scales${pkg.id === LEAD_DESIGN_SYSTEM ? ' (lead; rendered owner review required)' : ''}` : `not yet at the design bar (${bar.findings.length} off the scales${bar.named ? '' : ', and not yet approved'})`;
-      console.log(`✓ ${basename(f)} (${pkg.name}): complete, values well-formed, contrast passes${modes.length ? ` in default and ${modes.join(', ')} modes` : ''}, reduced motion honoured, the orb’s ${ORB_STATES.length} states distinct in more than colour, ${statusBarLine(pkg)}; ${where}`);
+      const mark = Object.entries(looksOf(pkg)).map(([look, t]) => `${look} ${Math.min(...markContrast(t).map((x) => x.ratio)).toFixed(2)}:1`).join(', ');
+      console.log(`✓ ${basename(f)} (${pkg.name}): complete, values well-formed, contrast passes${modes.length ? ` in default and ${modes.join(', ')} modes` : ''}, reduced motion honoured, the orb’s ${ORB_STATES.length} states distinct in more than colour, the mark’s weakest stop ${mark}, ${statusBarLine(pkg)}; ${where}`);
       if (process.env.NOVA_BAR_DETAIL) for (const x of bar.findings) console.log(`    · ${x}`);
     }
   }

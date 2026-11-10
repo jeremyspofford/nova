@@ -40,13 +40,13 @@ async function reachable(page: Page): Promise<string[]> {
 }
 
 // The live state: the orb before status icons part B, the status icon since (owner, 2026-11-08). The
-// icon is one ribbon on one canvas, drawn by status-icon.js from its states' forms only.
+// icon is Nova's mark, one inline SVG (UI item 24), drawn by status-icon.js with its state's treatment.
 async function orbs(page: Page) {
   return page.$$eval('.orb, .status-icon[data-presence]', (els) => els.map((o) => ({
     icon: o.classList.contains('status-icon'),
     visible: (o as HTMLElement).checkVisibility(),
     parts: o.classList.contains('status-icon') ? [...o.children].map((c) => `${c.localName}${c.getAttribute('aria-hidden') === 'true' ? ':hidden' : ''}`) : [...o.querySelectorAll('*')].map((c) => c.className.toString()).sort(),
-    media: o.querySelectorAll(o.classList.contains('status-icon') ? 'img, svg, picture, video' : 'img, svg, picture, canvas').length,
+    media: o.querySelectorAll(o.classList.contains('status-icon') ? 'img, picture, video, canvas, image' : 'img, svg, picture, canvas').length,
   })));
 }
 
@@ -77,7 +77,7 @@ test('M3 gate: posture sweep — layout, no overflow, the same destinations ever
         const found = await orbs(d.page);
         assert.ok(found.some((o) => o.visible), `${at}: an orb is on screen`);
         for (const o of found) {
-          assert.deepEqual(o.parts, o.icon ? ['canvas:hidden'] : ORB_PARTS, `${at}: the orb has only its ${o.icon ? 'one canvas' : 'four layers'}, no features`);
+          assert.deepEqual(o.parts, o.icon ? ['svg:hidden'] : ORB_PARTS, `${at}: the orb has only its ${o.icon ? 'one SVG' : 'four layers'}, no features`);
           assert.equal(o.media, 0, `${at}: no image or drawing inside the orb`);
         }
         if (shots) await shoot(d.page, join(shots, `sweep-${width}-${posture}.png`));

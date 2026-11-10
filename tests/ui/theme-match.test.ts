@@ -35,14 +35,13 @@ async function settled(page: Page) {
   assert.fail('the entry never settled');
 }
 
-// Each sheet cell: how much of it is lit, and the mean colour of what is.
+// Each sheet cell: whether its mark is drawn (the SVG's two ribbons, sized), and the mean colour of
+// its stops as drawn.
 const cells = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-si-sheet] [data-si-cell]')].map((cell) => {
-  const c = cell.querySelector('canvas')!;
-  const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
-  let n = 0, r = 0, g = 0, b = 0;
-  for (let i = 0; i < d.length; i += 4) if (d[i + 3]! > 64) { n++; r += d[i]!; g += d[i + 1]!; b += d[i + 2]!; }
-  const sum = [r, g, b];
-  return { cell: cell.dataset.siCell!, share: n / (c.width * c.height), rgb: sum.map((v) => v / Math.max(n, 1)) };
+  const svg = cell.querySelector('svg')!;
+  const stops = [...svg.querySelectorAll('stop[data-stop]')].map((s) => (getComputedStyle(s).stopColor.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number));
+  const rgb = [0, 1, 2].map((i) => stops.reduce((m, c) => m + (c[i] ?? 0), 0) / Math.max(stops.length, 1));
+  return { cell: cell.dataset.siCell!, drawn: svg.querySelectorAll('path[data-ribbon]').length === 2 && svg.getBoundingClientRect().width > 0, rgb };
 }));
 
 test('the Nebula acceptance entry: surfaces, components and every status icon state, light and dark', async (t) => {
@@ -70,7 +69,7 @@ test('the Nebula acceptance entry: surfaces, components and every status icon st
           await settled(d.page);
           const drawn = await cells(d.page);
           assert.equal(drawn.length, STATES.length * SIZES.length, `${where}: every state at every size`);
-          for (const c of drawn) assert.ok(c.share > 0.08, `${where} ${c.cell}: not blank (${(c.share * 100).toFixed(1)}% lit)`);
+          for (const c of drawn) assert.ok(c.drawn, `${where} ${c.cell}: the mark is drawn`);
           // Stopped is red, not salmon or pink: red well above green, and above blue.
           const [r, g, bl] = drawn.find((c) => c.cell === 'stopped-48')!.rgb as [number, number, number];
           assert.ok(r > g * 1.8 && r > bl, `${where}: stopped reads red (${[r, g, bl].map(Math.round)})`);

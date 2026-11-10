@@ -2,8 +2,8 @@
 // (ui/js/status-icon.js) where the orb was: the rail's Home, the phone's top bar, the hero of an
 // empty chat (and of Home on a phone), and a task row's own state at 16 px. Never on a message,
 // one live icon per view, at most one hero. Every live icon takes the one state status.js orbState
-// gives, with its words; a task row shows its task's own. Many 16 px rows share the one WebGL
-// context and keep the frame rate; under reduced motion nothing moves.
+// gives, with its words; a task row shows its task's own. Each is the mark's inline SVG (UI item 24),
+// so no WebGL context is made; many 16 px rows keep the frame rate; under reduced motion nothing moves.
 // With NOVA_UI_SHOTS set it writes the PR's screenshots (Nebula, light and dark).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,7 +45,7 @@ const signal = (page: Page, patch: Record<string, unknown>) => page.evaluate(asy
 const QUIET = { reachable: true, listening: false, stopped: 0, needsYou: 0, speaking: false, working: 0, thinking: false };
 const rowIcon = (page: Page, id: string) => page.locator(`#tasks-view .task-row[data-task="${id}"] .task-icon`);
 
-test('status icons part B: the live state in the rail, the top bar and the hero; a task row’s own state; one WebGL context', async (t) => {
+test('status icons part B: the live state in the rail, the top bar and the hero; a task row’s own state; SVG, no WebGL', async (t) => {
   const b = await browser();
   if (typeof b === 'string') return t.skip(b);
   const m = blank('nova-ui-status-icons-b-');
@@ -118,10 +118,10 @@ test('status icons part B: the live state in the rail, the top bar and the hero;
           assert.equal(await icon.getAttribute('aria-hidden'), 'true', `${where}: ${id}’s icon is decorative`);
           assert.equal(Math.round((await icon.boundingBox())!.width), 16, `${where}: ${id} at 16 px`);
         }
-        // Every icon on the page is drawn through the one shared WebGL context (or Canvas2D without it).
+        // Every icon on the page is the mark's inline SVG; none makes a WebGL context.
         const renderers = await d.page.$$eval('.status-icon', (els) => [...new Set(els.map((e) => (e as HTMLElement).dataset.renderer))]);
-        assert.ok(renderers.length === 1 && ['webgl', 'canvas2d'].includes(renderers[0]!), `${where}: one renderer (${renderers})`);
-        assert.ok(await d.page.evaluate(() => (window as any).__gl) <= 1, `${where}: at most one WebGL context`);
+        assert.deepEqual(renderers, ['svg'], `${where}: every icon is the SVG (${renderers})`);
+        assert.equal(await d.page.evaluate(() => (window as any).__gl), 0, `${where}: no WebGL context`);
         if (dir) { await d.page.waitForTimeout(900); await shoot(d.page, join(dir, `tasks-mixed-1440x900-nebula-${scheme}.png`)); }
 
         // A task that finishes while its row is shown: the success flourish, settling to idle.
@@ -203,7 +203,7 @@ test('status icons part B: the live state in the rail, the top bar and the hero;
       // Under reduced motion nothing moves: two pictures of a running row's icon, apart, are the same.
       await d.page.emulateMedia({ reducedMotion: 'reduce' });
       await d.page.waitForTimeout(1200);
-      const pic = () => d.page.evaluate(() => (document.querySelector('#tasks-view .task-icon canvas') as HTMLCanvasElement).toDataURL());
+      const pic = () => d.page.evaluate(() => document.querySelector('#tasks-view .task-icon svg')!.outerHTML);
       const a = await pic();
       await d.page.waitForTimeout(700);
       assert.equal(await pic(), a, 'reduced motion: a running row’s icon is still');

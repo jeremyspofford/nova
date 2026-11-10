@@ -144,7 +144,7 @@ export { originHost } from './api.ts';
 // The Content-Security-Policy and headers every HTML page is sent with (server.js, the supervisor).
 export { STYLE_ATTRIBUTES, contentSecurityPolicy, htmlSecurityHeaders, cspHash, inlineScriptHashes, nonceStyles } from './csp.ts';
 // The design-system schema and its checks, for the token lint and the package check (scripts/).
-export { TOKENS, TOKEN_NAMES, ORB_STATES, ORB_STATE_VARS, cssVar, contrast, validatePackage, generateCss, iosStatusBar, IOS_STATUS_BAR_UNDECLARED, STATUS_BAR_TAG, statusBarTag, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM, STARTERS, LIVE_CHECKS, liveCheck, looks, contrastNudge, applyNudge, MOTION_MIN_MS, MOTION_MAX_MS, overshoots, LEAD_DESIGN_SYSTEM, AT_THE_BAR, SPACE_SCALE, ICON_STROKE, scaleFindings, packageScaleFindings } from './design.ts';
+export { TOKENS, TOKEN_NAMES, MARK_TOKENS, MARK_CONTRAST, markContrast, ORB_STATES, ORB_STATE_VARS, cssVar, contrast, validatePackage, generateCss, iosStatusBar, IOS_STATUS_BAR_UNDECLARED, STATUS_BAR_TAG, statusBarTag, BUILTIN_DIR, DEFAULT_DESIGN_SYSTEM, STARTERS, LIVE_CHECKS, liveCheck, looks, contrastNudge, applyNudge, MOTION_MIN_MS, MOTION_MAX_MS, overshoots, LEAD_DESIGN_SYSTEM, AT_THE_BAR, SPACE_SCALE, ICON_STROKE, scaleFindings, packageScaleFindings } from './design.ts';
 // The vault and connectors (M5b): Era 2's Gmail keeps its secrets in the vault and registers as a connector.
 export { Vault, FILE_KEY_NOTICE, keyMode, fileKeyStore, secretToolKeyStore, macKeyStore, windowsKeyStore } from './vault.ts';
 export type { KeyStore, Run as KeyCommandRunner } from './vault.ts';

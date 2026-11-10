@@ -16,7 +16,7 @@ import { workCosts, diagnosticsDownload, configImport, configSetup, configPropos
 import { aboutCard, changelogEntry, pipelineRow, versionStamp } from './components.js';
 import * as fitEngine from './fit-engine.js';
 import { UC_FRAMES, entryOf, ucEntry, ucFrame } from './sg-compositions.js';
-import { bindStatusIcons, statusIconEntry, statusIconSheet } from './sg-status-icons.js';
+import { bindStatusIcons, markEntry, statusIconEntry, statusIconSheet } from './sg-status-icons.js';
 import { bindJarvis, jarvisEntry } from './sg-jarvis.js';
 import { auEntry, auFrame, bindAutomations, isAuFrame } from './sg-automations.js';
 import { bindReceipts, isRcFrame, rcEntry, rcFrame } from './sg-receipts.js';
@@ -714,7 +714,7 @@ function entries() {
     ['Foundations', [
       ['color', 'Colour', `The ${tokensOf((t) => t.group === 'color').length} colour tokens every design system defines. Components use nothing else.`,
         () => `<div class="sg-grid">${tokensOf((t) => t.group === 'color').map((n) => `<div class="sg-swatch"><div class="sg-chip" style="background: var(${n})"></div><span class="sg-name">${n}</span><span class="sg-value">${value(n)}</span></div>`).join('')}</div>`],
-      ['nebula-match', 'Nebula with the status icons', 'The acceptance page for the theme match (2026-11-08): Nebula’s neutral surfaces and real components beside the status icons, whose mark is the owner’s artwork, its states tinted by the same material tokens as the orb. Use the switch above for light and dark.',
+      ['nebula-match', 'Nebula with the status icons', 'The acceptance page for the theme match (2026-11-08): Nebula’s neutral surfaces and real components beside the status icons, whose mark is Nova’s SVG N in the theme’s mark colours, its states tinted by the same material tokens as the orb. Use the switch above for light and dark.',
         () => {
           const chips = (names) => `<div class="sg-grid">${names.map((t) => `<div class="sg-swatch"><div class="sg-chip" style="background: var(${css(t)})"></div><span class="sg-name">${t}</span><span class="sg-value">${value(css(t))}</span></div>`).join('')}</div>`;
           return `${state('Surfaces, text and lines', chips(['bg/base', 'bg/raised', 'bg/overlay', 'surface/card', 'surface/card-hover', 'border/subtle', 'border/strong', 'text/primary', 'text/secondary', 'text/faint']))}
@@ -742,7 +742,9 @@ ${state('In use: a view title, a group label, a row, its meta', `<div class="sg-
       ['topology', 'Topology', 'Machines, their services, and versions in three layers. The hub leads the diagram; on a phone the same machines form an ordered list.', topologyEntry],
       ['orb', 'Orb', 'Nova’s presence: abstract light, no face, once per view. Seven fixed states; the hero on Home, the rail size everywhere else.',
         () => `<div class="sg-grid">${ORB_STATES.map((s) => `<div class="sg-swatch">${orb({ state: s, size: 'rail' })}<span class="sg-name">${s}</span></div>`).join('')}</div>${state('Sizes', `<div class="sg-demo-row sg-orb-sizes">${ORB_SIZES.map((s) => `<div class="sg-swatch">${orb({ state: 'idle', size: s })}<span class="sg-name">${s}</span></div>`).join('')}</div>`)}`],
-      ['status-icon', 'Status icon', 'Nova’s one mark, the owner’s artwork, never redrawn: each state is a treatment of it (palette, brightness and motion), changing over 800 ms. Success is a one-second sweep that settles to idle. Red only for stopped, amber only for needs-you. Rail, header and task rows only, never per message.',
+      ['nova-mark', 'Nova’s mark', 'The N itself, one SVG on a transparent background, traced from the owner’s artwork: two ribbons turning round a dark core. One asset; its gradient stops are each theme’s mark tokens, the full nebula on a dark look and a deepened palette on a light one, every stop there at 4.5:1 or more against its surface so the form holds at 16 px. The Jarvis HUD study sets a cyan variant. Every place in the app that shows Nova draws this; only the OS icons and the favicon keep the tiled picture, where a background is needed.',
+        markEntry],
+      ['status-icon', 'Status icon', 'Nova’s one mark, never redrawn per state: each state is a treatment of it (palette, brightness and motion), changing over 800 ms. Success is a one-second turn of light that settles to idle. Red only for stopped, amber only for needs-you. Rail, header and task rows only, never per message.',
         statusIconEntry],
       ['status', 'Status','One vocabulary everywhere, each with a fixed colour. Verified always opens its evidence.',
         () => `<div class="sg-demo-row">${['quiet', 'working', 'waiting', 'needs-you', 'failed'].map((s) => status(s)).join('')}${status('verified', { task: 'v1' })}</div>`],

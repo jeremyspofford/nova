@@ -4,8 +4,8 @@
 // own dark rounded tile (nova-mark-owner-reference-regenerated-2026-11-08.webp, 1600×1600). This
 // script only crops and downscales that file; it draws nothing. It writes:
 //   ui/assets/nova-mark.webp              the source, as supplied
-//   ui/icons/mark-1024.webp               the tile, corners transparent: what the status icon
-//                                         samples (power of two, so WebGL can mipmap it)
+//   ui/icons/mark-1024.webp               the tile, corners transparent: the styleguide's reference
+//                                         for the traced SVG mark (ui/js/status-icon.js, UI item 24)
 //   ui/icons/mark-vortex-512.webp         the vortex alone on transparency (the styleguide's crop
 //                                         comparison; the in-app mark uses the tile)
 //   ui/icons/icon-192.png, icon-512.png   the tile, corners transparent (purpose any)
@@ -13,8 +13,6 @@
 //                                         80% safe circle
 //   ui/icon.svg                           the tile as images: 256 px, and a prefiltered 64 px for
 //                                         favicon sizes (24 px and under)
-//   ui/pair.html                          its <img data-nova-mark>, as a 256 px data: URI (the
-//                                         pre-pairing page has no public path for the image)
 // Every downscale halves step by step, so 16 px averages the artwork instead of aliasing it.
 // Needs Chromium (for WebP decode and encode); run it in the Playwright image as scripts/ui-test.sh
 // runs the UI gate:
@@ -30,8 +28,8 @@ const ORIGIN = 'http://icon.test';
 const TYPES = { '.js': 'text/javascript', '.png': 'image/png', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.html': 'text/html', '.webmanifest': 'application/manifest+json' };
 const SOURCE = 'docs/builder-packet/ui-references/nova-mark-owner-reference-regenerated-2026-11-08.webp';
 // Measured on the 1600 px source (the tile's outer edge, where its rim meets the backdrop, and the
-// corner radius from where the rim crosses each diagonal); the same numbers status-icon.js uses for
-// the core, as fractions of the tile.
+// corner radius from where the rim crosses each diagonal), and the vortex's core as fractions of
+// the tile.
 const TILE = { x: 156, y: 155, size: 1288, radius: 307 };
 const CORE = { x: (800 - 156) / 1288, y: (793 - 155) / 1288 }; // the vortex's centre
 const VORTEX_REACH = 674; // source px from the core to the vortex's farthest edge
@@ -123,7 +121,6 @@ async function icons(b) {
       'ui/icons/maskable-512.png': png(window.maskable(img, t, core, reach, 512)),
       large: webp(window.tileAt(img, t, 256), 0.9),
       small: png(window.tileAt(img, t, 64)),
-      pair: webp(window.tileAt(img, t, 256), 0.85),
     };
   }, { src: `/${SOURCE}`, t: TILE, core: CORE, reach: VORTEX_REACH });
   if (errors.length) throw new Error(errors.join('\n'));
@@ -141,16 +138,10 @@ async function icons(b) {
     '</svg>',
     '',
   ].join('\n'));
-  // /pair is served before pairing, and its allowlist holds status-icon.js and no image of the mark
-  // (owner, 2026-11-08). So its <img data-nova-mark> carries the mark inline: 256 px (power of two,
-  // so it mipmaps), enough for the 112 px pairing icon at 2x.
-  const pairPath = join(ROOT, 'ui/pair.html');
-  const pair = readFileSync(pairPath, 'utf8');
-  const tag = /<img data-nova-mark src="[^"]*"/;
-  if (!tag.test(pair)) throw new Error('ui/pair.html has no <img data-nova-mark src="…">');
-  writeFileSync(pairPath, pair.replace(tag, `<img data-nova-mark src="${out.pair}"`));
+  // In the app (and /pair) the mark is the SVG status-icon.js draws (UI item 24); these rasters are
+  // only for the places a background is genuinely needed: the OS icons, the favicon.
   await ctx.close();
-  console.log('assets written from', SOURCE, `; /pair's inline mark is ${(out.pair.length / 1024).toFixed(1)} KB`);
+  console.log('assets written from', SOURCE);
 }
 
 // The comparison: before and after at 512, 192, 32 and 16 (the small ones also enlarged, pixel for

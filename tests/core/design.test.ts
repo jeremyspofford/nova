@@ -7,8 +7,8 @@ import { Db } from '../../src/core/db.ts';
 import { Profile } from '../../src/core/profile.ts';
 import { Extensions } from '../../src/core/extensions.ts';
 import {
-  BUILTIN_DIR, CONTENT_RULES, DEFAULT_DESIGN_SYSTEM, Design, ORB_STATE_VARS, TOKENS, TOKEN_NAMES,
-  contrast, cssVar, generateCss, validatePackage,
+  BUILTIN_DIR, CONTENT_RULES, DEFAULT_DESIGN_SYSTEM, Design, MARK_TOKENS, ORB_STATE_VARS, TOKENS, TOKEN_NAMES,
+  contrast, cssVar, generateCss, markContrast, validatePackage,
 } from '../../src/core/design.ts';
 
 const fixture = () => JSON.parse(readFileSync(new URL('./fixtures/design-system.json', import.meta.url), 'utf8'));
@@ -35,6 +35,7 @@ test('the schema is DESIGN-SYSTEM §2 in full, plus the weights, line heights, d
     'bg/base', 'bg/raised', 'bg/overlay', 'surface/card', 'surface/card-hover', 'text/primary', 'text/secondary', 'text/faint',
     'border/subtle', 'border/strong', 'accent/primary', 'accent/secondary', 'status/ok', 'status/working', 'status/waiting',
     'status/attention', 'status/error', 'orb/core', 'orb/glow', 'orb/listening', 'orb/attention',
+    'mark/left-outer', 'mark/left-mid', 'mark/left-inner', 'mark/right-outer', 'mark/right-mid', 'mark/right-inner',
     'font/display', 'font/body', 'font/mono', 'type/h1', 'type/h2', 'type/h3', 'type/body', 'type/small', 'type/caption',
     'type/weight-regular', 'type/weight-strong', 'type/line-tight', 'type/line-body',
     'space/1', 'space/2', 'space/3', 'space/4', 'space/5', 'space/6', 'space/7', 'space/8',
@@ -44,6 +45,45 @@ test('the schema is DESIGN-SYSTEM §2 in full, plus the weights, line heights, d
   ];
   assert.deepEqual([...TOKEN_NAMES].sort(), [...required].sort());
   for (const name of TOKEN_NAMES) assert.ok(TOKENS[name]!.group && TOKENS[name]!.syntax, name);
+});
+
+// ---- the mark's stops (UI item 24) -----------------------------------------------------------
+
+test('the mark’s stops: optional at runtime, filled from the orb and accent colours a package has', () => {
+  const pkg = fixture();
+  for (const n of MARK_TOKENS) assert.ok(!(n in pkg.tokens), `the fixture predates ${n}`);
+  assert.deepEqual(validatePackage(pkg).problems, [], 'a package without them is still valid');
+  const light = generateCss(pkg, { mode: 'light' });
+  const v = (name: string) => new RegExp(`${cssVar(name)}: ([^;]+);`).exec(light)?.[1];
+  assert.equal(v('mark/left-inner'), v('orb/core'));
+  assert.equal(v('mark/right-outer'), v('accent/secondary'));
+  assert.equal(v('mark/right-inner'), v('orb/attention'));
+  // Auto: a filled stop follows its source into a mode that changes it.
+  const auto = generateCss(pkg, { mode: 'auto' });
+  const dark = /@media \(prefers-color-scheme: dark\) \{([^}]*)\}/.exec(auto)?.[1] ?? '';
+  if (pkg.modes?.dark?.['orb/core']) assert.match(dark, new RegExp(`--mark-left-inner: ${pkg.modes.dark['orb/core']};`));
+});
+
+test('the mark’s stops, when declared, are readable: 4.5:1 on a light look, 3:1 on a dark one', () => {
+  const pkg = fixture();
+  const light = withTokens({ 'mark/left-outer': '#1f3d99', 'mark/left-mid': '#1c5bbf', 'mark/left-inner': '#0a6c9c', 'mark/right-outer': '#6d2bb3', 'mark/right-mid': '#a62a84', 'mark/right-inner': '#b0470f' });
+  // (The fixture's dark mode keeps these light stops, so only the light look is judged here.)
+  assert.deepEqual(validatePackage(light).problems.filter((p) => p.includes('mark') && !p.startsWith('In dark mode')), []);
+  const faint = withTokens({ 'mark/left-inner': '#25aaf7' }); // the dark look's cyan on a light page
+  assert.match(problems(faint), /the mark’s mark\/left-inner on bg\/base is \d\.\d\d:1; on a light look it needs 4\.5:1/);
+  const r = markContrast({ ...pkg.tokens, 'mark/left-inner': '#25aaf7' });
+  assert.ok(r.length >= 1 && r.every((x) => x.look === 'light' && x.min === 4.5));
+});
+
+test('the built-ins’ marks: every stop at 4.5:1 on light looks and 3:1 on dark ones', () => {
+  const { design } = host();
+  for (const { id } of design.list()) {
+    const pkg = JSON.parse(readFileSync(join(BUILTIN_DIR, `${id}.json`), 'utf8'));
+    for (const n of MARK_TOKENS) assert.ok(n in pkg.tokens, `${id} declares ${n}`);
+    for (const set of [pkg.tokens, ...Object.values(pkg.modes ?? {}).map((m) => ({ ...pkg.tokens, ...(m as object) }))]) {
+      for (const x of markContrast(set)) assert.ok(x.ratio >= x.min, `${id}: ${x.fg} on ${x.bg} ${x.ratio}:1 < ${x.min}:1 (${x.look})`);
+    }
+  }
 });
 
 test('token names become CSS variables by replacing / with -', () => {

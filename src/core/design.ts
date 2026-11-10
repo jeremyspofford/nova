@@ -21,6 +21,9 @@ const entries: [string, Group, Syntax][] = [
   ...['bg/base', 'bg/raised', 'bg/overlay', 'surface/card', 'surface/card-hover', 'text/primary', 'text/secondary', 'text/faint',
     'border/subtle', 'border/strong', 'accent/primary', 'accent/secondary', 'status/ok', 'status/working', 'status/waiting',
     'status/attention', 'status/error', 'orb/core', 'orb/glow', 'orb/listening', 'orb/attention'].map((n): [string, Group, Syntax] => [n, 'color', 'color']),
+  // Nova's mark (ui/js/status-icon.js, UI item 24): the two arms of the N, each a gradient from the
+  // outer end (the upright and its arc) to the inner end (the curl round the core).
+  ...['mark/left-outer', 'mark/left-mid', 'mark/left-inner', 'mark/right-outer', 'mark/right-mid', 'mark/right-inner'].map((n): [string, Group, Syntax] => [n, 'color', 'color']),
   ...['font/display', 'font/body', 'font/mono'].map((n): [string, Group, Syntax] => [n, 'type', 'font']),
   ...['type/h1', 'type/h2', 'type/h3', 'type/body', 'type/small', 'type/caption'].map((n): [string, Group, Syntax] => [n, 'type', 'size']),
   ['type/weight-regular', 'type', 'weight'], ['type/weight-strong', 'type', 'weight'],
@@ -38,6 +41,27 @@ export const TOKEN_NAMES: readonly string[] = Object.freeze(entries.map(([n]) =>
 
 // `bg/base` → `--bg-base`.
 export const cssVar = (name: string) => `--${name.replace(/\//g, '-')}`;
+
+// The mark's gradient stops (UI item 24, 2026-11-10). They came after packages already existed, so a
+// package may leave them out: it still validates, and its CSS draws the mark from the orb and accent
+// colours it does have (MARK_FALLBACK). Every built-in declares its own (scripts/check-themes.js),
+// and a package that declares them must make them readable (MARK_CONTRAST).
+export const MARK_TOKENS: readonly string[] = Object.freeze(TOKEN_NAMES.filter((n) => n.startsWith('mark/')));
+export const MARK_FALLBACK: Readonly<Record<string, string>> = Object.freeze({
+  'mark/left-outer': 'accent/primary', 'mark/left-mid': 'orb/core', 'mark/left-inner': 'orb/core',
+  'mark/right-outer': 'accent/secondary', 'mark/right-mid': 'orb/listening', 'mark/right-inner': 'orb/attention',
+});
+// Every stop of the mark against the surfaces it sits on, per look. On a light look the mark is the
+// deepened palette, every stop at body-text contrast (4.5:1), so its form holds at 16 px; on a dark
+// look the full nebula palette, every stop at least the 3:1 a graphic needs (WCAG 1.4.11).
+export const MARK_CONTRAST: Readonly<Record<'light' | 'dark', { min: number; on: readonly string[] }>> = Object.freeze({
+  light: { min: 4.5, on: ['bg/base', 'bg/raised', 'surface/card'] },
+  dark: { min: 3, on: ['bg/base', 'bg/raised', 'surface/card'] },
+});
+// The mark's stops a token set is missing, filled from the colours it has.
+export function markDefaults(tokens: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(MARK_TOKENS.filter((n) => !(n in tokens) && MARK_FALLBACK[n]! in tokens).map((n) => [n, tokens[MARK_FALLBACK[n]!]!]));
+}
 
 // Nebula (owner, 2026-11-07: "Yes, make it default"): light and dark, following the device.
 export const DEFAULT_DESIGN_SYSTEM = 'nebula';
@@ -484,6 +508,24 @@ function ratio(tokens: Record<string, unknown>, fg: string, bg: string, page = f
   return Math.min(...backs.map((b) => contrast(f0[3] < 1 ? over(f0, b) : f0, b)));
 }
 
+// Each mark stop a token set declares, against each surface the mark sits on, by the set's look
+// (MARK_CONTRAST). The weakest is what the mark's form is judged by.
+export function markContrast(tokens: Record<string, unknown>): { fg: string; bg: string; look: 'light' | 'dark'; min: number; ratio: number }[] {
+  const base = parseColor(tokens['bg/base']);
+  if (!base || base[3] < 1) return [];
+  const look = scheme(tokens as Record<string, string>) as 'light' | 'dark';
+  const { min, on } = MARK_CONTRAST[look];
+  const out: { fg: string; bg: string; look: 'light' | 'dark'; min: number; ratio: number }[] = [];
+  for (const fg of MARK_TOKENS) {
+    if (!(fg in tokens)) continue;
+    for (const bg of on) {
+      const r = ratio(tokens, fg, bg);
+      if (r !== null) out.push({ fg, bg, look, min, ratio: Math.round(r * 100) / 100 });
+    }
+  }
+  return out;
+}
+
 // The label colour for an accent button: the candidate with the best contrast on accent/primary.
 function accentLabel(tokens: Record<string, unknown>): { token: string; ratio: number } | null {
   let best: { token: string; ratio: number } | null = null;
@@ -626,7 +668,7 @@ export function validatePackage(input: unknown): { ok: boolean; problems: string
   // Completeness and syntax.
   if (!isObj(p.tokens)) out.push('tokens must be an object holding every token in the schema.');
   const tokens = isObj(p.tokens) ? p.tokens : {};
-  for (const name of TOKEN_NAMES) if (!(name in tokens)) out.push(`Missing token ${name}.`);
+  for (const name of TOKEN_NAMES) if (!(name in tokens) && !MARK_TOKENS.includes(name)) out.push(`Missing token ${name}.`);
   checkValues(tokens, '', out);
 
   // Modes: partial overrides for light and dark.
@@ -650,6 +692,7 @@ export function validatePackage(input: unknown): { ok: boolean; problems: string
     }
     const label = accentLabel(set);
     if (label && label.ratio < 4.5) out.push(`${lead}nothing reads on accent/primary: the best of ${ACCENT_LABELS.join(', ')} is ${label.ratio.toFixed(2)}:1; it needs 4.5:1 (labels on accent buttons).`);
+    for (const r of markContrast(set)) if (r.ratio < r.min) out.push(`${lead}the mark’s ${r.fg} on ${r.bg} is ${r.ratio.toFixed(2)}:1; on a ${r.look} look it needs ${r.min}:1 (the mark’s form at small sizes).`);
   }
 
   // Motion: transitions in 150–300 ms, and no curve that bounces, in the default set and each mode.
@@ -771,7 +814,8 @@ export function generateCss(input: unknown, o: { mode?: Mode; nudge?: Record<str
   const vars = (t: Record<string, string>, motion = true) => TOKEN_NAMES.filter((n) => n in t).map((n) => `${cssVar(n)}: ${css(n, motion ? motionValue(n, t[n]!) : t[n]!)};`);
   const safe = `${name} ${pkg.version} (${pkg.id})`.replace(/[^\w .,'’()-]/g, '');
 
-  const root = [`color-scheme: ${scheme(resolved)};`, ...vars(resolved)];
+  // A package without the mark's stops (MARK_TOKENS) still draws the mark, from its own colours.
+  const root = [`color-scheme: ${scheme(resolved)};`, ...vars({ ...markDefaults(resolved), ...resolved })];
   const parts = [`/* ${safe}, mode ${mode}${fixed ? ', with this device’s contrast fix' : ''}. Generated by Nova from the package’s tokens; don’t edit. */`, block(':root', root)];
   if (mode === 'auto') {
     for (const m of ['light', 'dark'] as const) {
@@ -779,7 +823,9 @@ export function generateCss(input: unknown, o: { mode?: Mode; nudge?: Record<str
       if (!over || !Object.keys(over).length) continue;
       const t = { ...pkg.tokens, ...over };
       const fixedT = applyNudge(t, nudge);
-      const changed = { ...over, ...Object.fromEntries(Object.keys(nudge).filter((n) => n in fixedT).map((n) => [n, fixedT[n]!])) };
+      // A filled-in mark stop follows its source colour into the mode.
+      const filled = Object.fromEntries(Object.entries(markDefaults(fixedT)).filter(([n]) => MARK_FALLBACK[n]! in over));
+      const changed = { ...filled, ...over, ...Object.fromEntries(Object.keys(nudge).filter((n) => n in fixedT).map((n) => [n, fixedT[n]!])) };
       parts.push(`@media (prefers-color-scheme: ${m}) {\n${block(':root', [`color-scheme: ${scheme(t)};`, ...vars(changed)], '  ')}\n}`);
     }
   }

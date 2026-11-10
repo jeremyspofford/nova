@@ -47,11 +47,15 @@ test('/pair: the status icon where the orb was, loaded before pairing, following
       assert.equal(await d.page.locator('.orb').count(), 0, `${name}: no orb left on /pair`);
       assert.equal(await icon(d.page).count(), 1);
       await statusIs(d.page, 'idle');
-      assert.match((await icon(d.page).getAttribute('data-renderer')) ?? '', /^(webgl|canvas2d)$/, `${name}: it drew`);
+      assert.equal(await icon(d.page).getAttribute('data-renderer'), 'svg', `${name}: it drew`);
+      // The mark itself (UI item 24): an inline SVG on a transparent background, no picture in a box.
+      const mark = await icon(d.page).evaluate((el) => ({ svg: el.querySelectorAll('svg path[data-ribbon]').length, raster: el.querySelectorAll('img, canvas, image').length, bg: getComputedStyle(el.querySelector('svg')!).backgroundColor }));
+      assert.deepEqual(mark, { svg: 2, raster: 0, bg: 'rgba(0, 0, 0, 0)' }, `${name}: the SVG N, transparent`);
+      assert.equal(await d.page.locator('img[data-nova-mark]').count(), 0, `${name}: no inline artwork left on the page`);
       assert.equal(Math.round((await icon(d.page).boundingBox())!.width), 112, `${name}: the app’s hero size`);
       assert.equal(await d.page.locator('#pair-icon').getAttribute('aria-hidden'), 'true', `${name}: decorative`);
       // Its colours come from the public design system: every token it reads is set here.
-      const tokens = await d.page.evaluate(() => ['--orb-core', '--accent-secondary', '--orb-listening', '--orb-attention', '--status-error'].map((n) => [n, getComputedStyle(document.documentElement).getPropertyValue(n).trim()]));
+      const tokens = await d.page.evaluate(() => ['--mark-left-outer', '--mark-left-mid', '--mark-left-inner', '--mark-right-outer', '--mark-right-mid', '--mark-right-inner', '--orb-core', '--orb-attention', '--status-error', '--bg-base'].map((n) => [n, getComputedStyle(document.documentElement).getPropertyValue(n).trim()]));
       for (const [n, v] of tokens) assert.ok(v, `${name}: ${n} is defined on the public page`);
       // The page's accessible names are as they were.
       assert.equal(await d.page.getByRole('heading', { level: 1 }).textContent(), 'Pair with Nova');

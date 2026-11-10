@@ -1,9 +1,10 @@
 // The agent status icon's preview (/styleguide?entry=status-icon), in Chromium and WebKit: Nova's mark,
-// the owner's artwork, drawn by every state's treatment at 16, 24 and 48 px with its name as its
-// label; canvases that aren't blank; looping states that move; a reduced-motion switch that leaves
-// still frames and swaps without a transition; success settling to idle by itself; the mid-transition
-// demo; and the 180 px hero drawn whole. With NOVA_UI_SHOTS set: the entry at desktop 1440×900 and
-// phone 390×844 in Nebula dark, every state at 96 and 24 px, and an idle → working → idle sequence.
+// the SVG N (UI item 24), drawn by every state's treatment at 16, 24 and 48 px with its name as its
+// label; each an inline SVG of the two ribbons, its stops resolved; looping states that move; a
+// reduced-motion switch that leaves still frames and swaps without a transition; success settling to
+// idle by itself; the mid-transition demo; and the 180 px hero. With NOVA_UI_SHOTS set: the entry at
+// desktop 1440×900 and phone 390×844 in Nebula dark, every state at 96 and 24 px, and an
+// idle → working → idle sequence.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -45,8 +46,8 @@ async function fixture(run: (base: string) => Promise<void>) {
   }
 }
 
-// The hero's pixels, to compare frames.
-const heroFrame = (page: Page) => page.evaluate(() => document.querySelector<HTMLCanvasElement>('[data-si-hero] canvas')!.toDataURL());
+// The hero's frame: the SVG as drawn (its stops' colours, the light's turn, the pulse's scale).
+const heroFrame = (page: Page) => page.evaluate(() => document.querySelector('[data-si-hero] svg')!.outerHTML);
 // The styleguide redraws itself once the appearance arrives (sooner or later, by machine), which
 // replaces every icon. Wait until the preview stays the same preview for a while.
 async function settled(page: Page) {
@@ -62,35 +63,41 @@ const open = async (page: Page, base: string) => {
   await page.goto(`${base}/styleguide?entry=status-icon`);
   await page.waitForFunction((n) => document.querySelectorAll('[data-si-sheet] .status-icon').length === n && document.querySelector('[data-si-hero] .status-icon'), STATES.length * SIZES.length);
   await settled(page);
+  await sleep(100); // a frame for every icon to take its state's colours
 };
 // Every cell, measured in one task (a redraw between finding a node and measuring it would hand back
-// a node no longer in the page): its label, size, renderer and how much of it is lit.
+// a node no longer in the page): its label, size, renderer, and what its SVG holds.
 const drawn = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-si-cell]')].map((cell) => {
   const el = cell.querySelector<HTMLElement>('.status-icon')!;
-  const c = el.querySelector('canvas')!;
-  const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
-  let n = 0;
-  for (let i = 3; i < data.length; i += 4) if (data[i]! > 64) n++;
-  return { cell: cell.dataset.siCell!, role: el.getAttribute('role'), label: el.getAttribute('aria-label'), title: el.getAttribute('title'), renderer: el.dataset.renderer, css: c.getBoundingClientRect().width, px: c.width, share: n / (c.width * c.height) };
+  const svg = el.querySelector('svg')!;
+  const ribbons = [...svg.querySelectorAll('path[data-ribbon]')];
+  const stops = [...svg.querySelectorAll('stop[data-stop]')].map((s) => getComputedStyle(s).stopColor);
+  return {
+    cell: cell.dataset.siCell!, role: el.getAttribute('role'), label: el.getAttribute('aria-label'), title: el.getAttribute('title'), renderer: el.dataset.renderer,
+    css: svg.getBoundingClientRect().width, ribbons: ribbons.length, filled: ribbons.every((r) => /^url\(/.test(getComputedStyle(r).fill)),
+    stops: stops.length, resolved: stops.every((c) => c && !/^rgba\(0, 0, 0, 0\)$|transparent/.test(c)),
+    raster: el.querySelectorAll('img, canvas, image').length,
+  };
 }));
-function assertDrawn(cells: Awaited<ReturnType<typeof drawn>>, label: string, renderer?: string) {
+function assertDrawn(cells: Awaited<ReturnType<typeof drawn>>, label: string) {
   assert.equal(cells.length, STATES.length * SIZES.length, `${label}: every state at every size`);
   for (const c of cells) {
     const [, s, px] = /^(.+)-(\d+)$/.exec(c.cell)!;
     assert.equal(c.role, 'img', `${label} ${c.cell}: role`);
     if (s !== 'success') { assert.equal(c.label, s, `${label} ${c.cell}: label`); assert.equal(c.title, s, `${label} ${c.cell}: title`); }
     assert.equal(c.css, Number(px), `${label} ${c.cell}: drawn at its size`);
-    assert.ok(c.px >= Number(px), `${label} ${c.cell}: a backing store at least its size`);
-    assert.ok(c.share > 0.08, `${label} ${c.cell}: not blank (${(c.share * 100).toFixed(1)}% lit)`);
-    if (renderer) assert.equal(c.renderer, renderer, `${label} ${c.cell}: renderer`);
+    assert.equal(c.renderer, 'svg', `${label} ${c.cell}: renderer`);
+    assert.equal(c.ribbons, 2, `${label} ${c.cell}: the N's two ribbons`);
+    assert.ok(c.filled, `${label} ${c.cell}: each filled by its gradient`);
+    assert.equal(c.stops, 6, `${label} ${c.cell}: six stops`);
+    assert.ok(c.resolved, `${label} ${c.cell}: every stop has a colour`);
+    assert.equal(c.raster, 0, `${label} ${c.cell}: no picture inside`);
   }
 }
 
-// Chromium with software WebGL (the container has no GPU), so the shader path is what's checked;
-// WebKit uses whatever its container offers. The fallback has its own test below, with WebGL refused.
-const webglChromium = () => chromium.launch({ executablePath: chromiumPath(), args: ['--disable-background-networking', '--enable-unsafe-swiftshader', '--use-angle=swiftshader'] });
+const chromiumBrowser = () => chromium.launch({ executablePath: chromiumPath(), args: ['--disable-background-networking'] });
 
-for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], ['webkit', webkitBrowser, null]] as const) {
+for (const [engine, launch] of [['chromium', chromiumBrowser], ['webkit', webkitBrowser]] as const) {
   test(`Status icon ${engine}: every state at 16/24/48 labelled and drawn; motion, reduced motion, success and retargeting`, { timeout: 600_000 }, async () => {
     let b: Browser | undefined;
     try {
@@ -106,7 +113,7 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         assert.equal(await p.getByRole('heading', { name: 'Status icon', exact: true }).count(), 1);
 
         // Every state at every size: role img, named by its state, drawn at its size, and not blank.
-        assertDrawn(await drawn(p), engine, expected ?? undefined);
+        assertDrawn(await drawn(p), engine);
         for (const s of STATES) for (const px of SIZES) {
           const sel = `[data-si-cell="${s}-${px}"] .status-icon`;
           // Success is a flourish the sheet replays and that settles to idle, so its name changes
@@ -121,24 +128,19 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
           }
           assert.equal(await p.getByRole('img', { name: s, exact: true }).and(p.locator(sel)).count(), 1, `${s}-${px}: found by its accessible name`);
         }
-        const renderer = await p.locator('[data-si-hero] .status-icon').getAttribute('data-renderer');
-        console.log(`${engine}: renderer ${renderer}`);
-        assert.ok(renderer === 'webgl' || renderer === 'canvas2d');
-        if (expected) assert.equal(renderer, expected, 'the shader renders where WebGL is');
+        assert.equal(await p.locator('[data-si-hero] .status-icon').getAttribute('data-renderer'), 'svg');
 
-        // The 180 px hero is drawn whole: a fresh offscreen canvas is 300 × 150, and sizing it by its
-        // width alone once left the bottom of anything taller than 150 px blank (#393).
-        const rows = await p.evaluate(() => {
-          const c = document.querySelector<HTMLCanvasElement>('[data-si-hero] canvas')!;
-          const d = c.getContext('2d')!.getImageData(0, Math.round(c.height * 0.8), c.width, Math.round(c.height * 0.15)).data;
-          let n = 0;
-          for (let i = 3; i < d.length; i += 4) if (d[i]! > 64) n++;
-          return { share: n / (d.length / 4), css: c.getBoundingClientRect().width };
+        // The 180 px hero: the same SVG, at its size, its two ribbons inside the box (the pulse scales
+        // about the core, so nothing reaches past the edge).
+        const hero = await p.evaluate(() => {
+          const svg = document.querySelector('[data-si-hero] svg') as SVGSVGElement;
+          const box = svg.getBoundingClientRect();
+          const inside = [...svg.querySelectorAll('path[data-ribbon]')].every((r) => { const b = r.getBoundingClientRect(); return b.left >= box.left - 1 && b.right <= box.right + 1 && b.top >= box.top - 1 && b.bottom <= box.bottom + 1; });
+          return { css: box.width, inside, raster: document.querySelectorAll('img[data-nova-mark]').length };
         });
-        assert.equal(rows.css, 180, 'the hero is 180 px');
-        assert.ok(rows.share > 0.5, `the hero's bottom rows are drawn (${(rows.share * 100).toFixed(0)}% lit)`);
-        // It is the artwork: the page's own <img data-nova-mark>, loaded once.
-        assert.equal(await p.evaluate(() => document.querySelectorAll('img[data-nova-mark]').length), 1);
+        assert.equal(hero.css, 180, 'the hero is 180 px');
+        assert.ok(hero.inside, 'the ribbons are inside the hero’s box');
+        assert.equal(hero.raster, 0, 'no hidden artwork for it to sample: the mark is the SVG');
 
         // Moving: a looping state changes frame to frame.
         await p.getByRole('button', { name: 'working', exact: true }).click();
@@ -160,22 +162,23 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         assert.equal(await heroFrame(p), swapped, 'reduced: paused is drawn at once, with no morph after it');
         assert.notEqual(swapped, still, 'and it is a different frame');
         for (const s of STATES.filter((x) => x !== 'success')) { // the sheet replays success on purpose
-          const frames = await p.evaluate((st) => [...document.querySelectorAll<HTMLCanvasElement>(`[data-si-cell^="${st}-"] canvas`)].map((c) => c.toDataURL()), s);
+          const frames = await p.evaluate((st) => [...document.querySelectorAll(`[data-si-cell^="${st}-"] svg`)].map((c) => c.outerHTML), s);
           await sleep(120);
-          assert.deepEqual(await p.evaluate((st) => [...document.querySelectorAll<HTMLCanvasElement>(`[data-si-cell^="${st}-"] canvas`)].map((c) => c.toDataURL()), s), frames, `reduced: ${s} is still at every size`);
+          assert.deepEqual(await p.evaluate((st) => [...document.querySelectorAll(`[data-si-cell^="${st}-"] svg`)].map((c) => c.outerHTML), s), frames, `reduced: ${s} is still at every size`);
         }
         // Still told apart: no two states draw the same still frame.
-        const hero = await p.evaluate(async (states) => {
+        const stills = await p.evaluate(async (states) => {
           const el = document.querySelector('[data-si-hero] .status-icon') as HTMLElement & { setStatus: (s: string) => void };
           const out: string[] = [];
           for (const s of states.filter((x) => x !== 'success')) {
             el.setStatus(s);
             await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-            out.push(el.querySelector('canvas')!.toDataURL());
+            // Its colours as drawn (the gradient ids differ per icon, so compare what they resolve to).
+            out.push([...el.querySelectorAll('stop[data-stop]')].map((st) => getComputedStyle(st).stopColor).join(' '));
           }
           return out;
         }, STATES);
-        assert.equal(new Set(hero).size, hero.length, 'every still frame differs');
+        assert.equal(new Set(stills).size, stills.length, 'every still frame differs');
 
         // Success: a flourish that settles to idle by itself, reduced or not.
         await p.getByRole('button', { name: 'success', exact: true }).click();
@@ -237,7 +240,7 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
             };
           });
           await seq.page.goto(`${base}/styleguide?entry=status-icon`);
-          await seq.page.waitForFunction(() => (document.querySelector('img[data-nova-mark]') as HTMLImageElement | null)?.complete);
+          await seq.page.waitForFunction(() => document.querySelector('[data-si-hero] .status-icon'));
           await seq.page.evaluate(async () => {
             const { statusIcon } = await import('/js/status-icon.js' as string);
             const tile = document.createElement('div');
@@ -270,97 +273,6 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
           assert.ok(await phone.page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'phone: no horizontal scroll');
           await phone.ctx.close();
         }
-        await d.ctx.close();
-      });
-    } finally {
-      await b?.close();
-    }
-  });
-}
-
-// At 2× (#icon-clip, 2026-11-08): the shader draws on one shared canvas that starts at 300×150, and
-// only its width was ever grown, so a draw of 151 to 300 device px (the 96 px empty-chat hero, the
-// 112 px phone Home and /pair) read rows above that canvas and lost the icon's top. Each state's
-// topmost lit row, as a share of its height, must match the 48 px icon's (96 device px, never
-// clipped), and a 48 px icon drawn after the big ones must come out exactly as it did before them.
-test('Status icon chromium at 2×: 96 and 112 px keep their top; a small icon after a big one is unchanged', { timeout: 300_000 }, async () => {
-  let b: Browser | undefined;
-  try {
-    b = await webglChromium();
-    await fixture(async (base) => {
-      const d = await device(b!, { width: 1024, height: 768, scheme: 'dark', serviceWorkers: 'block', scale: 2 });
-      await d.page.goto(`${base}/styleguide?entry=status-icon`);
-      await d.page.waitForSelector('[data-si-hero] .status-icon');
-      const out = await d.page.evaluate(async (states) => {
-        const { statusIcon, setReducedMotion } = await import('/js/status-icon.js' as string);
-        setReducedMotion(true); // still frames, so two draws of one state are the same pixels
-        const row = document.createElement('div');
-        row.style.cssText = 'position:fixed;inset:0 auto auto 0;z-index:9;display:flex;flex-wrap:wrap;gap:4px';
-        document.body.append(row);
-        const settle = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-        const draw = async (s: string, size: number) => { const el = statusIcon({ status: s, size }); row.append(el); await settle(); return el.querySelector('canvas') as HTMLCanvasElement; };
-        const read = (c: HTMLCanvasElement) => {
-          const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
-          let top = -1;
-          for (let i = 3; i < data.length && top < 0; i += 4) if (data[i]! > 64) top = Math.floor((i - 3) / 4 / c.width);
-          return { px: c.width, renderer: (c.parentElement as HTMLElement).dataset.renderer, top: top / c.height, pixels: Array.from(data) };
-        };
-        const res: Record<string, { px: number; renderer?: string; top: number }[]> = {};
-        const again: Record<string, number> = {};
-        for (const s of states) {
-          const first = read(await draw(s, 48));
-          const big = [read(await draw(s, 96)), read(await draw(s, 112))];
-          const after = read(await draw(s, 48));
-          res[s] = [first, ...big, after].map(({ px, renderer, top }) => ({ px, renderer, top }));
-          again[s] = first.pixels.reduce((m, v, i) => Math.max(m, Math.abs(v - after.pixels[i]!)), 0);
-        }
-        row.remove();
-        return { res, again, dpr: devicePixelRatio };
-      }, ['idle', 'listening', 'needs-you', 'stopped', 'paused', 'offline']);
-      assert.equal(out.dpr, 2, 'a 2× screen');
-      for (const [s, [first, i96, i112, after]] of Object.entries(out.res)) {
-        console.log(`${s}: top ${[first, i96, i112, after].map((x) => `${x!.px}px ${(x!.top * 100).toFixed(1)}%`).join(', ')}`);
-        assert.deepEqual([first!.px, i96!.px, i112!.px, after!.px], [96, 192, 224, 96], `${s}: backing stores at 2×`);
-        for (const x of [first, i96, i112, after]) assert.equal(x!.renderer, 'webgl', `${s}: the shader draws`);
-        assert.ok(first!.top >= 0, `${s}: the 48 px icon is drawn`);
-        for (const x of [i96, i112]) {
-          // Two device px either way, at 48 px's resolution (96 px), for the larger icons' finer rows.
-          assert.ok(Math.abs(x!.top - first!.top) <= 2 / 96, `${s} at ${x!.px / 2} px: topmost lit row at ${(x!.top * 100).toFixed(1)}%, the full form's is ${(first!.top * 100).toFixed(1)}%`);
-        }
-        assert.ok(out.again[s]! <= 2, `${s}: a 48 px icon drawn after 96 and 112 px matches the one before them (max channel diff ${out.again[s]})`);
-      }
-      assert.deepEqual(d.errors, [], 'no page errors');
-      await d.ctx.close();
-    });
-  } finally {
-    await b?.close();
-  }
-});
-
-// No WebGL at all (a browser without it, or one whose context is refused): the Canvas2D fallback
-// draws every state, at every size, sized from creation and not blank; and changes still land.
-for (const [engine, launch] of [['chromium', webglChromium], ['webkit', webkitBrowser]] as const) {
-  test(`Status icon ${engine}, WebGL refused: the Canvas2D fallback draws every state at 16/24/48`, { timeout: 300_000 }, async () => {
-    let b: Browser | undefined;
-    try {
-      const launched = await launch();
-      assert.notEqual(typeof launched, 'string', 'a browser is required');
-      b = launched as Browser;
-      await fixture(async (base) => {
-        const d = await device(b!, { width: 1440, height: 900, scheme: 'dark', serviceWorkers: 'block' });
-        await d.ctx.addInitScript(() => {
-          const real = HTMLCanvasElement.prototype.getContext;
-          HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, ...rest: unknown[]) {
-            return /webgl/.test(kind) ? null : (real as (...a: unknown[]) => unknown).call(this, kind, ...rest);
-          } as typeof real;
-        });
-        await open(d.page, base);
-        assertDrawn(await drawn(d.page), `${engine} fallback`, 'canvas2d');
-        await d.page.getByRole('button', { name: 'stopped', exact: true }).click();
-        await d.page.waitForFunction(() => document.querySelector('[data-si-hero] .status-icon')!.getAttribute('aria-label') === 'stopped');
-        const shown = await d.page.evaluate(() => { const c = document.querySelector<HTMLCanvasElement>('[data-si-hero] canvas')!; return c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data.some((v, i) => i % 4 === 3 && v > 64); });
-        assert.ok(shown, 'the hero still draws after a change');
-        assert.deepEqual(d.errors, [], 'no page errors');
         await d.ctx.close();
       });
     } finally {

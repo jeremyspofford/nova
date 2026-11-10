@@ -17,7 +17,7 @@
 import { ICONS } from './components.js';
 import { escapeHtml as esc } from './markdown.js';
 import { ICON_WORDS } from './status.js';
-import { MORPH_MS, STATUS_ICON_STATES, SUCCESS_MS, StatusModel, statusIcon } from './status-icon.js';
+import { MORPH_MS, STATUS_ICON_STATES, SUCCESS_MS, StatusModel, markSvg, statusIcon } from './status-icon.js';
 import { SKY_BAND } from './sg-compositions.js';
 
 // Every frame: [state, what it shows].
@@ -146,7 +146,7 @@ function composer(id) {
 
 function card(style, on) {
   const [name, note, thumb] = style === 'mark'
-    ? ['Mark', 'Today’s. Nova’s mark, one artwork: each state changes its light and motion.', '<img class="ss-img" src="/icons/mark-1024.webp" width="48" height="48" alt="">']
+    ? ['Mark', 'Today’s. Nova’s mark, the one SVG N: each state changes its light and motion.', markSvg({ size: 48 })]
     : ['Sheet', 'Your state sheet: a tile for each state, crossfading in 800 ms. Listening and speaking have no tile yet.', `<span class="ss-quad">${['idle', 'working', 'thinking', 'paused'].map((t) => tileImg(t, 24)).join('')}</span>`];
   return `<button type="button" class="ds-card ss-card" data-ss-pick="${style}" aria-pressed="${on}"><span class="ss-thumb" aria-hidden="true">${thumb}</span><span class="ds-text"><span class="ds-name">${name}</span><span class="ds-note">${note}</span>${on ? '<span class="ds-tags"><span class="pill">This device</span></span>' : ''}</span></button>`;
 }
@@ -186,8 +186,8 @@ export function ssEntry(wrap) {
   return SS_FRAMES.map(([s, said]) => wrap(`${esc(said)} · <a class="link" href="?entry=sheet-icon-style&amp;frame=${s}">Full screen</a>`, ssFrame(s))).join('');
 }
 
-// The 16 or 24 px downscale of a crop, halved step by step as the Mark's is (status-icon.js
-// downscaled), drawn back with every pixel blown up.
+// The 16 or 24 px downscale of a crop, halved step by step (as the raster Mark's was before it
+// became an SVG), drawn back with every pixel blown up.
 function zoom(canvas, img) {
   const px = Number(canvas.dataset.ssPx), k = Number(canvas.dataset.ssK);
   let c = img, w = img.naturalWidth;

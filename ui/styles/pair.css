@@ -13,7 +13,7 @@
 }
 /* The status icon (ui/js/status-icon.js) at the app's hero size, 112 px; the slot holds its place before it draws. */
 .pair-icon { display: grid; place-items: center; flex: none; width: calc(var(--space-8) * 1.75); height: calc(var(--space-8) * 1.75); }
-.pair-icon canvas { display: block; }
+.pair-icon svg { display: block; overflow: visible; }
 .pair-title { font: var(--type-weight-strong) var(--type-h1)/var(--type-line-tight) var(--font-display); text-wrap: balance; }
 .pair-body { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); width: 100%; max-width: calc(var(--space-8) * 7); }
 .pair-line { color: var(--text-secondary); text-wrap: pretty; }
