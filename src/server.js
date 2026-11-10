@@ -132,7 +132,10 @@ export function createNova(config = loadConfig(), deps = {}) {
   // cloud seat only in cloud mode, never in local-first or local-only, whatever opt-in is on; and the
   // run's own mode, when stricter, wins (privacy_mode). deps.memoryGate: tests only.
   const memoryGate = deps.memoryGate ?? ((fields, o) => core.decisionService.ask('memory-gate', fields, { ...o, subsystem: 'memory' }));
-  const runner = new Runner(config, store, { ...deps, records: core.memory, vault: core.vault, ingest: core.ingest, decisions: deps.decisionAsk ?? core.decisionService.ask, memoryGate });
+  // A forgotten day note goes to the core too: every backup and checkpoint, and a note of it that
+  // a restore keeps (no words).
+  const notes = { forget: (n, by) => core.memory.forgetNotes(n, by), restored: (n, by) => core.memory.notesRestored(n, by) };
+  const runner = new Runner(config, store, { ...deps, records: core.memory, notes, vault: core.vault, ingest: core.ingest, decisions: deps.decisionAsk ?? core.decisionService.ask, memoryGate });
   // Era 2's Gmail as a connector: its secrets in the vault, Settings › Connections, mail events.
   core.connectors.register(gmailConnector(runner.gmail));
   // Forgetting through the core's API reaches MEMORY.md and the day notes as well.

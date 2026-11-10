@@ -25,6 +25,7 @@ import { PARTS, TRIAGE, Triggers, triageRule, type Policy, type RuleInput } from
 import { Memory, KINDS as MEMORY_KINDS, type Kind as MemoryKind, type MemoryInput, type UserState } from './memory.ts';
 import { Receipts } from './receipts.ts';
 import { Backups } from './backups.ts';
+import { noteKeyOf } from './forgotten-notes.ts';
 import { CHARTER, identityOf, render } from './identity.ts';
 import { egressOf, info, permits, stricter, type Egress } from './workers.ts';
 import { BrokerClient } from './broker/client.ts';
@@ -401,7 +402,15 @@ export function createCore(o: CoreOptions) {
   });
   const design = new Design({ extensions, profile });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
-  const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)), problem: (m) => log.problem('memory', m) });
+  // A day note's forget (forgetNotes) has no records, only its words.
+  // Its tombstone is a keyed hash under the hub's note key, one of Nova's own keys in the vault (the
+  // vault is made below; the key is read only when a note is forgotten). The vault's key is never in
+  // a nightly backup, so a backup alone can't test a guessed note against a tombstone.
+  const memory = new Memory({
+    db, home: o.home, now, afterForget: (ids, records, words = []) => backups.forget('memory', ids, [...records.map((r) => r.content), ...words]),
+    noteKey: (create) => noteKeyOf(vault, create),
+    problem: (m) => log.problem('memory', m),
+  });
   // A decision model's receipt is checked against the person's settings as they are at the send.
   // A capture source's own opt-in doesn't exist yet, so it is never on here either.
   const liveDecisionOptIn = (f: 'screening' | 'box' | 'capture'): boolean => { if (f === 'capture') return false; const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {}); return v.ok && v.settings.opt_in[f]; };
@@ -598,6 +607,7 @@ export function createCore(o: CoreOptions) {
   // Hub, standby and sync (M4 plan §3).
   const sync = new SyncLog({ db, log, home: o.home, node: meshIdentity.id, now });
   memory.onForgetDone((records) => sync.forgotten(records.map((r) => r.content)));
+  memory.onNotesForgotten((texts) => sync.forgotten(texts));
   // A standby gets the vault sealed through sync.
   sync.vault = vault;
   vault.on('change', () => {
@@ -716,6 +726,8 @@ export function createCore(o: CoreOptions) {
     removed: (ids) => captureSync?.forgetRaw(ids),
     pollMs: o.capture?.pollMs ?? (Number(process.env.NOVA_CAPTURE_POLL_MS) || 10_000),
     retentionHold: () => resilience?.retentionHeld() ?? null,
+    // A forget owed to a backup folder that isn't there: "deleted everywhere" waits for it.
+    owedForgets: (table, ids) => resilience?.nightly.owing(table, ids) ?? [],
     secrets: vault,
     ...(o.capture?.fetch ? { fetch: o.capture.fetch } : {}),
   });
@@ -876,7 +888,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     pause: (k) => ledger.pause(k),
     vaultNames: () => (vault.status().ok ? vault.list() : []),
     cold: {
-      drill: (dir) => runDrill({ live: db, backupDir: dir, source: 'folder', migrations: loadMigrations(), ...(o.resilience?.drill?.root ? { root: o.resilience.drill.root } : {}), ...(o.resilience?.drill?.env ? { sandboxEnv: o.resilience.drill.env } : {}), ...(o.resilience?.drill?.timeoutMs ? { timeoutMs: o.resilience.drill.timeoutMs } : {}) }),
+      drill: (dir) => runDrill({ live: db, noteKey: noteKeyOf(vault), backupDir: dir, source: 'folder', migrations: loadMigrations(), ...(o.resilience?.drill?.root ? { root: o.resilience.drill.root } : {}), ...(o.resilience?.drill?.env ? { sandboxEnv: o.resilience.drill.env } : {}), ...(o.resilience?.drill?.timeoutMs ? { timeoutMs: o.resilience.drill.timeoutMs } : {}) }),
       stage: (dir, c) => checkpoints.stageCold(dir, { node: c.node, floor: c.floor, promotion: c.promotion, backup: { id: c.backup.id, seq: c.backup.seq, at: c.backup.at, path: c.backup.path }, by: c.by }),
       restart: (why, failed) => checkpoints.restartStaged(why, failed),
       seal: () => { try { const k = vault.get(SEAL_NAME); return k ? Buffer.from(k, 'base64') : null; } catch { return null; } },

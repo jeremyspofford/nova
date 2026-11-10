@@ -9,17 +9,19 @@
 //    never put back. The epoch becomes max(now, checkpoint) + 1, so fencing never turns against the
 //    restored hub, and a standby that sees its hub at a higher epoch copies it afresh (replica.ts).
 //  - Forgets: every checkpoint was cleaned when it happened; anything forgotten since is checked
-//    for again here (memories by their "forgotten" notes, capture by its tombstones), and the notes
+//    for again here (memories by their "forgotten" notes, capture by its tombstones, day notes by
+//    their "note-forgotten" notes: an id and a keyed hash of the words, never the words), and the notes
 //    and tombstones come along so nothing forgotten is taken in again.
 //  - Problems, as releases carry them: every open or closed problem of now, matched by when, where
 //    and what; one resolved since stays resolved.
 //  - Nova's records of what exists outside the home (backup runs and drills, the recovery key it
 //    showed, its own vault keys), so backups made since stay Nova's and forgets still reach them.
-import { cpSync, existsSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Db } from '../db.ts';
 import { cleanDbFile } from '../backups.ts';
+import { NOTE_FORGOTTEN, NOTE_RESTORED, dropNotes, forgottenNotes, memoryFiles, noteKeyOf, unfindable, type ForgottenNotes } from '../forgotten-notes.ts';
 import type { Vault } from '../vault.ts';
 import type { Carried } from './checkpoints.ts';
 import { sha256 } from '../workspace.ts';
@@ -72,6 +74,7 @@ export function carryOver(o: CarryOptions): Carried {
   const live = o.live;
   const forgottenIds: string[] = [];
   const forgottenCapture: string[] = [];
+  let notes: ForgottenNotes = { ids: new Set(), hashes: new Set(), count: 0, keyed: 0, key: null };
   const d = new DatabaseSync(file);
   try {
     d.exec('PRAGMA foreign_keys = OFF');
@@ -132,6 +135,19 @@ export function carryOver(o: CarryOptions): Carried {
         if (!known.has(id)) { const { id: _seq, ...rest } = n; upsert(d, 'memory_event', rest, 'INSERT'); known.add(id); }
       }
     }
+    // Day notes forgotten since (they have no record): their content-free notes come along, and
+    // their entries leave the staged MEMORY.md and day notes below, by id or by the keyed hash of their words.
+    const noteRows = live.all<Row>(`SELECT * FROM memory_event WHERE kind IN ('${NOTE_FORGOTTEN}', '${NOTE_RESTORED}') ORDER BY id`);
+    // Found by their keyed hash under this hub's note key (in its vault). A note that can only be
+    // found that way, with the key out of reach, stops the restore: never put back unchecked.
+    notes = forgottenNotes(noteRows.map((r) => ({ kind: String(r.kind), memory_id: String(r.memory_id) })), noteRows.length ? noteKeyOf(o.vault) : null);
+    const missing = unfindable(notes);
+    if (missing) throw new Error(`${missing}, so the restore could bring them back`);
+    if (noteRows.length && has(d, 'memory_event')) {
+      const sig = (r: Row) => `${r.at}\0${r.kind}\0${r.memory_id}`;
+      const known = new Set((d.prepare(`SELECT at, kind, memory_id FROM memory_event WHERE kind IN ('${NOTE_FORGOTTEN}', '${NOTE_RESTORED}')`).all() as Row[]).map(sig));
+      for (const n of noteRows) if (!known.has(sig(n))) { const { id: _seq, ...rest } = n; upsert(d, 'memory_event', rest, 'INSERT'); known.add(sig(n)); }
+    }
     if (has(d, 'capture_tombstone')) {
       const tombs = live.all<Row>('SELECT * FROM capture_tombstone');
       for (const t of tombs) upsert(d, 'capture_tombstone', t, 'INSERT OR IGNORE');
@@ -181,7 +197,27 @@ export function carryOver(o: CarryOptions): Carried {
   // Forgotten rows go the way every forget does: deleted and the freed pages overwritten.
   if (forgottenIds.length) cleanDbFile(file, 'memory', forgottenIds);
   if (forgottenCapture.length) cleanDbFile(file, 'capture_event', forgottenCapture);
-  out.forgotten = { memories: forgottenIds.length, capture: forgottenCapture.length };
+  // Forgotten day notes leave the staged files. The staged sync log's copies of those files go too
+  // (they may hold the notes; the next start logs the files again as they are).
+  let notesDropped = 0;
+  for (const rel of memoryFiles(o.staged)) {
+    const p = join(o.staged, rel);
+    const r = dropNotes(readFileSync(p, 'utf8'), notes);
+    if (!r) continue;
+    writeFileSync(p, r.text);
+    notesDropped += r.dropped;
+  }
+  if (notesDropped) {
+    const s = new DatabaseSync(file);
+    try {
+      s.exec('PRAGMA secure_delete = ON');
+      if (has(s, 'sync_log')) s.exec(`DELETE FROM sync_log WHERE tbl = 'file' AND (pk = 'MEMORY.md' OR pk LIKE 'memory/%')`);
+      s.exec('VACUUM');
+    } finally {
+      s.close();
+    }
+  }
+  out.forgotten = { memories: forgottenIds.length, capture: forgottenCapture.length, notes: notesDropped };
 
   // ---- this node's place in the mesh: now's ----
   const meshNow = join(o.home, 'mesh');

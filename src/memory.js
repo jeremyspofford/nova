@@ -114,10 +114,15 @@ function preamble(text) {
 export class Memory {
   // records: the core's memory (core.memory), where MEMORY.md's entries live. Day notes,
   // search and forContext work without it.
-  constructor(home, timezone = 'UTC', { records = null } = {}) {
+  // onNoteForget(notes, by): day notes were forgotten ([{ id, text }]); the server sends them to the
+  // core (core.memory.forgetNotes), so the forget reaches every backup and checkpoint and a restore
+  // can't bring them back. onNoteRestore(notes, by): undo put forgotten ones back.
+  constructor(home, timezone = 'UTC', { records = null, onNoteForget = null, onNoteRestore = null } = {}) {
     this.home = home;
     this.timezone = timezone;
     this.records = records;
+    this.onNoteForget = onNoteForget;
+    this.onNoteRestore = onNoteRestore;
     this.file = join(home, 'MEMORY.md');
     this.dir = join(home, 'memory');
     this.rendered = join(this.dir, '.rendered.json'); // the last render's hash and ids
@@ -384,7 +389,10 @@ export class Memory {
     const rec = this.records ? (this.sync(), this.record(id)) : null;
     if (!rec || !has(SHOWN, rec.kind)) {
       const hit = this.findNote(id);
-      return hit ? [this.removeEntry(hit)] : [];
+      if (!hit) return [];
+      const removed = [this.removeEntry(hit)];
+      this.notesForgotten(removed, by);
+      return removed;
     }
     const x = this.view(this.latest(rec.id));
     const e = recordEntry(x);
@@ -399,7 +407,7 @@ export class Memory {
     }
     this.publish();
     const removed = [{ id: e.id, file: 'MEMORY.md', section: SHOWN[x.r.kind], index, line: recordLine(x), text: e.text, hand: e.by === 'hand', kind: x.r.kind, from: e.from, at: e.at, by: x.r.recorded_by }];
-    return [...removed, ...this.forgetTwins(e.text, e.from)];
+    return [...removed, ...this.forgetTwins(e.text, e.from, by)];
   }
 
   // A memory forgotten some other way (the core's API): its words leave MEMORY.md and the day
@@ -410,8 +418,19 @@ export class Memory {
     for (const r of records) this.forgetTwins(r.content, r.source);
   }
 
+  // Day notes taken out of the files by a forget: the core carries the forget into every backup and
+  // checkpoint (in their words, which may differ from the memory's) and keeps a content-free note
+  // of it, so a restore can't bring them back.
+  // On a standby the database is the hub's copy, so nothing is recorded here: the hub's own note of
+  // the forget arrives by sync.
+  notesForgotten(removed, by = 'person') {
+    if (this.readOnly?.()) return;
+    const notes = removed.filter((r) => r.file !== 'MEMORY.md').map((r) => ({ id: r.id, text: r.text }));
+    if (notes.length && this.onNoteForget) this.onNoteForget(notes, by);
+  }
+
   // The day notes that say the same thing as a forgotten memory.
-  forgetTwins(text, from) {
+  forgetTwins(text, from, by = 'person') {
     const removed = [];
     const stem = (w) => w.slice(0, 5); // "allergy" and "allergic" are the same thing here
     const want = [...new Set(terms(text).map(stem))];
@@ -430,6 +449,7 @@ export class Memory {
         removed.push(this.removeEntry({ path, doc, entry: twin }));
       }
     }
+    this.notesForgotten(removed, by);
     return removed;
   }
 
@@ -443,6 +463,7 @@ export class Memory {
   }
 
   restore(items) {
+    const back = [];
     for (const it of [...items].reverse()) {
       if (!it || typeof it !== 'object') continue;
       if (it.file === 'MEMORY.md') { this.restoreRecord(it); continue; }
@@ -450,9 +471,14 @@ export class Memory {
       const path = join(this.home, it.file);
       if (this.findNote(it.id)) continue;
       const doc = existsSync(path) ? this.load(path) : parse(`# ${longDay(it.file.slice(7, 17))}\n`);
-      insertEntry(doc, it.line.replace(/\n/g, ' '), it.index ?? Infinity);
+      const line = it.line.replace(/\n/g, ' ');
+      insertEntry(doc, line, it.index ?? Infinity);
       this.write(path, doc);
+      const e = parse(line).entries[0];
+      if (e) back.push({ id: e.id, text: e.text });
     }
+    // Put back by the person: a restore from an older backup leaves them, as it does any note.
+    if (back.length && this.onNoteRestore && !this.readOnly?.()) this.onNoteRestore(back, 'person');
   }
 
   // Forgetting deleted the record for real, so undo can only make it again from what the Memory

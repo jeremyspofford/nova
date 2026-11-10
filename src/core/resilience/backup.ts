@@ -34,6 +34,7 @@ import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import { SKILL, cleanDbFile, skillDirs } from '../backups.ts';
 import { CoreError } from '../errors.ts';
+import { needles, scrubWords } from '../forgotten-notes.ts';
 import { decryptTo, encryptDir, keyFingerprint, readHeader, safeRel, verifyFile } from './archive.ts';
 import { dropScratch, makeScratch } from './scratch.ts';
 import { writeJson } from '../workspace.ts';
@@ -378,11 +379,12 @@ export class NightlyBackups {
   // ---- forgetting -------------------------------------------------------------------------------
 
   // A forget, carried into every backup and every encrypted copy, in every folder Nova ever backed
-  // up to (backups.ts calls this). A folder that isn't there owes it.
+  // up to (backups.ts calls this). A folder that isn't there owes it. A forget of a day note has
+  // words and no rows.
   forget(table: string, ids: string[], words: string[]): { cleaned: string[]; destroyed: string[] } {
     const cleaned: string[] = [];
     const destroyed: string[] = [];
-    if (!ids.length) return { cleaned, destroyed };
+    if (!ids.length && !needles(words).length) return { cleaned, destroyed };
     // What was owed before goes first, so forgets reach each folder in the order they were made.
     this.applyOwed();
     for (const f of this.folders()) {
@@ -417,6 +419,14 @@ export class NightlyBackups {
       by.set(k, v);
     }
     return [...by.values()];
+  }
+
+  // The folders that still owe a forget of any of these rows: they hold a copy until they are back.
+  owing(table: string, ids: string[]): { folder: string; kind: FolderKind }[] {
+    const want = new Set(ids);
+    const out = new Map<string, { folder: string; kind: FolderKind }>();
+    for (const o of this.#loadOwed()) if (o.table === table && o.ids.some((id) => want.has(id))) out.set(`${o.kind}\0${o.folder}`, { folder: o.folder, kind: o.kind });
+    return [...out.values()];
   }
 
   // Carries owed forgets into each folder that is back. Called before a backup, a prune and a
@@ -616,17 +626,14 @@ export function cleanBackup(dir: string, table: string, ids: string[], words: st
   });
   for (const d of skills) rmSync(join(dir, 'files', safeRel(d)), { recursive: true, force: true });
   m.db = { path: 'nova.db', sha256: sha256File(db), bytes: statSync(db).size };
-  const ws =words.map((w) => w.trim()).filter((w) => w.length >= 3);
-  if (ws.length) {
+  if (needles(words).length) {
     m.files.forEach((f) => {
       const p = join(dir, 'files', safeRel(f.path));
       if (!existsSync(p) || lstatSync(p).isSymbolicLink()) return;
-      const raw = readFileSync(p);
-      if (!ws.some((w) => raw.includes(Buffer.from(w)))) return;
-      if (raw.includes(0)) throw new Error(`${f.path} holds forgotten words and isn’t text, so it can’t be cleaned.`);
-      // Lines that carry the words go; what's left of a record spread over lines goes too.
-      let text = raw.toString('utf8').split('\n').filter((line) => !ws.some((w) => line.includes(w))).join('\n');
-      for (const w of ws) text = text.split(w).join('');
+      // Lines that carry the words (as written, or spaced differently) go; what's left of a record
+      // spread over lines goes too.
+      const text = scrubWords(readFileSync(p), words, f.path);
+      if (text === null) return;
       writeFileSync(p, text);
       f.sha256 = sha256File(p);
       f.bytes = statSync(p).size;
