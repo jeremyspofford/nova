@@ -2,7 +2,8 @@
 // nova-about-deploy-visibility-delta-2026-11-06.md §2), GENERATED at view time from records the
 // repository already keeps, never from a hand-kept progress list:
 //   - the roadmap, docs/builder-packet/ROADMAP-AND-GATES.md: its milestones and tracks;
-//   - gate evidence, docs/evidence/*.md: a milestone whose gate evidence is filed is merged;
+//   - gate evidence, docs/evidence/*.md: a milestone whose gate evidence is filed is merged, unless
+//     the file's own result line ("Result: failed" or "partial") says the gate didn't pass;
 //   - the ledger, docs/ledger/*.md (one file per merge since 2026-11-06) and the history before it in
 //     docs/LEDGER.md's plain-language section: a merge recorded there is merged;
 //   - plans, docs/plans/<milestone>.md: a milestone with a plan and no evidence is designed.
@@ -36,6 +37,15 @@ export interface Evidence {
   // A ledger entry's date (YYYY-MM-DD), and the pull request its history entry names.
   date?: string;
   pull?: number;
+  // Where the record opens (A-080, F-048): the file at the running commit (or main) in the public
+  // repository, and the pull request a history entry names. Built here from the path, never taken
+  // from the file, so a link can only open the record it names.
+  url?: string;
+  pull_url?: string;
+  // A gate evidence file's own result line, when it has one: passed, failed or partial; and
+  // whether it was run on emulated devices.
+  result?: 'passed' | 'failed' | 'partial';
+  emulated?: boolean;
 }
 export interface Item { id: string; name: string; state: State; why: string; evidence: Evidence | null }
 export interface Workstream { name: string; source: 'roadmap' | 'ledger'; items: Item[] }
@@ -66,8 +76,16 @@ function range(a: string, b: string): string[] {
 }
 
 // A ledger entry: its headline, then "- What changed:", "- What you can now do:", "- Still unfinished:".
+// A part runs on over lines indented under it (LEDGER.md's older entries), so a list in "Still
+// unfinished" keeps every item, not only its first line.
 function entryParts(lines: string[]) {
-  const part = (label: string) => strip(lines.find((l) => l.startsWith(`- ${label}:`))?.slice(label.length + 3) ?? '') || undefined;
+  const part = (label: string) => {
+    const at = lines.findIndex((l) => l.startsWith(`- ${label}:`));
+    if (at < 0) return undefined;
+    const more: string[] = [];
+    for (let i = at + 1; i < lines.length && /^\s{2,}\S/.test(lines[i]!); i++) more.push(lines[i]!.trim());
+    return strip([lines[at]!.slice(label.length + 3), ...more].join(' ')) || undefined;
+  };
   return { changed: part('What changed') ?? part('What they delivered') ?? part('What it delivered'), now: part('What you can now do'), unfinished: part('Still unfinished') };
 }
 
@@ -112,7 +130,9 @@ function evidenceFiles(root: string, problems: string[]): Pick<Found, 'gates' | 
     const title = firstHeading(text);
     if (!title) { problems.push(`docs/evidence/${f} has no "# " title, so it wasn't read as evidence.`); continue; }
     // Gate evidence says so in its title: "M9 gate …", "M10a gate evidence: …", "M5 evidence — …".
-    const ev: Evidence = { kind: 'gate', path: `docs/evidence/${f}`, title };
+    // Its own result line, if it has one: "Result: passed", "**Result:** failed", "Result: partial (emulated)".
+    const r = /^\**Result:\**\s*(passed|failed|partial)\b([^\n]*)$/im.exec(text);
+    const ev: Evidence = { kind: 'gate', path: `docs/evidence/${f}`, title, ...(r ? { result: r[1]!.toLowerCase() as Evidence['result'], ...(/emulated/i.test(r[2]!) ? { emulated: true } : {}) } : {}) };
     const m = /^(M\d+[a-z]?)\s+(gate|evidence)\b/i.exec(title);
     if (m) { if (!gates.has(m[1]!)) gates.set(m[1]!, ev); continue; }
     const named = /^(.+?)\s+gate\b/i.exec(title);
@@ -148,7 +168,7 @@ function history(root: string, problems: string[]): Map<string, Evidence> {
     const fields = line.slice(2, -2).split(' · ');
     if (fields.length < 3) return;
     let end = i + 1;
-    while (end < part.length && part[end]!.startsWith('- ')) end++;
+    while (end < part.length && (part[end]!.startsWith('- ') || /^\s{2,}\S/.test(part[end]!))) end++;
     const body = part.slice(i + 1, end);
     const pr = /^#(\d+)/.exec(fields[1]!.trim());
     const ev = (date?: string): Evidence => ({ kind: 'ledger', path: 'docs/LEDGER.md', title: strip(fields.slice(2).join(' · ')), ...entryParts(body), ...(date ? { date } : {}), ...(pr ? { pull: Number(pr[1]) } : {}) });
@@ -185,7 +205,8 @@ function roadmap(root: string, problems: string[]): Workstream | null {
     const code = own?.code ?? (CODE.test(id) ? id : null);
     if (own && /\(no work scheduled\)/i.test(own.title)) return { id, name, state: 'none', why: 'The roadmap schedules no work for it.', evidence: { kind: 'roadmap', path, title: own.title } };
     const gate = code ? found.gates.get(code) : found.namedGates.find((g) => g.lead === name.toLowerCase() || name.toLowerCase().startsWith(g.lead))?.ev;
-    if (gate) return { id, name, state: 'merged', why: 'Its gate evidence is filed.', evidence: gate };
+    if (gate?.result === 'failed' || gate?.result === 'partial') return { id, name, state: 'progress', why: `Its gate evidence is filed, and says the gate ${gate.result === 'failed' ? 'failed' : 'passed only in part'}.`, evidence: gate };
+    if (gate) return { id, name, state: 'merged', why: gate.result === 'passed' ? `Its gate evidence is filed and says the gate passed${gate.emulated ? ', on emulated devices' : ''}.` : 'Its gate evidence is filed; the file states no result line, so this rests on it being filed.', evidence: gate };
     const merged = code ? found.history.get(code) : undefined;
     if (merged) return { id, name, state: 'merged', why: 'The ledger records it merged.', evidence: merged };
     const plan = code ? found.plans.get(code) : undefined;
@@ -212,9 +233,11 @@ function roadmap(root: string, problems: string[]): Workstream | null {
 // ---- the ledger's workstreams -----------------------------------------------------------------------
 
 // docs/ledger/<date>-<branch>.md, newest first: each entry's area is its workstream ("UI rebuild
-// (design)" is the UI rebuild's). A design-only merge ("(design)", "(ADR)", or a headline that says
-// "not built yet") is designed; a part of a
-// series ("(2 of 3)") is in progress until its last part is in; everything else in the ledger is merged.
+// (design)" is the UI rebuild's). A merge that ships no working capability declares it in its area
+// ("(design)", "(ADR)"; docs/ledger/README.md), and tests/ledger-files.test.js holds every entry whose
+// headline says so (for the owner's reaction, proposed, not built yet) to that note: it is designed.
+// A part of a series ("(2 of 3)") is in progress until its last part is in; everything else in the
+// ledger is merged.
 function ledger(root: string, problems: string[]): Workstream[] {
   const dir = join(root, 'docs', 'ledger');
   const streams = new Map<string, Workstream>();
@@ -239,17 +262,29 @@ function ledger(root: string, problems: string[]): Workstream[] {
     if (!streams.has(key)) streams.set(key, { name: e.base, source: 'ledger', items: [] });
     const part = /^(\d+) of (\d+)$/.exec(e.note);
     const ev: Evidence = { kind: 'ledger', path: `docs/ledger/${e.f}`, title: e.headline, date: e.date, ...entryParts(e.lines.slice(1)) };
-    const state: State = /\b(design|adr)\b/i.test(e.note) || /\bnot built yet\b/i.test(e.headline) ? 'designed' : part && (series.get(key) ?? 0) < Number(part[2]) ? 'progress' : 'merged';
+    const state: State = designOnly(e.note, e.headline) ? 'designed' : part && (series.get(key) ?? 0) < Number(part[2]) ? 'progress' : 'merged';
     const why = state === 'designed' ? 'A design merged; the ledger has no build for it in this entry.' : state === 'progress' ? `Part ${part![1]} of ${part![2]} is merged; the rest isn’t in the ledger yet.` : 'The ledger records it merged.';
     streams.get(key)!.items.push({ id: e.f.replace(/\.md$/, ''), name: e.headline, state, why, evidence: ev });
   }
   return [...streams.values()];
 }
 
-// GET /api/v1/pipeline.
-export function pipelineView(root: string): PipelineView {
+// A ledger entry that ships no working capability: its area note says design or ADR, or its headline
+// says it is for the owner's reaction, proposed, or not built yet (the words the note must go with).
+export const DESIGN_NOTE = /\b(design|adr)\b/i;
+export const DESIGN_WORDS = /\b(not built yet|for (?:the )?owner(?:['’]s)? reaction|proposed for)\b/i;
+export const designOnly = (note: string, headline: string) => DESIGN_NOTE.test(note) || DESIGN_WORDS.test(headline);
+
+// The public repository the records are read from, for links that open them.
+export const REPOSITORY = 'https://github.com/jeremyspofford/nova';
+const linked = (ev: Evidence, ref: string): Evidence => ({ ...ev, url: `${REPOSITORY}/blob/${ref}/${ev.path.split('/').map(encodeURIComponent).join('/')}`, ...(ev.pull ? { pull_url: `${REPOSITORY}/pull/${ev.pull}` } : {}) });
+
+// GET /api/v1/pipeline. `commit`: the running build's, so a link opens the record this build read.
+export function pipelineView(root: string, o: { commit?: string | null } = {}): PipelineView {
   const problems: string[] = [];
-  const workstreams = [roadmap(root, problems), ...ledger(root, problems)].filter((w): w is Workstream => !!w && w.items.length > 0);
+  const ref = o.commit && /^[0-9a-f]{7,40}$/.test(o.commit) ? o.commit : 'main';
+  const workstreams = [roadmap(root, problems), ...ledger(root, problems)].filter((w): w is Workstream => !!w && w.items.length > 0)
+    .map((w) => ({ ...w, items: w.items.map((it) => (it.evidence ? { ...it, evidence: linked(it.evidence, ref) } : it)) }));
   const counts = Object.fromEntries(STATES.map((s) => [s, 0])) as Record<State, number>;
   for (const w of workstreams) for (const it of w.items) counts[it.state]++;
   return { workstreams, counts, sources: SOURCES, problems };

@@ -1,4 +1,4 @@
-**2026-11-08 · Design system · Jarvis ring compositions (step 1, for owner reaction)**
+**2026-11-08 · Design system (design) · Jarvis ring compositions (step 1, for owner reaction)**
 - What changed: step 1 of the owner's "Jarvis" design system. It is compositions only, for the owner's reaction before any tokens land.
   - ui/js/jarvis-ring.js has a pure renderer, `jarvisRing({status, size, reduced, amplitude})`, returning SVG.
     - Each ring is a circle with pathLength=360, so segments and arcs are stroke-dasharrays in degrees.

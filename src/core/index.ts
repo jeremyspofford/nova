@@ -1193,7 +1193,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     // own checkout (CHANGELOG.md and docs/changelog/; the roadmap, gate evidence, plans and ledger),
     // read on every ask. No parameter names a file, nothing is written, and no network is asked.
     { method: 'GET', path: '/changelog', summary: 'What changed in Nova, newest version first, as CHANGELOG.md says it; the changes merged but not yet in a version; and the running version, to compare with.', handle: () => changelogView(CODE_ROOT, { version: build.identity.version, commit_short: build.identity.commit_short }) },
-    { method: 'GET', path: '/pipeline', summary: 'Where Nova stands: each workstream’s items (merged, in progress, designed or not started) with the evidence behind each state, generated from the roadmap, gate evidence, plans and the ledger.', handle: () => pipelineView(CODE_ROOT) },
+    { method: 'GET', path: '/pipeline', summary: 'Where Nova stands: each workstream’s items (merged, in progress, designed or not started) with the evidence behind each state, generated from the roadmap, gate evidence, plans and the ledger.', handle: () => pipelineView(CODE_ROOT, { commit: build.identity.commit }) },
     // The ingest gate (Amendment 2026-10-30-C Part 3).
     { method: 'GET', path: '/ingest/screens', summary: 'The latest screens of outside content: source, scores, flags and verdict, by hash; never the content. ?limit=', handle: ({ query }) => ingest.list(Number(query.get('limit')) || 50) },
     { method: 'GET', path: '/ingest/candidates', summary: 'Memory waiting for your OK: what a conversation that read outside content, or one of your devices, wanted kept, with where it came from.', handle: () => ingest.candidates() },

@@ -113,6 +113,10 @@ test('About, What’s new, Where Nova stands and the version stamp, on a phone a
       const row = page.locator('#pipeline-view .pipeline-row summary').first();
       if (touch) await row.tap(); else await row.click();
       assert.match(await page.locator('#pipeline-view .pipeline-row').first().locator('.pipeline-ev').innerText(), /docs\//, `${tag}: a row opens its evidence`);
+      // The evidence opens: a link to the record at the running commit, in a tab of its own (A-080).
+      const evLink = page.locator('#pipeline-view .pipeline-row').first().locator('a.pipeline-ev-path');
+      assert.equal(await evLink.getAttribute('href'), `https://github.com/jeremyspofford/nova/blob/${RUNNING}/${await evLink.innerText()}`, `${tag}: the evidence links to its file at the running commit`);
+      assert.deepEqual([await evLink.getAttribute('target'), await evLink.getAttribute('rel')], ['_blank', 'noopener noreferrer']);
       if (touch) await row.tap(); else await row.click();
 
       // Settings › About Nova is About's door from Settings.

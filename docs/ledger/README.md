@@ -14,4 +14,8 @@ One file per merge to main, written in the pull request itself, newest first by 
 - Checked: …
 ```
 
+**A merge that ships no working capability** (compositions for the owner's reaction, a proposed decision record, a design not built yet) adds a note to its area: `(design)`, or `(ADR)` for a decision record, as in `UI rebuild (design)`. Where Nova stands (`/pipeline`) counts such an entry as Designed, never Merged, and the workstream is still the area without its note. An entry whose headline says it is for the owner's reaction, proposed, or not built yet must carry the note; `tests/ledger-files.test.js` checks it.
+
+**One line per bullet:** each of the four parts is a single line.
+
 A merge without an entry is incomplete, the same as one without gate evidence. `tests/ledger-files.test.js` checks every file here keeps this shape.

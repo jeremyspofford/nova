@@ -1,4 +1,4 @@
-**2026-11-09 · UI rebuild · Messages inbox and quiet hours: compositions for the owner's reaction**
+**2026-11-09 · UI rebuild (design) · Messages inbox and quiet hours: compositions for the owner's reaction**
 - What changed: the design-first step of the wiring item "messages inbox / quiet hours". /styleguide?entry=inbox, marked for the owner's reaction, has eight frames built from the real model (src/core/triggers.ts): the list, open, held, released, quiet hours, editing them, and phone and Duo cover layouts. Nothing is wired into the app.
 - What you can now do: react to the inbox and quiet-hours design before it's built.
 - Still unfinished: the wiring waits for the owner. Mismatches found:

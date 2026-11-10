@@ -1,4 +1,4 @@
-**2026-11-09 · UI rebuild · Deploy and rollback in Health: compositions for the owner's reaction**
+**2026-11-09 · UI rebuild (design) · Deploy and rollback in Health: compositions for the owner's reaction**
 - What changed: the design-first step of the wiring item "supervisor deploy / rollback in Health". /styleguide?entry=supervisor, marked for the owner's reaction, has 17 frames built from the real model (src/supervisor): what is running, a deploy moving through its seven gates, a deploy stopped at a named gate, the canary's own rollback, a manual rollback and its refusal, history, and phone and Duo cover layouts. Nothing is wired into the app.
 - What you can now do: react to how a release and a rollback read in Health before they are built.
 - Still unfinished: the wiring waits for the owner. No route lists deployable tags, nothing previews whether a rollback will be refused, and phones and the Duo cover can't deploy or roll back at all.

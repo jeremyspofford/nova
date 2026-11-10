@@ -1,4 +1,4 @@
-**2026-11-09 · UI rebuild · Infrastructure projects and network targets: compositions for the owner's reaction**
+**2026-11-09 · UI rebuild (design) · Infrastructure projects and network targets: compositions for the owner's reaction**
 - What changed: the design-first step of the wiring item "infra project / network target forms". /styleguide?entry=infra-forms, marked for the owner's reaction, has 13 frames built from the real model (src/core/infra, src/core/network): the lists and empty states, add forms with in-place validation, the credential step and where secrets go, first-use failures, editing, and phone and Duo cover layouts. Nothing is wired into the app.
 - What you can now do: react to the forms before they're built, and see exactly what the backend allows.
 - Still unfinished: the wiring waits for the owner. The backend has no remove, rename or re-address route and no test-the-connection endpoint. Adding a target or saving a secret needs no passkey; only applies are tier 3. All of these are owner questions.
