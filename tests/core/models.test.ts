@@ -192,7 +192,7 @@ test('privacy tightened to local-only while the local model is answering: the fa
     let settled = false;
     pending.then(() => { settled = true; }, () => { settled = true; });
     // Bounded, so a local call that never arrives fails with its reason instead of hanging the file
-    // (a CI run of this file once never finished; pipeline item #467).
+    // (a CI run of this file once never finished; pipeline item #468).
     let gaveUp: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([inChat, new Promise((_, no) => { gaveUp = setTimeout(() => no(new Error(`the local model was never asked within 30 s; requests: ${JSON.stringify(ollama.requests.map((r: { method: string; path: string }) => `${r.method} ${r.path}`))}; pending settled: ${String(settled)}`)), 30_000); })]);
     clearTimeout(gaveUp);
