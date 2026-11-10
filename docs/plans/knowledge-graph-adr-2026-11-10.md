@@ -27,6 +27,10 @@ the owner's record requires (`:5`) is a fresh Gemini chat over the whole record,
 review's findings have come back and each is answered in this record or in a short amendment to it. PR 1
 (the graph-table guard) and slice 1a may proceed now.
 
+**Stage 2:** Not opened. Stored graph tables wait on stage 2's three conditions (section 2). Only the
+owner opens it, by changing this line to "Opened <date> (owner)."; until then
+`tests/core/graph-guard.test.ts` fails any migration that creates a `graph_` table, view or index.
+
 Every claim about today's code was read at `4be7973b2` (main after PR
 #474) and carries a `file:line`. The audits read `d948aa0a`; where Batch 2 has changed the code since,
 this record says so.
@@ -389,7 +393,7 @@ range once its diagram and user trials are taken out. A hypothesis until built.
 | # | PR | Test first |
 |---|---|---|
 | 0 | This record | ledger-files, check-changelog |
-| 1 | A guard: a migration that creates a `graph_` table fails unless this record's status reads Accepted (F-057's acceptance criterion) | The guard fails on a stand-in migration |
+| 1 | A guard: a migration that creates a `graph_` table fails unless this record's status reads Accepted (F-057's acceptance criterion) and its stage 2 line reads Opened (`tests/core/graph-guard.test.ts`) | The guard fails on a stand-in migration |
 | 2 | Slice 1a: filter and true source line (F-062) | The F-062 table-driven tests |
 | 3 | Slice 1b: `src/core/graph/` projection and `GET /memory/{id}/sources` | Fixtures and the forget canary, stage 1 form |
 | 4 | Slice 1c: the panel in the Memory view | View tests, keyboard, no-request, no-model |
