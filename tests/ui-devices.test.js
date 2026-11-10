@@ -45,6 +45,18 @@ test('approving a device is tier 3: the digits, who it is and what it may do, a 
   assert.match(revokeSheet(phone), /data-tier="3" data-revoke="p"[\s\S]*disabled>Revoke/);
 });
 
+test('what a device chose to call itself is text, never markup, in its row and on the approval sheet', () => {
+  // A joining or paired device picks its own name and platform; the hub keeps them as plain text and
+  // the screens escape them, in content and in attributes alike.
+  const evil = '<img src=x onerror="alert(1)">"\'&';
+  const row = deviceRow({ ...phone, id: 'e', name: evil, agent: { version: evil } }, { now });
+  const sheet = joinRequestSheet({ id: 'r2', name: evil, kind: 'computer', platform: evil, capabilities: [], fingerprint: 'ABCD-EFGH-JKMN-PQRS-TVWX-YZ01-2345-6789', confirmation: '042917' });
+  for (const html of [row, sheet]) {
+    assert.doesNotMatch(html, /<img|onerror="/);
+    assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;&quot;&#39;&amp;/);
+  }
+});
+
 test('the add sheet: a QR that decodes to the pairing address, the address and code, the command, the warning', () => {
   const p = {
     pairing_id: 'x', code: 'ABCD-EFGH', expires_at: '2026-10-29T10:05:00Z', hub_url: 'https://hub.example:4320', hub_fingerprint: 'ABCD-EFGH',

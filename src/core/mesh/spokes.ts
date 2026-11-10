@@ -17,6 +17,7 @@ import type { Device, Devices } from './devices.ts';
 import type { MeshIdentity } from './identity.ts';
 import { helloProofMessage, hubResetMessage, rosterDigest } from './wire.ts';
 import { runtimeBundle, type RuntimeBundle } from './agent.ts';
+import { deviceReport } from './device-text.ts';
 
 // Its tables, device_inbox and device_heartbeat, are migration 0007's.
 
@@ -92,7 +93,10 @@ export class Spokes extends EventEmitter {
   // `power: {sleep_after_min, hold}`, its own only. An agent without the power verb ignores it.
   powerAnswer: ((device: Device, body: Record<string, unknown>) => { sleep_after_min: number | null; hold: boolean }) | null = null;
 
-  heartbeat(device: Device, body: Record<string, unknown>): { workloads?: unknown; ok: true; epoch: number; roster_digest: string; runtime: { version: string }; purposes: string[]; restart_runtime?: true; power?: { sleep_after_min: number | null; hold: boolean }; hub_reset?: { id: string; said: string; signature: string; signer: string } } {
+  heartbeat(device: Device, report: Record<string, unknown>): { workloads?: unknown; ok: true; epoch: number; roster_digest: string; runtime: { version: string }; purposes: string[]; restart_runtime?: true; power?: { sleep_after_min: number | null; hold: boolean }; hub_reset?: { id: string; said: string; signature: string; signer: string } } {
+    // The device's words, cleaned once here for everything below (its workloads, whatever the
+    // service; its hardware; its power state): see device-text.ts.
+    const body = deviceReport(report);
     const at = this.#now().toISOString();
     const caps = body.capabilities;
     if (caps !== undefined && (!Array.isArray(caps) || caps.length > 32 || !caps.every((c) => typeof c === 'string' && /^[a-z][a-z0-9._-]{0,39}$/.test(c)))) {
@@ -149,7 +153,8 @@ export class Spokes extends EventEmitter {
 
   // Something the person should know about (a runtime update the agent refused, for one). The same
   // report from the same device is a problem once every ten minutes.
-  report(device: Device, body: Record<string, unknown>): { ok: true } {
+  report(device: Device, report: Record<string, unknown>): { ok: true } {
+    const body = deviceReport(report);
     const what = typeof body.problem === 'string' ? body.problem : '';
     const detail = typeof body.detail === 'string' ? body.detail.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 300) : '';
     const messages: Record<string, string> = {
