@@ -1,0 +1,5 @@
+**2026-11-10 · Architecture (ADR) · Knowledge graph ADR (F-057, A-060), proposed for the owner's ruling and second-model review**
+- What changed: docs/plans/knowledge-graph-adr-2026-11-10.md proposes Nova's knowledge graph as a derived projection over memory, capture, tasks and send records: pointers only, edges only from recorded pointers in version 1, no model, every edge citing its source, every forget removing derived rows in the same transaction and in every copy, and restore rebuilding instead of restoring. It reconciles both audits' first slices into one, inside the Memory view. Docs only; claims about today's code cite file and line.
+- What you can now do: rule on the record and its 12 open questions, and choose the second-model review, before any graph code or slice 1 work starts.
+- Still unfinished: nothing is implemented and no table is added. Slice 1 waits on the ruling; stored tables also wait on F-058 and a measured need.
+- Checked: docs only; ledger-files and check-changelog pass.
