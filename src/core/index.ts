@@ -391,7 +391,7 @@ export function createCore(o: CoreOptions) {
   });
   const design = new Design({ extensions, profile });
   const backups = new Backups({ dir: join(o.home, 'backups'), log });
-  const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)) });
+  const memory = new Memory({ db, home: o.home, now, afterForget: (ids, records) => backups.forget('memory', ids, records.map((r) => r.content)), problem: (m) => log.problem('memory', m) });
   // A decision model's receipt is checked against the person's settings as they are at the send.
   // A capture source's own opt-in doesn't exist yet, so it is never on here either.
   const liveDecisionOptIn = (f: 'screening' | 'box' | 'capture'): boolean => { if (f === 'capture') return false; const v = validateSettings(profile.get<unknown>('models', 'decision') ?? {}); return v.ok && v.settings.opt_in[f]; };

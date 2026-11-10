@@ -169,6 +169,28 @@ test('export writes plain files with exactly the active records', () => {
   assert.ok(!md.includes('Short-lived') && !md.includes('Fact one.'), 'expired and superseded records are left out');
 });
 
+// F-011: exports were written in plain text and skipped by every cleaning, so a forgotten memory
+// lived on in them. A forget now reaches the exports in Nova's exports folder, and every export says
+// where that reach ends.
+test('forgetting a memory removes it from the exports in Nova’s exports folder; the export states the boundary', () => {
+  const { memory, tick } = setup();
+  const keep = memory.remember({ kind: 'fact', content: 'The bike is blue.', recorded_by: 'person' });
+  const gone = memory.remember({ kind: 'fact', content: 'The   safe code is PLANTED-4417.', recorded_by: 'person' });
+  const first = memory.export();
+  tick(60_000);
+  const second = memory.export();
+  assert.match(first.boundary, /exports folder, forgetting a memory removes it/);
+  assert.match(first.boundary, /outside Nova’s reach/);
+  memory.forget(gone.id);
+  for (const out of [first, second]) {
+    const json = readFileSync(out.json, 'utf8');
+    const md = readFileSync(out.markdown, 'utf8');
+    assert.ok(!json.includes('PLANTED') && !md.includes('PLANTED'), `${out.dir} no longer holds the forgotten memory`);
+    assert.deepEqual(JSON.parse(json).records.map((r: { id: string }) => r.id), [keep.id], 'the rest stays');
+    assert.match(md, /The bike is blue\./);
+  }
+});
+
 test('importing keeps a record’s own id, time and source, and never imports the same id twice', () => {
   const { memory } = setup();
   const r = memory.importRecord({ id: 'm3f9a1c2', kind: 'preference', content: 'Takes coffee black.', source: 's1/t1', observed_at: '2026-09-21T16:42:00Z', recorded_by: 'nova' });
