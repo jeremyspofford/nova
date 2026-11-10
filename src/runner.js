@@ -66,8 +66,17 @@ const STATUS_TOOLS = new Set(['nova_capture', 'code_status', 'infra_status', 'ne
 // A connected service's reply (service_call, and home_call, its older name): screened as outside
 // content every time, tainting the run only when a check flags it (owner ruling D6, option b).
 const SERVICE_TOOLS = new Set(['service_call', 'home_call']);
-// Where tool output came from, as the Memory view says it ("a conversation that read …").
-const outputWords = (name) => (SERVICE_TOOLS.has(name) ? 'a connected service’s reply' : 'a tool’s output');
+// F-033, as the owner narrowed it (2026-11-10): whether a screened tool result holds the
+// conversation's memory changes for review, and if so what it was, as the Memory view says it ("a
+// conversation that read …"). Outside content always does; one of Nova's own read-only status tools
+// only when its screen flagged the output (it tainted). Null: it doesn't.
+const SEEN_WORDS = { web: 'a web page', search: 'web search results', email: 'an email', file: 'a file from outside', connector: 'a connected service’s reply' };
+function holdsMemory(name, kind, tainted) {
+  if (STATUS_TOOLS.has(name)) return tainted ? `Nova’s ${name} tool, which a check flagged` : null;
+  if (SERVICE_TOOLS.has(name)) return SEEN_WORDS.connector;
+  if (name === 'exec') return 'a command’s output';
+  return SEEN_WORDS[kind] ?? 'something from outside';
+}
 const STANDING = new Set([...STANDING_EXACT].map((n) => n.normalize('NFC').toLowerCase()));
 // Addresses in text, and an address as compared: no fragment, the URL parser's own spelling.
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'`)\]}]+/gi;
@@ -354,8 +363,9 @@ export class Runner extends EventEmitter {
     // Outside content read anywhere in this conversation is still in its context, so the run
     // starts with that taint (and a helper's report brings its run's).
     run.taint = this.taintOf(before);
-    // So is any tool output or service reply (F-033): what the conversation has seen, said as
-    // where it came from. From then on a memory change waits for the person (keep) and a
+    // So is outside content that didn't taint, such as a command's output or a service's reply,
+    // and a status tool's output only when its screen flagged it (F-033, narrowed by the owner's
+    // ruling of 2026-11-10): what the conversation has seen, said as where it came from. From then on a memory change waits for the person (keep) and a
     // standing-file change asks (T3), in this turn and every later one.
     run.seen = this.outputSeen(before);
     run.toolOutput = run.seen.size > 0;
@@ -539,10 +549,8 @@ export class Runner extends EventEmitter {
       let hints = null;
       let ok = true;
       const taintedBefore = run.taint.length > 0;
-      // From here on this run has seen tool output: a standing-file change asks (T3), and a memory
-      // change waits for the person (F-033).
+      // From here on this run has seen tool output: a standing-file change asks (T3).
       run.toolOutput = true;
-      (run.seen ??= new Set()).add(outputWords(call.name));
       try {
         output = await tool.run(call.args, ctx);
         if (output && typeof output === 'object') ({ output, summary, link, ingest: hints = null } = output);
@@ -570,6 +578,10 @@ export class Runner extends EventEmitter {
         screen = await this.ingest.screen({ ...read, ...this.screenScope(sessionId, run) });
         taints = this.taints(call, screen);
         if (taints) run.taint.push(screen.taint);
+        // Outside content holds memory changes from now on (F-033); a status tool's only when the
+        // screen flagged it (the owner's ruling, 2026-11-10).
+        const seen = holdsMemory(call.name, screen.taint.kind, taints);
+        if (seen) (run.seen ??= new Set()).add(seen);
       }
       // Interstitial Research: a page fetched in this run is one a claim may cite.
       if (run.ir && ok && screen && call.name === 'web_fetch') {
@@ -770,13 +782,20 @@ export class Runner extends EventEmitter {
     return out.filter((x) => { const k = x.screen ?? `${x.kind}:${x.origin}`; if (seen.has(k)) return false; seen.add(k); return true; });
   }
 
-  // The tool output a conversation has seen (F-033), as where each came from: every
-  // tool that returned something, screened or not, flagged or not. A report handed in brings its run's
-  // taint (taintOf), not this.
+  // The outside content a conversation has seen that holds memory (F-033, narrowed by the owner's
+  // ruling of 2026-11-10), as where each came from: every screened read of outside content (a web
+  // page, a search, mail, a file Nova didn't write, a command's output, a service's reply), and a
+  // status tool's output only when its screen flagged it. Nova's own tools that aren't screened
+  // (the person's own files, schedules, skills, helpers) never hold it. A report handed in brings
+  // its run's taint (taintOf), not this.
   outputSeen(session) {
     const out = new Set();
     for (const t of session.turns) {
-      for (const i of t.items) if (i.kind === 'tool' && i.result) out.add(outputWords(i.name));
+      for (const i of t.items) {
+        if (i.kind !== 'tool' || !i.result?.screen) continue;
+        const seen = holdsMemory(i.name, i.result.screen.kind, i.result.taints !== false);
+        if (seen) out.add(seen);
+      }
     }
     return out;
   }
