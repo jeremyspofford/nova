@@ -18,6 +18,12 @@ Use `graph_nodes` and `graph_edges` in the existing SQLite store. Nodes and edge
 
 Traversal is bounded application-level BFS in TypeScript with an explicit visited set and fan-out/hop caps. Recursive CTEs are restricted to lookups of at most three hops: they have no global visited set, so unbounded CTE traversal is prohibited. FTS5 plus sqlite-vec remains the default retrieval path. The graph's retrieval role is anchor → one–two hop expansion for precedent, provenance, and temporal queries only.
 
+**Amended 2026-11-10 by the owner's ruling on the accepted ADR** ([knowledge-graph-adr-2026-11-10.md](knowledge-graph-adr-2026-11-10.md), "The G1 amendments, as ruled"). Where the text above differs, the amendment wins:
+
+- The tables are `graph_node` and `graph_edge` (singular names).
+- Graph rows carry no `deleted_at` column; a forget deletes the derived rows. G4's tombstone is the existing content-free forget marks (the "forgotten" memory event, the day note's keyed-hash "note-forgotten" event, `capture_tombstone`). Limit: the hub deletes at once, and a machine that is switched off learns of the forget when it next connects.
+- Retrieval: "FTS5 plus sqlite-vec remains the default retrieval path" is replaced by "Retrieval today is a shared-word scan. FTS5 is available in the bundled SQLite and is adopted on a measured need. Vectors are not planned while the bundled SQLite refuses extensions."
+
 ## G2 — Prospective decision traces
 
 At the time Nova makes a meaningful decision (Jev/Noul call, approval-tier action, or trade-off choice), the runner writes its trace. A Decision records the actual candidates considered, Jev probability where used, and tier. Links are `BASED_ON` → Evidence, `CITES_PRECEDENT` → earlier Decision, `GOVERNED_BY` → Policy, `APPROVED_BY` → Approval, and `PRODUCED` → Outcome. When the result is known, Outcome `EVALUATES` → Decision. Traces live in the Work Ledger's store and are graphed through G1. Never infer these traces retrospectively from logs.
