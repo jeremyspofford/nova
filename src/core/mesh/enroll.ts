@@ -12,7 +12,7 @@ import { CoreError } from '../errors.ts';
 import type { Db } from '../db.ts';
 import type { Log } from '../log.ts';
 import type { MeshIdentity } from './identity.ts';
-import { SlidingWindowLimiter } from './limiter.ts';
+import { ReportThrottle, SlidingWindowLimiter } from './limiter.ts';
 import { cleanName, KINDS, type Device, type Devices, type Kind } from './devices.ts';
 import { deviceText } from './device-text.ts';
 import { allowedPurposes, checkPurposes, defaultPurposes, fixedPurposes, type Purpose } from './purposes.ts';
@@ -87,7 +87,7 @@ export class Enrollment extends EventEmitter {
   // Per client (rateKey): any public enrollment call, status polls, and wrong codes. New codes,
   // and wrong codes from everyone together, are limited for the whole hub.
   readonly limits: Record<'calls' | 'polls' | 'guesses' | 'allGuesses' | 'pairings', SlidingWindowLimiter>;
-  #reported = new Map<string, number>();
+  #reported: ReportThrottle;
 
   constructor(o: { db: Db; log: Log; devices: Devices; identity: MeshIdentity; now: () => Date; publicUrl: () => string | null }) {
     super();
@@ -105,6 +105,7 @@ export class Enrollment extends EventEmitter {
       allGuesses: new SlidingWindowLimiter({ limit: HUB_GUESSES, windowMs: 5 * 60_000, now: clock }),
       pairings: new SlidingWindowLimiter({ limit: 20, windowMs: 60 * 60_000, now: clock }),
     };
+    this.#reported = new ReportThrottle({ everyMs: REPORT_EVERY_MS, now: clock });
   }
 
   // Counts one call from `address`; refuses it, plainly, when there were too many. A refusal is
@@ -121,12 +122,9 @@ export class Enrollment extends EventEmitter {
   }
 
   #refuse(key: string, what: string, answer = 'Too many tries from this address. Wait a few minutes, then try again.'): never {
-    const now = this.#now().getTime();
-    // A report is remembered only while it holds back the next one, so a flood from many
-    // addresses can't grow this without end.
-    for (const [k, at] of this.#reported) if (now - at > REPORT_EVERY_MS) this.#reported.delete(k);
-    if (!this.#reported.has(key)) {
-      this.#reported.set(key, now);
+    // A report is remembered only while it holds back the next one, and only so many, so a flood
+    // from many addresses can't grow this without end.
+    if (this.#reported.due(key) !== null) {
       this.#log.problem('mesh', key === 'hub'
         ? `Nova turned away ${what}. Someone may be guessing codes; no device can join with a wrong code for a few minutes.`
         : `Nova turned away a device at ${key} that ${what}. If that wasn’t you adding a device, someone else may be trying to.`, { stops: true });

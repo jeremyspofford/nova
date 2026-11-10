@@ -27,6 +27,7 @@ import { isObj, reportOf, type Brief, type PrivacyMode } from '../envelope.ts';
 import type { Worker } from '../workers.ts';
 import type { Device, Devices } from '../mesh/devices.ts';
 import { deviceReport, deviceText } from '../mesh/device-text.ts';
+import { ReportThrottle } from '../mesh/limiter.ts';
 import {
   canonicalJson, captureBatchMessage, captureItemDigest, rawManifestMessage, sha256Hex, tombstoneAckMessage, verifyDeviceSignature,
   type CaptureBatchManifest, type RawManifest,
@@ -40,6 +41,11 @@ export const MAX_BATCH_ITEMS = 200;
 const MAX_RAW_BYTES = 700 * 1024;
 const REFUSAL_EVERY_MS = 10 * 60_000;
 const ID = /^[A-Za-z0-9_.:-]{1,200}$/;
+
+// What a refusal was about. A refusal is reported by the device whose session sent it and this kind,
+// never by its words: those carry what the batch claims (a device id, a count, an item), and a
+// compromised device could vary them to raise a new problem on every request.
+type RefusalKind = 'shape' | 'unknown_device' | 'revoked' | 'other_device' | 'signature' | 'items' | 'raw_signature';
 
 export interface CaptureSyncOptions {
   db: Db;
@@ -65,13 +71,14 @@ interface SyncRow { device_id: string; acked_seq: number; synced_to: string | nu
 
 export class CaptureSync {
   #o: CaptureSyncOptions;
-  #refused = new Map<string, number>();
+  #refused: ReportThrottle;
   #arrived = new Map<string, () => void>();
 
   readonly worker: Worker;
 
   constructor(o: CaptureSyncOptions) {
     this.#o = o;
+    this.#refused = new ReportThrottle({ everyMs: REFUSAL_EVERY_MS, now: () => o.now().getTime() });
     this.worker = this.#makeWorker();
     o.ledger.workers.set(this.worker.id, this.worker);
     o.verifier.registerConfirmation(RAW_CONFIRMATION, (e, brief) => this.#confirm(e, brief));
@@ -100,32 +107,32 @@ export class CaptureSync {
   batch(session: Device, body: Record<string, unknown>): { batch_id: string; acked_to: number; results: { id: string; status: 'kept' | 'duplicate' | 'not_kept'; reason: string | null }[] } {
     const m = body.manifest as CaptureBatchManifest | undefined;
     const items = body.items;
-    const refuse = (why: string, who = m && typeof m.device_id === 'string' ? m.device_id : session.id): never => {
-      this.#logRefusal(who, session, why);
+    const refuse = (kind: RefusalKind, why: string, who = m && typeof m.device_id === 'string' ? m.device_id : session.id): never => {
+      this.#logRefusal(kind, who, session, why);
       throw new CoreError('forbidden', `This capture batch was refused, and nothing in it was kept: ${why}`);
     };
-    if (!isObj(m) || typeof body.signature !== 'string' || !Array.isArray(items)) refuse('it isn’t a signed batch ({manifest, signature, items}).');
+    if (!isObj(m) || typeof body.signature !== 'string' || !Array.isArray(items)) refuse('shape', 'it isn’t a signed batch ({manifest, signature, items}).');
     const man = m as CaptureBatchManifest;
-    if (man.v !== 1 || typeof man.batch_id !== 'string' || !ID.test(man.batch_id) || typeof man.device_id !== 'string' || !Array.isArray(man.items)) refuse('its manifest isn’t one Nova reads.');
+    if (man.v !== 1 || typeof man.batch_id !== 'string' || !ID.test(man.batch_id) || typeof man.device_id !== 'string' || !Array.isArray(man.items)) refuse('shape', 'its manifest isn’t one Nova reads.');
     // Whose it says it is: an enrolled device, trusted, and the one whose session sent it.
     const claimed = this.#o.devices.find(man.device_id);
-    if (!claimed) refuse(`it names a device Nova doesn’t know (${deviceText(man.device_id, 40)}).`);
-    if (claimed!.trust !== 'trusted') refuse(`it is from ${claimed!.name}, which was revoked.`);
-    if (claimed!.id !== session.id) refuse(`it says it is from ${claimed!.name}, but came over ${session.name}’s session.`);
+    if (!claimed) refuse('unknown_device', `it names a device Nova doesn’t know (${deviceText(man.device_id, 40)}).`);
+    if (claimed!.trust !== 'trusted') refuse('revoked', `it is from ${claimed!.name}, which was revoked.`);
+    if (claimed!.id !== session.id) refuse('other_device', `it says it is from ${claimed!.name}, but came over ${session.name}’s session.`);
     let ok = false;
     try { ok = verifyDeviceSignature(claimed!.public_key, captureBatchMessage(man), body.signature as string); } catch { ok = false; }
-    if (!ok) refuse(`its signature isn’t ${claimed!.name}’s key over its manifest.`);
+    if (!ok) refuse('signature', `its signature isn’t ${claimed!.name}’s key over its manifest.`);
     const list = items as unknown[];
-    if (list.length !== man.items.length || !list.length || list.length > MAX_BATCH_ITEMS) refuse(`it lists ${man.items.length} items and carries ${list.length} (at most ${MAX_BATCH_ITEMS}, at least one).`);
+    if (list.length !== man.items.length || !list.length || list.length > MAX_BATCH_ITEMS) refuse('items', `it lists ${man.items.length} items and carries ${list.length} (at most ${MAX_BATCH_ITEMS}, at least one).`);
     let prev = 0;
     for (const [i, it] of list.entries()) {
       const e = man.items[i]!;
-      if (!isObj(it) || !isObj(e) || it.id !== e.id || it.seq !== e.seq || typeof e.id !== 'string' || !ID.test(e.id) || !Number.isSafeInteger(e.seq)) refuse(`item ${i + 1} isn’t the one its manifest lists.`);
-      if (captureItemDigest(it) !== e.sha256) refuse(`item ${i + 1}’s checksum doesn’t match its manifest.`);
-      if ((e.seq as number) <= prev) refuse('its items aren’t in the device’s sequence order.');
+      if (!isObj(it) || !isObj(e) || it.id !== e.id || it.seq !== e.seq || typeof e.id !== 'string' || !ID.test(e.id) || !Number.isSafeInteger(e.seq)) refuse('items', `item ${i + 1} isn’t the one its manifest lists.`);
+      if (captureItemDigest(it) !== e.sha256) refuse('items', `item ${i + 1}’s checksum doesn’t match its manifest.`);
+      if ((e.seq as number) <= prev) refuse('items', 'its items aren’t in the device’s sequence order.');
       prev = e.seq as number;
     }
-    if (man.seq_from !== man.items[0]!.seq || man.seq_to !== man.items[man.items.length - 1]!.seq) refuse('its sequence range doesn’t match its items.');
+    if (man.seq_from !== man.items[0]!.seq || man.seq_to !== man.items[man.items.length - 1]!.seq) refuse('items', 'its sequence range doesn’t match its items.');
     // The mode wins: content sent to a cloud hub in local-only mode isn't kept here.
     const sync = this.syncAllowed();
     if (!sync.allowed) throw new CoreError('conflict', `Not kept: ${sync.why}`);
@@ -269,7 +276,7 @@ export class CaptureSync {
     const m = body.manifest as RawManifest | undefined;
     if (!isObj(m) || typeof body.signature !== 'string' || typeof body.data !== 'string') throw new CoreError('validation', 'Send {manifest, signature, data}.');
     if (m.v !== 1 || m.request_id !== id || m.device_id !== device.id || m.item !== r.item) throw new CoreError('forbidden', 'That isn’t the item that was asked for.');
-    if (!verifyDeviceSignature(device.public_key, rawManifestMessage(m), body.signature)) { this.#logRefusal(device.id, device, 'a raw item’s signature isn’t its key over its manifest.'); throw new CoreError('forbidden', 'Its signature isn’t this device’s key over its manifest.'); }
+    if (!verifyDeviceSignature(device.public_key, rawManifestMessage(m), body.signature)) { this.#logRefusal('raw_signature', device.id, device, 'a raw item’s signature isn’t its key over its manifest.'); throw new CoreError('forbidden', 'Its signature isn’t this device’s key over its manifest.'); }
     const data = Buffer.from(body.data, 'base64');
     if (data.length > MAX_RAW_BYTES || data.length !== m.size || sha256Hex(data) !== m.sha256) throw new CoreError('forbidden', 'It doesn’t match the checksum and size the device signed.');
     const dir = join(this.#o.home, 'capture', 'raw');
@@ -339,13 +346,14 @@ export class CaptureSync {
     return sha === r.sha256 ? { ok: true, why: `Nova read the file on the hub: ${r.size} bytes, SHA-256 ${sha.slice(0, 12)}…, the checksum the device signed.` } : { ok: false, why: 'The file on the hub doesn’t match the checksum the device signed.' };
   }
 
-  #logRefusal(claimed: string, session: Device, why: string): void {
-    this.#o.log.warn('capture', 'A capture transfer was refused.', { session_device: session.id, claimed_device: claimed.slice(0, 64), why });
-    const k = `${session.id}|${why}`;
-    const now = this.#o.now().getTime();
-    if (now - (this.#refused.get(k) ?? -Infinity) < REFUSAL_EVERY_MS) return;
-    this.#refused.set(k, now);
-    this.#o.log.problem('capture', `Nova refused capture sent over ${session.name}’s connection, and kept none of it: ${why}`);
+  // The first refusal of each kind over a session is reported in full, in the log and as a problem;
+  // the rest within ten minutes are counted, and the next report says how many.
+  #logRefusal(kind: RefusalKind, claimed: string, session: Device, why: string): void {
+    const held = this.#refused.due(`${session.id}|${kind}`);
+    if (held === null) return;
+    this.#o.log.warn('capture', 'A capture transfer was refused.', { session_device: session.id, claimed_device: deviceText(claimed, 64), kind, why, held_back: held });
+    const more = held ? ` ${held} more of this kind ${held === 1 ? 'was' : 'were'} refused since the last report.` : '';
+    this.#o.log.problem('capture', `Nova refused capture sent over ${session.name}’s connection, and kept none of it: ${why}${more}`);
   }
 
   // ---- routes --------------------------------------------------------------------------------------

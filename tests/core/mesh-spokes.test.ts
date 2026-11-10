@@ -133,6 +133,41 @@ test('the inbox takes each key exactly once, in order, and keeps what each item 
   }
 });
 
+test('a compromised device can’t flood the problems: refused tasks, stale settings and safe mode are each one problem per ten minutes', async () => {
+  const h = await hub();
+  try {
+    const { token } = await enroll(h, { kind: 'computer', name: 'Test computer' });
+    const send = (items: unknown[]) => call(h.mesh, 'POST', '/api/v1/mesh/inbox', { items }, bearer(token));
+    const count = async (re: RegExp) => (await h.c('GET', '/problems?open=1')).body.filter((p: { message: string }) => re.test(p.message)) as { message: string }[];
+    // A hundred task requests, each with a new key, none of which can be created.
+    const tasks = (from: number) => Array.from({ length: 100 }, (_, i) => ({ key: `flood-${String(from + i).padStart(6, '0')}`, kind: 'task_request', body: { title: `No worker ${from + i}` } }));
+    const a = await send(tasks(0));
+    assert.equal(a.status, 200);
+    assert.ok(a.body.results.every((x: { status: string; reason?: string }) => x.status === 'refused' && /worker/.test(x.reason ?? '')), 'each is still refused, with why');
+    assert.equal((await count(/asked for by “Test computer” wasn’t created/)).length, 1);
+    // Every refusal is still kept, for the person to read.
+    assert.equal((await h.c('GET', '/mesh/inbox/refusals')).body.filter((x: { key: string }) => x.key.startsWith('flood-')).length, 100);
+
+    // A hundred settings changes, each against a version that never was.
+    const stale = Array.from({ length: 100 }, (_, i) => ({ key: `stale-${String(i).padStart(6, '0')}`, kind: 'config_change', body: { section: 'tuning', key: `k${i}`, value: 'x', base_version: `v-${i}` } }));
+    assert.ok((await send(stale)).body.results.every((x: { status: string }) => x.status === 'rejected'));
+    assert.equal((await count(/settings change from “Test computer”/)).length, 1);
+
+    // Safe mode on, off, on, off...
+    for (let i = 0; i < 20; i++) assert.equal((await call(h.mesh, 'POST', '/api/v1/mesh/devices/me/heartbeat', { safe_mode: i % 2 === 0 }, bearer(token))).status, 200);
+    assert.equal((await count(/is in safe mode/)).length, 1);
+
+    // Ten minutes on, the next of each is reported again, with how many were held back.
+    h.tick(10 * 60_000);
+    await send(tasks(100).slice(0, 1));
+    const again = await count(/asked for by “Test computer” wasn’t created/);
+    assert.equal(again.length, 2);
+    assert.ok(again.some((p) => /99 more were refused since the last report/.test(p.message)), again.map((p) => p.message).join('\n'));
+  } finally {
+    await h.stop();
+  }
+});
+
 test('a task request that fails part-way is refused, and leaves no task behind', async () => {
   const h = await hub();
   try {

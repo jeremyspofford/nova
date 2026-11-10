@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  HLC_MAX_COUNTER, HybridClock, PAIRING_CODE_ALPHABET, SlidingWindowLimiter, canonicalJson, displayPairingCode,
+  HLC_MAX_COUNTER, HybridClock, PAIRING_CODE_ALPHABET, ReportThrottle, SlidingWindowLimiter, canonicalJson, displayPairingCode,
   exportDeviceKeys, formatHlc, generateDeviceKeys, importDeviceKeys, keyFingerprint, newPairingCode,
   normalizePairingCode, open, pairingCodeHash, pairingCommitment, pairingConfirmationV2,
   parseHlc, revealMessage, seal, sessionMessage, signMessage, signRoster, statusMessage, verifyDeviceSignature, verifyRoster,
@@ -52,6 +52,24 @@ test('the limiter allows the limit per key per window and forgets old keys', () 
   assert.equal(lim.size, 2);
   lim.clear();
   assert.equal(lim.size, 0);
+});
+
+test('the report throttle: one report per key per window, counts what it held back, and stays bounded', () => {
+  let now = 0;
+  const t = new ReportThrottle({ everyMs: 1000, maxKeys: 3, now: () => now });
+  assert.deepEqual([t.due('a'), t.due('a'), t.due('a'), t.due('b')], [0, null, null, 0]);
+  now = 999;
+  assert.equal(t.due('a'), null);
+  now = 1000;
+  assert.equal(t.due('a'), 3, 'due again, with the three held back');
+  assert.equal(t.due('a'), null);
+  // A key that held nothing back is forgotten once its window is over.
+  now = 2500;
+  t.due('c');
+  assert.equal(t.size, 2, 'b is gone; a is kept for its count');
+  // A flood of new keys never grows it past maxKeys.
+  for (let i = 0; i < 10_000; i++) t.due(`k${i}`);
+  assert.equal(t.size, 3);
 });
 
 test('keys: signatures verify only for their own message and key; key files round-trip', () => {
