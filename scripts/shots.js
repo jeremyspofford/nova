@@ -231,8 +231,14 @@ for (const text of ['skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'skip', 'all
   await p.waitForTimeout(500);
   await shot(p, 'paper-memory');
   check('each memory says where it came from', (await p.$$('.memory-item .memory-from')).length >= 2);
+  // Focus order (docs/plans/knowledge-graph-adr-2026-11-10.md §6 "Slice 1: inside Memory", its
+  // acceptance criteria, keyboard only; owner ruling 2026-11-10): the filter box, then the list, then
+  // each row's disclosure (slice 1c, not built yet). This step said "Tab goes straight to the first
+  // memory" before the filter (F-062) existed; the spec changed by owner ruling and the check follows it.
   await p.keyboard.press('Tab');
-  check('Tab goes straight to the first memory', await p.evaluate(() => document.activeElement.classList.contains('memory-item')));
+  check('Tab reaches the filter box first', await p.evaluate(() => document.activeElement.id === 'memory-filter'));
+  await p.keyboard.press('Tab');
+  check('the next Tab reaches the first memory', await p.evaluate(() => document.activeElement === document.querySelector('#memory .memory-item:not([data-candidate])')));
   await p.keyboard.press('Enter');
   await p.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
   await p.keyboard.type('Daughter June starts kindergarten at Maple Street in September.');

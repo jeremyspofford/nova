@@ -123,6 +123,23 @@ test('memory filter: held items stay and are not counted; day notes filter by da
   assert.equal(await page.$eval('#memory .memory-section:not(#waiting):not([aria-labelledby="ms-days"])', (s) => (s as HTMLElement).hidden), true, 'Facts, with no row left, goes');
 });
 
+// The focus order is the ADR's (docs/plans/knowledge-graph-adr-2026-11-10.md §6, "Acceptance
+// criteria", keyboard only; owner ruling 2026-11-10): the filter box, then the list. Each row's
+// disclosure joins the order after its row with slice 1c.
+test('memory filter: from the view, Tab reaches the filter box, then the first memory', async (t) => {
+  const b = await browser();
+  if (typeof b === 'string') { t.skip(b); return; }
+  t.after(() => (b as Browser).close());
+  const { page } = await device(b, { width: 1280, height: 900 });
+  await page.goto(`${server!.m.base}/memory`);
+  await settled(page, 'memory');
+  await until(page, () => document.activeElement?.id === 'memory');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'memory-filter', 'the box comes first');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement === document.querySelector('#memory .memory-item:not([data-candidate])')), true, 'then the first memory');
+});
+
 test('memory filter: an empty Memory draws its empty state, with no box', async (t) => {
   const b = await browser();
   if (typeof b === 'string') { t.skip(b); return; }
