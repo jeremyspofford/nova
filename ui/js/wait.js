@@ -10,6 +10,15 @@ import { escapeHtml as esc } from './markdown.js';
 
 export const QUIET_MS = 1000;
 export const LONG_MS = 10_000;
+// The clock at the end of this file brings long waits' words up to date this often, so a wait's
+// over-10 s words reach the screen by LONG_MS + TICK_MS at the latest.
+export const TICK_MS = 1000;
+// A read Nova hasn't answered in this long is no answer: the page says Nova is out of reach
+// instead of waiting forever (core.js request; M9 review of #234). The bands above don't time it.
+// It comes after the last one, so a slow read shows its over-10 s words for a few seconds before it
+// is given up, never cut off before them (it was 10 s, the same moment as LONG_MS). Timed on the
+// page's own timers, as the bands are.
+export const NO_ANSWER_MS = LONG_MS + 5 * TICK_MS;
 
 // Which band an elapsed wait is in.
 export function band(elapsed) {
@@ -186,4 +195,4 @@ function tick() {
     if (more.textContent !== text) more.textContent = text;
   }
 }
-if (typeof document !== 'undefined') setInterval(tick, 1000); // wait: clock for long waits' words
+if (typeof document !== 'undefined') setInterval(tick, TICK_MS); // wait: clock for long waits' words
