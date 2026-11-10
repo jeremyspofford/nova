@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { LAYOUTS, POSTURES, asideOf, layoutOf, postureOf, resolve, viewportOf } from '../ui/js/layout.js';
 import { DESTINATIONS, placement, reachable, routeOf } from '../ui/js/nav.js';
-import { ICON_WORDS, ORB_STATES, ORB_WORDS, STATUS, activityStatus, greeting, iconState, label, needsApproval, orbState, problemTone, statusOf, stoppingProblems, taskIconState, toolTier } from '../ui/js/status.js';
+import { ICON_WORDS, ORB_STATES, ORB_WORDS, STATUS, activityStatus, greeting, healthBadge, iconState, label, needsApproval, orbState, problemTone, severity, statusOf, stoppingProblems, taskIconState, toolTier } from '../ui/js/status.js';
 import { STATUS_ICON_STATES } from '../ui/js/status-icon.js';
 
 // ---- layout ----------------------------------------------------------------------------
@@ -169,8 +169,9 @@ test('a task row’s icon is the task’s own state, never one the ledger lacks'
   assert.equal(taskIconState(task('waiting', { user_visibility: 'attention' })), 'needs-you');
   assert.equal(taskIconState(task('queued')), 'idle');
   assert.equal(taskIconState(task('waiting', { reason: 'Waiting on local capacity.' })), 'idle');
-  assert.equal(taskIconState(task('failed')), 'stopped');
-  assert.equal(taskIconState(task('done', { verification: { ok: false, checks: [] } })), 'stopped');
+  // A failed task needs the person; it hasn't stopped Nova (ruling D5).
+  assert.equal(taskIconState(task('failed')), 'needs-you');
+  assert.equal(taskIconState(task('done', { verification: { ok: false, checks: [] } })), 'needs-you');
   assert.equal(taskIconState(task('done', { verification: { ok: true, checks: [] } })), 'success');
   assert.equal(taskIconState(task('cancelled')), null);
   for (const st of ['queued', 'active', 'verifying', 'waiting', 'done', 'failed', 'cancelled']) {
@@ -183,7 +184,7 @@ test('a task row’s icon is the task’s own state, never one the ledger lacks'
 // problem needs the person while Nova keeps running (amber), like an OK that is waiting.
 test('a problem turns the orb red only when it stops Nova; any other is amber', () => {
   const health = { id: 1, source: 'sync', message: 'A file is too large for the standby’s copy.', stops: 0 };
-  const failed = { id: 2, source: 'ledger', message: 'A task failed: Backup now.', stops: 1 };
+  const failed = { id: 2, source: 'resilience', message: 'Nova is held in safe mode.', stops: 1 };
   assert.deepEqual(stoppingProblems([health, failed]), [failed]);
   assert.equal(problemTone([]), null);
   assert.equal(problemTone([health]), 'attention');
@@ -195,6 +196,31 @@ test('a problem turns the orb red only when it stops Nova; any other is amber', 
   // A problem from before the classification (no `stops`) is amber.
   assert.equal(orbState(signals([{ id: 3, source: 'mesh', message: 'x' }])), 'needs-you');
   assert.deepEqual([...ORB_STATES], ['idle', 'listening', 'working', 'speaking', 'needs-you', 'stopped', 'offline']);
+});
+
+// One severity for every surface (F-022, ruling D5; F-021; F-075).
+test('severity: red only when Nova is stopped, amber for a failed task or a failing check, never quiet when problems couldn’t be read', () => {
+  const task = { id: 1, source: 'ledger', message: 'A task failed: Nightly backup.', stops: 0 };
+  const held = { id: 2, source: 'resilience', message: 'Nova is held in safe mode.', stops: 1 };
+  const fine = { database: { ok: true }, browser: { ok: true } };
+  assert.equal(severity({ problems: [task], checks: fine }).level, 'needs-you');
+  assert.equal(severity({ problems: [task, held], checks: fine }).level, 'stopped');
+  assert.equal(severity({ problems: [], checks: { ...fine, browser: { ok: false } } }).level, 'needs-you', 'a failing check is amber');
+  assert.deepEqual(severity({ problems: [], checks: { ...fine, browser: { ok: false } } }).lookChecks, ['browser']);
+  assert.equal(severity({ problems: [], checks: { ...fine, database: { ok: false, stops: true } } }).level, 'stopped', 'a dead database stops Nova');
+  assert.equal(severity({ problems: [], checks: fine, asking: 1 }).level, 'needs-you');
+  assert.equal(severity({ problems: [], known: false, checks: fine }).level, 'unknown');
+  assert.equal(severity({ problems: [], checks: fine }).level, 'quiet');
+  // The badge says the severity in words, and shows when the list couldn't be read.
+  assert.deepEqual(healthBadge(severity({ problems: [task] })), { tone: 'attention', label: '1 problem, it needs you', count: 1 });
+  assert.deepEqual(healthBadge(severity({ problems: [task, held] })), { tone: 'alert', label: '2 problems, Nova is stopped', count: 2 });
+  assert.deepEqual(healthBadge(severity({ problems: [], known: false })), { tone: 'unknown', label: 'problems couldn’t be loaded' });
+  assert.deepEqual(healthBadge(severity({ problems: [], checks: { browser: { ok: false } } })), { tone: 'attention', label: 'A check needs a look' });
+  assert.equal(healthBadge(severity({ problems: [] })), null);
+  // The mark follows the same split.
+  const s = severity({ problems: [task] });
+  assert.equal(orbState({ stopped: s.stopped, needsYou: s.needs }), 'needs-you');
+  assert.equal(ORB_WORDS.stopped, 'Nova is stopped; see Health');
 });
 
 test('the greeting follows the hour', () => {

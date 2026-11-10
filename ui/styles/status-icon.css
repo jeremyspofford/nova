@@ -17,3 +17,20 @@
 
 /* In the app (shell.js): the live state in the rail, the top bar and the heroes, and a task row's own state. */
 .task-icon { flex: none; }
+/* A second cue beside colour (F-075; DESIGN-SYSTEM §1 "colour alone is not a safe channel"): the
+   artwork is never redrawn, so the place that shows the live state adds a shape. Stopped carries a
+   stop octagon at the icon's corner, and nothing else does, with motion or without; needs-you keeps
+   its sway, and under reduced motion the octagon's absence still tells it apart. */
+.status-icon[data-presence] { position: relative; }
+.status-icon[data-presence][data-state="stopped"]::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 36%;
+  height: 36%;
+  min-width: var(--space-2);
+  min-height: var(--space-2);
+  background: var(--status-error);
+  clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
+}

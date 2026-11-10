@@ -1100,12 +1100,14 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   }
 
   function health() {
-    let database: { ok: boolean; detail: string };
+    // `stops` on a check: when it fails, Nova is stopped (red, ruling D5). Only a dead database is;
+    // any other failing check, one an extension or service adds later included, is amber.
+    let database: { ok: boolean; detail: string; stops?: boolean };
     try {
       db.get('SELECT 1');
       database = { ok: true, detail: `Schema version ${db.version()}.` };
     } catch (e) {
-      database = { ok: false, detail: `The database isn't answering: ${(e as Error).message}` };
+      database = { ok: false, stops: true, detail: `The database isn't answering: ${(e as Error).message}` };
     }
     const workers = [...ledger.workers.values()].map(info);
     const checks = {

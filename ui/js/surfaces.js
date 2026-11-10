@@ -3,7 +3,7 @@
 // (conversations, Memory, Skills, Schedules, Activity, permissions) stay in app.js and view.js.
 import { api, deviceId, request, Unreachable } from './core.js';
 import { CHECK_NAMES, ICONS, KIND_WORDS, addDeviceSheet, ago, approvalSheet, briefCard, card, codingSheet, infraSheet, networkSheet, deviceMeshCard, deviceRow, emptyState, evidenceViewer, handlingCard, healthCard, playbookEvents, allowApproveSheet, joinRequestSheet, memoryHighlightCard, pickedRoles, rolesReviewSheet, rolesSheet, proactiveBanner, promoteSheet, promotionSheet, promotionActionSheet, coldPromotionSheet, revokeSheet, settingsRow, status, taskRow, triggerRow, verifiedResultCard, workCosts, diagnosticsDownload } from './components.js';
-import { greeting, isOpen, needsApproval, retryLabel, statusOf } from './status.js';
+import { greeting, isOpen, needsApproval, retryLabel, severity, statusOf } from './status.js';
 import { escapeHtml as esc } from './markdown.js';
 import { closeSheet, layout, liveIcon, openSheet, sheetOpen, toast } from './shell.js';
 import { MODES, current as appearance, endPreview, fixContrast, follow, preview, previewingNow, rollback, setMode, syncedId, undoFix, use } from './theme.js';
@@ -28,7 +28,14 @@ export const store = {
   // Keeping Nova running (M7b): the supervisor, releases, backups, the last drill, playbooks.
   resilience: null,
   caps: null, capsState: 'loading', capsError: '',
+  // Which parts have answered at least once, and which haven't and whose last read failed (F-021):
+  // a part that never loaded is unknown, never empty. Views draw "couldn't be loaded" with a retry
+  // for a failed part, wait for a pending one, and make no claim about either.
+  known: new Set(), failed: new Set(),
 };
+export const partKnown = (p) => store.known.has(p);
+export const partFailed = (p) => store.failed.has(p);
+const partSettled = (p) => store.known.has(p) || store.failed.has(p);
 
 const settle = (p, fallback) => p.catch(() => fallback);
 const INITIAL_PARTS = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers', 'devices', 'mesh', 'requests', 'resilience', 'caps'];
@@ -62,6 +69,7 @@ export async function load(parts = INITIAL_PARTS) {
   let any = false;
   let wasStale = false;
   for (const [p, v, s] of results) {
+    if (v === undefined) { if (!store.known.has(p)) store.failed.add(p); } else { store.known.add(p); store.failed.delete(p); }
     if (p === 'mesh') store.meshFresh = v !== undefined && !s;
     if (p === 'caps') {
       if (capsRead !== capsSequence) continue; // A newer refresh owns freshness.
@@ -113,15 +121,29 @@ const meshDevices = () => (store.devices?.length ? store.devices : [thisDevice()
 
 // ---- Home ---------------------------------------------------------------------------------
 
+// The one severity (status.js severity; ruling D5) every surface reads: the mark and the badge
+// (app.js), Home's first line and health card, and Health. `extra`: Era 2's runs waiting for the
+// person, which only app.js knows.
+export const severityNow = (extra = 0) => severity({ problems: store.problems, known: !store.failed.has('problems'), checks: store.health?.checks ?? null, asking: needsYou() + extra });
+
+// Home's first line, as HTML: the severity in words, the count of what needs the person, and a link
+// to Health whenever Health is where the answer is.
+const toHealth = '<a class="link" href="/health" data-nav="health">Health</a>';
 function summary() {
   const n = needsYou();
   const w = working();
-  if (!store.reachable) return 'Nova isn’t answering right now.';
-  if (store.problems.length) return `Something went wrong; it’s in Health.`;
-  if (n) return `${n === 1 ? 'One thing needs' : `${n} things need`} you.`;
-  if (w) return `Nova is working on ${w === 1 ? 'one thing' : `${w} things`}.`;
-  return 'Nothing needs you.';
+  if (!store.reachable) return esc('Nova isn’t answering right now.');
+  const s = severityNow();
+  const things = (k) => `${k === 1 ? 'One thing needs' : `${k} things need`} you`;
+  if (s.level === 'stopped') return `${esc('Nova is stopped')}${s.needs ? `, and ${esc(things(s.needs).toLowerCase())}` : ''}; it’s in ${toHealth}.`;
+  if (s.level === 'needs-you') return `${esc(things(s.needs))}${s.problems || s.lookChecks.length ? `; see ${toHealth}` : ''}.`;
+  if (s.level === 'unknown') return `${esc('Nova couldn’t load its problems, so it can’t say nothing needs you')}; ${toHealth} can try again.`;
+  if (n) return esc(`${things(n)}.`);
+  if (w) return esc(`Nova is working on ${w === 1 ? 'one thing' : `${w} things`}.`);
+  return esc('Nothing needs you.');
 }
+
+const cardState = () => ({ health: store.health, problems: store.problems, reachable: store.reachable, known: !store.failed.has('problems'), healthFailed: store.failed.has('health') });
 
 const today = (now = new Date()) => now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
@@ -138,7 +160,7 @@ export function renderHome(el, now = new Date()) {
   el.innerHTML = `${unread.slice(0, 2).map(proactiveBanner).join('')}
 <header class="home-hero">${liveIcon('hero')}
   <h2 class="greeting">${esc(greeting(now, name))}</h2>
-  <p class="greeting-sub">${esc(today(now))} · ${esc(summary())}</p>
+  <p class="greeting-sub" data-summary>${esc(today(now))} · ${summary()}</p>
 </header>
 <div class="home-cards">
   ${needsCard}
@@ -147,7 +169,7 @@ export function renderHome(el, now = new Date()) {
   <div data-asideable>${handlingCard({ tasks: store.tasks, now })}</div>
   <div data-asideable>${deviceMeshCard({ devices: meshDevices(), now })}</div>
   ${memoryHighlightCard({ records: store.memory })}
-  <div data-asideable>${healthCard({ health: store.health, problems: store.problems, reachable: store.reachable })}</div>
+  <div data-asideable>${healthCard(cardState())}</div>
 </div>`;
 }
 
@@ -155,7 +177,7 @@ export function renderHome(el, now = new Date()) {
 export function renderAside(el, now = new Date()) {
   el.innerHTML = `${handlingCard({ tasks: store.tasks, now })}
 ${deviceMeshCard({ devices: meshDevices(), now })}
-${healthCard({ health: store.health, problems: store.problems, reachable: store.reachable })}`;
+${healthCard(cardState())}`;
 }
 
 // ---- Tasks -------------------------------------------------------------------------------
@@ -169,6 +191,11 @@ const GROUPS = [
   ['quiet', 'Cancelled'],
 ];
 
+// A part that has never loaded (F-021): said, never drawn as empty, with "Try again" for that part
+// alone (app.js retry-part). Its waiting line while it is still on its way (F-023).
+export const unloaded = (part, title) => `<div class="empty-state" data-unloaded="${esc(part)}" role="status"><p class="empty-title">${esc(title)}</p><p class="empty-sub">${esc('Nova’s server didn’t give this part, so this page can’t say what is in it.')}</p><button type="button" class="btn" data-action="retry-part" data-part="${esc(part)}">Try again</button></div>`;
+const pending = (part, text) => waitingLine(text, { key: `view-${part}` });
+
 export function renderTasks(el, now = new Date()) {
   if (!store.loaded && !store.tried) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('tasks', el, 'Loading Tasks', { total: INITIAL_PARTS.length, done: 0 }); return; }
   const by = new Map(GROUPS.map(([k]) => [k, []]));
@@ -180,7 +207,7 @@ export function renderTasks(el, now = new Date()) {
   // “Nothing is done until Nova has checked the evidence” is backed by the eval claim.verified-only-with-evidence (tests/evals/tasks/claim-backlog.ts).
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Tasks</h2>
 <p class="view-lede">Everything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.</p></header>
-${groups || emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.', action: '<a class="btn" href="/chat" data-nav="chat">Ask Nova to do something</a>' })}`;
+${groups || (partFailed('tasks') ? unloaded('tasks', 'Tasks couldn’t be loaded') : emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.', action: '<a class="btn" href="/chat" data-nav="chat">Ask Nova to do something</a>' }))}`;
 }
 
 // One task in the sheet: the approval when it waits for one, else its evidence and history.
@@ -467,15 +494,31 @@ export function renderHealth(el) {
   const fine = (k, c) => c.ok && !c.attention && !(k === 'passkeys' && !c.complete) && !(k === 'mesh' && (c.standby?.lag?.behind || c.replica?.sync?.unreachable_since || c.replica?.sync?.refused));
   const checks = h ? Object.entries(h.checks).map(([k, c]) => `<li class="settings-row"><div class="settings-text"><p class="settings-label">${esc(CHECK_NAMES[k] ?? k)}</p><p class="settings-note">${esc(checkLine(k, c))}${k === 'mesh' ? ' <a class="link" href="/topology">View machines and services</a>' : ''}</p></div>${fine(k, c) ? '<span class="pill is-on">Fine</span>' : '<span class="pill is-warn">Needs a look</span>'}</li>`).join('') : '';
   const next = document.createElement('div');
+  // The lede says the same severity as the mark, the badge and Home (status.js severity; D5).
+  const s = severityNow();
+  const lede = !store.reachable ? 'Nova isn’t answering. This page reconnects when it’s back.'
+    : s.level === 'stopped' ? 'Nova is stopped. The problem marked Failed says why; the detail is one tap away.'
+      : store.problems.length ? 'Nova is running, and something needs you. Each problem says what happened; the detail is one tap away.'
+        : s.level === 'unknown' ? 'Nova couldn’t load its list of problems, so this page can’t say nothing is wrong.'
+          : 'Everything Nova runs on, and anything that went wrong.';
+  // Problems: the list, its empty state only once it was read (F-021, F-023), or why it isn't here.
+  const problems = store.problems.length ? `<ul class="settings-list">${store.problems.map((p) => problem(p, true)).join('')}</ul>`
+    : partFailed('problems') ? unloaded('problems', 'Problems couldn’t be loaded')
+      : !partSettled('problems') ? pending('problems', 'Loading problems')
+        : emptyState({ title: 'Nothing needs you', line: 'No problems are open.' });
+  // Checks: the reading, a wait while it is on its way, or (failed or overdue) why not, with a retry.
+  const checksBody = h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>${buildStamp(store.version)}`
+    : partFailed('health') ? unloaded('health', 'Health checks couldn’t be loaded')
+      : waitingLine('Checking Nova’s health', { key: 'health' });
   next.innerHTML = `<header class="view-head"><h2 class="view-title">Health</h2>
-<p class="view-lede">${!store.reachable ? 'Nova isn’t answering. This page reconnects when it’s back.' : store.problems.length ? 'Something went wrong. Each problem says what happened; the detail is one tap away.' : 'Everything Nova runs on, and anything that went wrong.'}</p></header>
+<p class="view-lede">${lede}</p></header>
 <section class="panel" aria-labelledby="h-problems"><h3 class="section-title" id="h-problems">Problems</h3>
-${store.problems.length ? `<ul class="settings-list">${store.problems.map((p) => problem(p, true)).join('')}</ul>` : emptyState({ title: 'Nothing needs you', line: 'No problems are open.' })}</section>
+${problems}</section>
 ${keepingRunning()}
 <div class="panel"><h3 class="section-title" id="h-work-costs">Work costs</h3>${workCosts({ view: store.caps, state: costsState(), error: costs.error, invalid: costs.invalid })}${store.capsState === 'unavailable' ? `<p class="settings-note" role="status">${esc(store.capsError)}</p><button class="btn" type="button" data-retry-work-costs>Retry work costs</button>` : ''}</div>
-<div class="panel"><h3 class="section-title" id="h-diagnostics">Diagnostics</h3>${diagnosticsDownload({ available: !!store.health && store.reachable })}</div>
+<div class="panel"><h3 class="section-title" id="h-diagnostics">Diagnostics</h3>${diagnosticsDownload({ available: !!store.health && store.reachable, why: store.reachable ? 'health' : 'unreachable' })}</div>
 <section class="panel" aria-labelledby="h-checks"><h3 class="section-title" id="h-checks">Checks</h3>
-${h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>${buildStamp(store.version)}` : waitingLine('Checking Nova’s health', { key: 'health' })}</section>
+${checksBody}</section>
 ${store.resolved.length ? `<details class="panel raw"><summary>Dealt with recently</summary><ul class="settings-list">${store.resolved.map((p) => problem(p, false)).join('')}</ul></details>` : ''}`;
   const fresh = next.querySelector('[data-work-limits]');
   if (retained) {
@@ -558,10 +601,15 @@ const uptime = (s) => (s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min
 // ---- automation rules (above Era 2's schedules) -------------------------------------------
 
 export function renderRules(el) {
+  // Never "No rules yet" before the rules have been read, or when they couldn't be (F-021, F-023).
+  const body = store.rules.length ? `<ul class="trigger-list">${store.rules.map(triggerRow).join('')}</ul>`
+    : partFailed('rules') ? unloaded('rules', 'Rules couldn’t be loaded')
+      : !partSettled('rules') ? pending('rules', 'Loading rules')
+        : '<p class="settings-note">No rules yet. Rules start work or send a message when something happens or on a schedule.</p>';
   el.innerHTML = `<header class="view-head"><h2 class="view-title">Automations</h2>
 <p class="view-lede">Rules Nova runs on its own. Each can be paused or removed.</p></header>
 <section class="panel" aria-labelledby="ru-title"><h3 class="section-title" id="ru-title">Rules</h3>
-${store.rules.length ? `<ul class="trigger-list">${store.rules.map(triggerRow).join('')}</ul>` : '<p class="settings-note">No rules yet. Rules start work or send a message when something happens or on a schedule.</p>'}</section>`;
+${body}</section>`;
 }
 
 export async function ruleAction(action, id) {

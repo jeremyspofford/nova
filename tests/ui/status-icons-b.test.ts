@@ -35,7 +35,7 @@ const MIXED = [
   task('t-done', 'Tidy the downloads folder', 'done', { verification: { ok: true, at, checks: [] } }),
   task('t-gone', 'Draft the newsletter', 'cancelled', { reason: 'You cancelled it.' }),
 ];
-const WANT: Record<string, string | null> = { 't-work': 'working', 't-ok': 'needs-you', 't-queue': 'idle', 't-lane': 'idle', 't-fail': 'stopped', 't-done': null, 't-gone': null };
+const WANT: Record<string, string | null> = { 't-work': 'working', 't-ok': 'needs-you', 't-queue': 'idle', 't-lane': 'idle', 't-fail': 'needs-you', 't-done': null, 't-gone': null };
 
 // The live icons a person can see (task rows' own icons aside), and the heroes among them.
 const liveIcons = (page: Page) => page.$$eval('.status-icon[data-presence]', (els) => els.filter((e) => (e as HTMLElement).checkVisibility() && e.getBoundingClientRect().width > 0)

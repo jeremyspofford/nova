@@ -149,7 +149,10 @@
   border-radius: var(--radius-pill);
   background: var(--status-attention);
 }
-.nav-badge[data-tone="alert"] { background: var(--status-error); }
+/* Stopped differs by shape as well as colour (F-075): the same stop octagon the live icon carries,
+   a step larger than the round amber dot. A list that couldn't be read is a hollow ring: no claim. */
+.nav-badge[data-tone="alert"] { background: var(--status-error); min-width: var(--space-3); height: var(--space-3); border-radius: 0; clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%); }
+.nav-badge[data-tone="unknown"] { background: transparent; border: 1px solid var(--border-strong); }
 .nav-badge[data-tone="working"] { background: var(--status-working); animation: orb-pulse var(--motion-pulse) var(--motion-ease) infinite; }
 /* The rail's current place: the composition's tinted row and strong label, no accent line. */
 .rail .nav-item { min-height: var(--hit); }

@@ -68,10 +68,10 @@ export function retryLabel(t) {
 // owner decision 2026-10-31): a design system draws each state its own way, never a different set.
 //   offline    the server isn't answering;
 //   listening  the person is talking to Nova;
-//   stopped    something stopped Nova: a problem raised as stopping (work can't proceed, a
-//              dead-man's switch fired, a security refusal). Red, and only this is;
-//   needs-you  something needs the person while Nova keeps running: an OK waiting, or any other
-//              open problem (a Health item, capture running degraded). Amber;
+//   stopped    Nova is stopped (severity() below, ruling D5). Red, and only this is;
+//   needs-you  something needs the person while Nova keeps running: an OK waiting, any other open
+//              problem (a failed task, a Health item, capture running degraded), a check that
+//              isn't fine. Amber;
 //   speaking   a reply is arriving;
 //   working    the ledger or a conversation is busy;
 //   idle       nothing happening: breathing.
@@ -90,6 +90,41 @@ export function orbState({ reachable = true, listening = false, stopped = 0, nee
 export const stoppingProblems = (problems = []) => problems.filter((p) => !!p?.stops);
 export const problemTone = (problems = []) => (stoppingProblems(problems).length ? 'alert' : problems.length ? 'attention' : null);
 
+// How serious things are, worked out once for every surface (F-022; owner ruling D5): the status
+// mark, the navigation badge, Home's first line and health card, and Health all read it, so they
+// can't disagree.
+//   stopped    Nova is stopped: a problem raised as stopping it (Nova held or not answering, a
+//              dead-man's switch, a security refusal), or a failing check marked `stops` (a dead
+//              database). Red, and nothing else is.
+//   needs-you  something needs the person while Nova runs: an OK waiting, any other open problem
+//              (a failed task, scheduled or not, is one: tasks are not a downed system), a check
+//              that isn't fine. Amber.
+//   unknown    the problems list couldn't be read (F-021): no claim either way, and never quiet.
+//   quiet      none of these.
+// `checks` is the health reading's checks, or null while there is none.
+export function severity({ problems = [], known = true, checks = null, asking = 0 } = {}) {
+  const stoppedProblems = stoppingProblems(problems).length;
+  const failing = Object.entries(checks ?? {}).filter(([, c]) => c && c.ok === false);
+  const stoppedChecks = failing.filter(([, c]) => c.stops).map(([k]) => k);
+  const lookChecks = failing.filter(([, c]) => !c.stops).map(([k]) => k);
+  const stopped = stoppedProblems + stoppedChecks.length;
+  const needs = asking + (problems.length - stoppedProblems) + lookChecks.length;
+  const level = stopped ? 'stopped' : needs ? 'needs-you' : !known ? 'unknown' : 'quiet';
+  return { level, stopped, needs, asking, known, problems: problems.length, stoppedProblems, stoppedChecks, lookChecks };
+}
+
+// The Health badge from it, its words carrying the severity (F-075): never a bare count, and never
+// absent when the problems list couldn't be read.
+export function healthBadge(s) {
+  const n = s.problems;
+  const what = `${n} problem${n === 1 ? '' : 's'}`;
+  if (s.level === 'stopped') return { tone: 'alert', label: s.stoppedProblems ? `${what}, Nova is stopped` : 'Nova is stopped', ...(n ? { count: n } : {}) };
+  if (n) return { tone: 'attention', label: `${what}, ${n === 1 ? 'it needs' : 'they need'} you`, count: n };
+  if (s.lookChecks.length) return { tone: 'attention', label: `${s.lookChecks.length === 1 ? 'A check needs' : `${s.lookChecks.length} checks need`} a look` };
+  if (!s.known) return { tone: 'unknown', label: 'problems couldn’t be loaded' };
+  return null;
+}
+
 export const ORB_STATES = Object.freeze(['idle', 'listening', 'working', 'speaking', 'needs-you', 'stopped', 'offline']);
 
 // What the orb says to a screen reader.
@@ -99,7 +134,7 @@ export const ORB_WORDS = Object.freeze({
   working: 'Nova is working',
   speaking: 'Nova is replying',
   'needs-you': 'Something needs you',
-  stopped: 'Something stopped; see Health',
+  stopped: 'Nova is stopped; see Health',
   offline: 'Nova isn’t reachable',
 });
 
@@ -116,7 +151,8 @@ export const ICON_WORDS = Object.freeze({ ...ORB_WORDS, thinking: 'Nova is think
 //   working                  → working
 //   needs you                → needs-you
 //   waiting (queued, a lane) → idle: Nova isn't on it yet; nothing in the ledger is paused
-//   failed                   → stopped
+//   failed                   → needs-you: a failed task needs the person; it hasn't stopped
+//                              Nova (ruling D5)
 //   verified                 → success, shown only when the row saw the task finish (shell.js);
 //                              it settles to idle by itself
 //   cancelled                → none: nothing more will happen, and the row says why
@@ -125,7 +161,7 @@ export function taskIconState(task) {
     case 'working': return 'working';
     case 'needs-you': return 'needs-you';
     case 'waiting': return 'idle';
-    case 'failed': return 'stopped';
+    case 'failed': return 'needs-you';
     case 'verified': return 'success';
     default: return null;
   }

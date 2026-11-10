@@ -367,11 +367,21 @@ export function createNova(config = loadConfig(), deps = {}) {
     if (Object.hasOwn(DOCS, path)) return serveFile(res, join(config.root, DOCS[path]));
     if (path === '/sw.js') return serveFile(res, join(ui, 'sw.js'), {}, (js) => withShellHash(js, config.dev ? shellHash(ui) : shellVersion));
     const file = resolve(ui, normalize(`.${decodeURIComponent(path)}`));
-    if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) {
+    if (!file.startsWith(ui + sep) || !existsSync(file) || !statSync(file).isFile()) return notFound(req, res);
+    serveFile(res, file);
+  }
+
+  // An address Nova doesn't have (F-024): a page asked for by a browser gets a small page that names
+  // Nova and links Home, still 404; anything else (a script, an image) the plain answer it had.
+  function notFound(req, res) {
+    if (!/\btext\/html\b/.test(req.headers.accept ?? '')) {
       res.writeHead(404, { 'content-type': 'text/plain' });
       return res.end('Not found');
     }
-    serveFile(res, file);
+    const shipped = readFileSync(join(ui, 'not-found.html'), 'utf8');
+    const { html, nonce } = nonceStyles(shipped);
+    res.writeHead(404, { 'content-type': TYPES['.html'], 'cache-control': 'no-cache', ...htmlSecurityHeaders(shipped, nonce) });
+    return res.end(html);
   }
 
   async function api(req, res, parts, principal) {
