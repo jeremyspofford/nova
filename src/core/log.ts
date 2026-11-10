@@ -1,7 +1,7 @@
 // Structured logging and problems. The log is a JSON-lines file for diagnosis; a problem is an
 // error that matters to the person, stored in the database and pushed to every open client.
 // Anything worth a `problem()` must never live only in the log (NOVA-SPEC §8).
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { Db } from './db.ts';
@@ -54,6 +54,10 @@ export function redact(value: unknown, depth = 0): unknown {
   return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, SECRET.test(k) ? '[redacted]' : redact(v, depth + 1)]));
 }
 
+// nova.log is kept to 10 MB, with five older files beside it: 60 MB at most (X-002).
+export const LOG_MAX_BYTES = 10 * 1024 * 1024;
+export const LOG_KEEP = 5;
+
 export class Log extends EventEmitter {
   readonly file: string | null;
   #db: Db;
@@ -65,19 +69,44 @@ export class Log extends EventEmitter {
   #unsaved: Problem[] = [];
   #unsavedId = UNSAVED_FROM;
 
-  constructor(db: Db, file: string | null, now: () => Date = () => new Date()) {
+  // The file is capped: past maxBytes it becomes <file>.1, the older ones move up one, and only `keep`
+  // of them stay, so the log can't fill the disk however long Nova runs.
+  readonly #maxBytes: number;
+  readonly #keep: number;
+  #bytes = 0;
+
+  constructor(db: Db, file: string | null, now: () => Date = () => new Date(), o: { maxBytes?: number; keep?: number } = {}) {
     super();
     this.#db = db;
     this.file = file;
     this.#now = now;
-    if (file) mkdirSync(dirname(file), { recursive: true });
+    this.#maxBytes = o.maxBytes ?? LOG_MAX_BYTES;
+    this.#keep = o.keep ?? LOG_KEEP;
+    if (file) {
+      mkdirSync(dirname(file), { recursive: true });
+      try { this.#bytes = statSync(file).size; } catch { /* not there yet */ }
+    }
+  }
+
+  #rotate(file: string): void {
+    try {
+      rmSync(`${file}.${this.#keep}`, { force: true });
+      for (let n = this.#keep - 1; n >= 1; n--) {
+        try { renameSync(`${file}.${n}`, `${file}.${n + 1}`); } catch { /* that one isn't there */ }
+      }
+      renameSync(file, `${file}.1`);
+    } catch { /* a log that can't be rotated keeps being written */ }
+    this.#bytes = 0;
   }
 
   write(level: Level, source: string, msg: string, data: Record<string, unknown> = {}): void {
     if (!this.file) return;
     const line = { at: this.#now().toISOString(), level, source, msg: redactText(msg), ...(redact(data) as object) };
     // A log that can't be written (a full disk) never stops what was being logged.
-    try { appendFileSync(this.file, `${JSON.stringify(line)}\n`); } catch { /* the problem itself is still shown */ }
+    const text = `${JSON.stringify(line)}\n`;
+    const size = Buffer.byteLength(text);
+    if (this.#bytes > 0 && this.#bytes + size > this.#maxBytes) this.#rotate(this.file);
+    try { appendFileSync(this.file, text); this.#bytes += size; } catch { /* the problem itself is still shown */ }
   }
 
   info(source: string, msg: string, data?: Record<string, unknown>): void { this.write('info', source, msg, data); }
