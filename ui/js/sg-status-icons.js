@@ -1,13 +1,13 @@
 // The status icon's preview in the living styleguide (/styleguide?entry=status-icon): Nova's mark,
-// the owner's artwork, at 16, 24, 48, 96 and 180 px; the two crops side by side (the tile, chosen,
-// and the vortex alone); every state's treatment at 16, 24 and 48 px; and a 180 px hero with a
+// the owner's artwork, at 16, 24, 48, 96 and 180 px; the image itself as the browser draws it
+// (ui/icons/mark.svg); every state's treatment at 16, 24 and 48 px; and a 180 px hero with a
 // button per state, a change mid-transition and a reduced-motion switch. Demo only: nothing here
 // reaches Nova.
 import { STATUS_ICON_STATES, setReducedMotion, statusIcon } from './status-icon.js';
 
 const SIZES = [16, 24, 48];
 const MARK_SIZES = [16, 24, 48, 96, 180];
-const CROPS = [['/icons/mark-1024.webp', 'The tile (chosen): the artwork’s own dark rounded tile'], ['/icons/mark-vortex-512.webp', 'The vortex alone, its near-black keyed out']];
+const CROPS = [['/icons/mark.svg', 'The artwork as given, on a transparent background (ui/icons/mark.svg)']];
 let forced = null;
 // The demo first lets the hero settle at idle, so the change always starts from the same place.
 const MIDWAY_START = 900;
@@ -29,7 +29,7 @@ export function statusIconEntry() {
 <label class="si-reduce"><input type="checkbox" data-si-reduced> Reduced motion</label></div></div></div>
 <p class="sg-label">The mark at 16, 24, 48, 96 and 180 px: one artwork, prefiltered downscales</p>
 <div class="si-sizes" data-si-sizes>${MARK_SIZES.map((px) => `<span class="si-tile" data-si-size="${px}"></span>`).join('')}</div>
-<p class="sg-label">The crop</p>${CROPS.map(crop).join('')}
+<p class="sg-label">The image</p>${CROPS.map(crop).join('')}
 <p class="sg-label">Every state’s treatment</p>
 ${statusIconSheet()}</div>`;
 }

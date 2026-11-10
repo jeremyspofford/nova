@@ -7,7 +7,7 @@
 // files (src/sw-version.js). Never edit it by hand; a changed shell file changes it by itself.
 const VERSION = 'nova-shell-__SHELL_HASH__';
 const SHELL = [
-  '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/mark-1024.webp',
+  '/', '/manifest.webmanifest', '/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/mark.svg',
   '/styles/base.css', '/styles/components.css', '/styles/views.css', '/styles/layout.css', '/styles/models.css', '/styles/changes.css', '/styles/reset.css', '/styles/stage2.css', '/styles/palette.css', '/styles/status-icon.css', '/styles/compositions.css',
   '/js/app.js', '/js/core.js', '/js/shell.js', '/js/layout.js', '/js/nav.js', '/js/status.js', '/js/components.js',
   '/js/surfaces.js', '/js/setup.js', '/js/theme.js', '/js/view.js', '/js/markdown.js', '/js/reduce.js', '/js/qr.js', '/js/device-key.js', '/js/takeover.js',

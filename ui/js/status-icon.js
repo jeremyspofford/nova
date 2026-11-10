@@ -5,9 +5,10 @@
 // artwork as a mipmapped texture, so 16 px is a prefiltered downscale of the same picture as 180 px,
 // and copies into each instance's own 2D canvas; Canvas2D draws the artwork with composited tints if
 // WebGL isn't there. Colours come from the design system's tokens, read at runtime.
-// The artwork itself is the page's: an <img data-nova-mark> in its markup (ui/index.html, pair.html,
-// styleguide.html). This file only draws what is already on the page; it loads nothing (it is served
-// before pairing on that condition: tests/public-status-icon.test.js).
+// The artwork itself is the page's: an <img data-nova-mark> in its markup (ui/index.html and
+// styleguide.html load /icons/mark.svg, the master unchanged on a transparent background; pair.html
+// carries a 256 px downscale inline). This file only draws what is already on the page; it loads
+// nothing (it is served before pairing on that condition: tests/public-status-icon.test.js).
 // The model (StatusModel, stateTreatment) is pure and unit-tested (tests/status-icon.test.js).
 
 export const STATUS_ICON_STATES = Object.freeze(['idle', 'listening', 'thinking', 'working', 'speaking', 'needs-you', 'success', 'paused', 'stopped', 'offline']);
@@ -16,10 +17,11 @@ export const MORPH_MS = 800;
 // success is a flourish, never a resting state: it settles to idle by itself.
 export const SUCCESS_MS = 1800; // the 800 ms change in, its sweep, then about a second shown
 const SWEEP_MS = 1000;
-// Where the artwork's vortex turns and where its black core is, as fractions of the tile
-// (measured on the source by scripts/app-icon.js, which crops the same tile).
-const CORE = [0.5, 0.4953];
-const CORE_BLACK = [0.4752, 0.5008, 0.065]; // the darkest disc: centre and radius, kept black
+// Where the artwork's vortex turns and where its black core is, as fractions of the master
+// (ui/icons/mark-master-1024.png: the largest disc at its centre that stays under luminance 16 is
+// centred at 480, 504 px with a radius of 63 px).
+const CORE = [0.4688, 0.4922];
+const CORE_BLACK = [0.4688, 0.4922, 0.06]; // the darkest disc: centre and radius, kept black
 const LOOPS = new Set(['idle', 'listening', 'thinking', 'working', 'speaking', 'needs-you']);
 const TAU = Math.PI * 2;
 
