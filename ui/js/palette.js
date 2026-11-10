@@ -12,6 +12,7 @@ import { CATEGORIES, searchSettings } from './settings-ia.js';
 import { ICONS } from './components.js';
 import { escapeHtml as esc } from './markdown.js';
 import { layout } from './shell.js';
+import { matchNorm } from './view.js';
 
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
 const MOD = MAC ? '⌘' : 'Ctrl';
@@ -29,7 +30,7 @@ let items = [];
 let active = -1;
 let returnTo = null;
 
-const norm = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const norm = matchNorm; // one match rule for the palette and Memory's filter (view.js)
 
 // How well a query matches an item: 0 for not at all; a label that starts with it ranks first.
 function score(q, item) {

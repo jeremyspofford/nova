@@ -413,6 +413,9 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 .memory { gap: var(--space-6); }
 .memory:focus-visible { outline: none; } /* focused on arrival only so Tab starts here */
 .memory-intro .empty-date { text-align: left; }
+.memory-filter-box { padding-inline-start: 0; }
+.memory-filter-count, .memory-filter-scope { margin-top: var(--space-1); font: var(--type-weight-regular) var(--type-caption)/var(--type-line-body) var(--font-body); color: var(--text-secondary); }
+.memory-filter-count:empty { display: none; }
 .memory-lede { margin-top: var(--space-2); color: var(--text-secondary); }
 .memory-empty .memory-lede { max-width: 420px; margin: var(--space-3) auto 0; }
 .memory-heading {
