@@ -86,6 +86,9 @@ export class CheckpointError extends CoreError {
 const SKIP_TOP: Record<string, string> = {
   checkpoints: 'checkpoints are never inside each other',
   broker: 'the Credential Broker keeps its own store; a restore never brings back a deleted credential',
+  // F-014: deleting a secret rotates the vault's key; a checkpoint holding the old key and secrets
+  // would bring both back. Restore keeps the vault as it is now (restore.ts), as the backups do.
+  vault: 'your saved secrets stay as they are now; a restore never brings back a deleted secret or an old key',
   backups: 'the pre-upgrade copies are kept separately',
   exports: 'exports are copies made on request',
   logs: 'Nova’s logs are for diagnosing this machine',

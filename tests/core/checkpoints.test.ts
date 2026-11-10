@@ -28,7 +28,7 @@ function walk(dir: string, rel = ''): string[] {
   return out;
 }
 
-test('a named checkpoint holds the whole home, identity and vault key included, and nothing that isn’t the home’s; folders 0700, files 0600, a sealed manifest', async () => {
+test('a named checkpoint holds the whole home, identity included, never the vault, and nothing that isn’t the home’s; folders 0700, files 0600, a sealed manifest', async () => {
   const h = await hub();
   try {
     h.core.memory.remember({ kind: 'fact', content: 'Bins go out on the first weekday.', recorded_by: 'person' });
@@ -51,9 +51,9 @@ test('a named checkpoint holds the whole home, identity and vault key included, 
     for (const k of ['id', 'seq', 'name', 'kind', 'reason', 'at', 'nova_version', 'schema_version', 'files', 'total_bytes', 'seal']) assert.ok(k in manifest, `manifest has ${k}`);
     assert.match(manifest.seal, /^[0-9a-f]{64}$/);
     const paths = manifest.files.map((f: { path: string }) => f.path);
-    for (const p of ['vault/key', 'vault/secrets.json', 'mesh/identity.json', 'memory/2026-10-29.md', 'workspace/notes.md']) assert.ok(paths.includes(p), `${p} is in it: ${paths.join(', ')}`);
-    for (const p of paths) assert.ok(!/^(logs|kept|workers|exports|backups|checkpoints|\.git)\/|^nova\.pid$|^nova\.db|^proxy\.js$/.test(p), `${p} is not`);
-    assert.ok(has(join(dir, 'nova.db'), 'Bins go out on the first weekday.'), 'the database snapshot');
+    for (const p of ['mesh/identity.json', 'memory/2026-10-29.md', 'workspace/notes.md']) assert.ok(paths.includes(p), `${p} is in it: ${paths.join(', ')}`);
+    // F-014: the vault (its key and secrets) never: a restore keeps it as it is now.
+    for (const p of paths) assert.ok(!/^(logs|kept|workers|exports|backups|checkpoints|vault|\.git)\/|^nova\.pid$|^nova\.db|^proxy\.js$/.test(p), `${p} is not`);    assert.ok(has(join(dir, 'nova.db'), 'Bins go out on the first weekday.'), 'the database snapshot');
     // The person's alone, whatever the umask.
     assert.equal(mode(join(h.home, 'checkpoints')), 0o700);
     for (const p of walk(dir)) assert.equal(mode(join(dir, p)), statSync(join(dir, p)).isDirectory() ? 0o700 : 0o600, p);
