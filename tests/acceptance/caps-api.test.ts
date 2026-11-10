@@ -8,9 +8,11 @@ import { hardwareFile } from '../support/models.ts';
 
 const expected = { task: { iterations: 24, tokens: 150_000, usd: 0.5 }, day: { iterations: 300, tokens: 1_500_000, usd: 5 } };
 
-test('production caps API persists ceilings, validates input and preserves person and mutation guards', async () => {
-  const m = blank('nova-caps-api-');
+test('production caps API persists ceilings, validates input and preserves person and mutation guards', async (t) => {
+  // Cleanup registered as each part is made: a start that fails ends the test, not the run.
+  const m = blank('nova-caps-api-', t);
   const runtime = await startFakeOllama({ models: [] });
+  t.after(() => runtime.close());
   const env = { NOVA_OLLAMA_URL: runtime.url, NOVA_HARDWARE_FILE: hardwareFile(m.dir), NOVA_AGENT_CMD: 'example-unused-command', NOVA_AGENT_EGRESS: 'none', NOVA_TZ: 'UTC', NOVA_MESH_URL: 'http://127.0.0.1:0', NOVA_MESH_TRANSPORT: 'network', NOVA_MESH_PUBLIC_URL: 'http://127.0.0.1:0' };
   let r = await m.start(env);
   const c = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => call(m.base, method, path, body, headers);
@@ -59,5 +61,5 @@ test('production caps API persists ceilings, validates input and preserves perso
     await stop(r);
     r = await m.start(env);
     assert.deepEqual((await c('GET', '/api/v1/caps')).body.limits, saved, 'ceilings survive a real process restart');
-  } finally { await stop(r); await runtime.close(); }
+  } finally { await stop(r); }
 });
