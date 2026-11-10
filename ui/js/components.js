@@ -1163,13 +1163,14 @@ const utcWords = (iso) => `${String(iso).slice(0, 16).replace('T', ' ')} UTC`;
 export const buildTone = (v) => (v?.behind === true ? 'pending' : v?.behind === false ? 'current' : 'unknown');
 
 // The version stamp at the rail's foot (so also at the foot of a phone's navigation drawer): the
-// version and the short commit (open rail), a "v" (slim rail), amber with a dot when a redeploy is
+// version and the short commit (open rail), the short version, never a bare letter (slim rail; the
+// owner found a lone "v" reading as a stray letter, 2026-11-10), amber with a dot when a redeploy is
 // pending. A link to About. Nothing until the build is known.
 export function versionStamp(v) {
   if (!v?.version) return '';
   const pending = buildTone(v) === 'pending';
   const words = `Nova ${v.version}${v.commit_short ? `, build ${v.commit_short}` : ''}${pending ? ', redeploy pending' : ''}`;
-  return `<a class="rail-stamp" href="/about"${pending ? ' data-pending' : ''} title="${esc(words)}. About Nova"><span class="sr-only">${esc(words)}. About Nova</span><span class="rail-stamp-v" aria-hidden="true">v</span>${pending ? '<span class="rail-stamp-dot" aria-hidden="true"></span>' : ''}<span class="rail-stamp-full" aria-hidden="true">${esc(v.version)}${v.commit_short ? ` <span class="rail-stamp-commit">${esc(v.commit_short)}</span>` : ''}${pending ? ' redeploy pending' : ''}</span></a>`;
+  return `<a class="rail-stamp" href="/about"${pending ? ' data-pending' : ''} title="${esc(words)}. About Nova"><span class="sr-only">${esc(words)}. About Nova</span><span class="rail-stamp-v" aria-hidden="true">${esc(String(v.version).split('-')[0])}</span>${pending ? '<span class="rail-stamp-dot" aria-hidden="true"></span>' : ''}<span class="rail-stamp-full" aria-hidden="true">${esc(v.version)}${v.commit_short ? ` <span class="rail-stamp-commit">${esc(v.commit_short)}</span>` : ''}${pending ? ' redeploy pending' : ''}</span></a>`;
 }
 
 const ABOUT_LINE = {

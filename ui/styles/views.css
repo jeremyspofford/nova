@@ -856,14 +856,17 @@ kbd {
    its count. */
 .settings-nav { display: flex; flex-direction: column; gap: var(--space-2); }
 .settings-group[hidden], .settings-cats > li[hidden] { display: none; }
+/* A group's title is a heading, not another row (owner, 2026-11-10: "barely bolder than Privacy and
+   permissions; the same spacing from a heading as between items"): a step larger than the rows it
+   heads, in the primary colour, with a group's worth of space above it (tests/ui/settings-rhythm).
+   The command palette's group titles take the same treatment (palette.css). */
 .settings-group-title {
-  margin: 0 0 var(--space-1);
+  margin: 0 0 var(--space-2);
   padding: 0 var(--space-3);
-  font: var(--type-weight-strong) var(--type-caption)/var(--type-line-tight) var(--font-body);
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font: var(--type-weight-strong) var(--type-body)/var(--type-line-tight) var(--font-body);
+  color: var(--text-primary);
 }
+.settings-group:not(:first-child) > .settings-group-title { margin-top: var(--space-5); }
 .settings-cats { list-style: none; margin: 0; padding: 0; }
 .settings-cat {
   display: flex;
