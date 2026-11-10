@@ -72,6 +72,8 @@ export function rateKey(address: string): string {
 // many addresses still gets nowhere: 2^40 codes, five minutes each.
 const HUB_GUESSES = 50;
 const REPORT_EVERY_MS = 10 * 60_000;
+// Addresses counted per kind of refusal between two reports.
+const ADDRESSES_KEPT = 1_000;
 
 export interface Pairing { pairing_id: string; code: string; expires_at: string; url: string; command: string; hub_url: string; hub_fingerprint: string }
 
@@ -88,6 +90,9 @@ export class Enrollment extends EventEmitter {
   // and wrong codes from everyone together, are limited for the whole hub.
   readonly limits: Record<'calls' | 'polls' | 'guesses' | 'allGuesses' | 'pairings', SlidingWindowLimiter>;
   #reported: ReportThrottle;
+  // Addresses turned away since the last report of each kind (at most ADDRESSES_KEPT of them), so a
+  // flood from many addresses is one problem with a count (X-003), as #447 did for one address.
+  #heldFrom = new Map<string, Set<string>>();
 
   constructor(o: { db: Db; log: Log; devices: Devices; identity: MeshIdentity; now: () => Date; publicUrl: () => string | null }) {
     super();
@@ -109,7 +114,8 @@ export class Enrollment extends EventEmitter {
   }
 
   // Counts one call from `address`; refuses it, plainly, when there were too many. A refusal is
-  // recorded as a problem once per address every ten minutes, so a flood is one line, not a flood.
+  // recorded as a problem once every ten minutes for each kind of refusal, whatever the address:
+  // the ones held back in between are counted, with how many addresses, in the next report.
   limit(kind: 'calls' | 'polls', address: string): void {
     const key = rateKey(address);
     if (this.limits[kind].take(key)) return;
@@ -124,10 +130,19 @@ export class Enrollment extends EventEmitter {
   #refuse(key: string, what: string, answer = 'Too many tries from this address. Wait a few minutes, then try again.'): never {
     // A report is remembered only while it holds back the next one, and only so many, so a flood
     // from many addresses can't grow this without end.
-    if (this.#reported.due(key) !== null) {
+    // Keyed by the kind of refusal, never by the address: a sender varies its address, not what it did.
+    const kind = key === 'hub' ? `hub:${what}` : `client:${what}`;
+    const from = this.#heldFrom.get(kind) ?? new Set<string>();
+    const held = this.#reported.due(kind);
+    if (held === null) {
+      if (from.size < ADDRESSES_KEPT) from.add(key);
+      this.#heldFrom.set(kind, from);
+    } else {
+      this.#heldFrom.delete(kind);
+      const since = held ? ` ${held} more ${held === 1 ? 'was' : 'were'} turned away since the last report${key === 'hub' ? '' : `, from ${from.size >= ADDRESSES_KEPT ? `${ADDRESSES_KEPT} or more` : from.size} ${from.size === 1 ? 'address' : 'addresses'}`}.` : '';
       this.#log.problem('mesh', key === 'hub'
-        ? `Nova turned away ${what}. Someone may be guessing codes; no device can join with a wrong code for a few minutes.`
-        : `Nova turned away a device at ${key} that ${what}. If that wasn’t you adding a device, someone else may be trying to.`, { stops: true });
+        ? `Nova turned away ${what}. Someone may be guessing codes; no device can join with a wrong code for a few minutes.${since}`
+        : `Nova turned away a device at ${key} that ${what}.${since} If that wasn’t you adding a device, someone else may be trying to.`, { stops: true });
     }
     throw new CoreError('too_many', answer);
   }

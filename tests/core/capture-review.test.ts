@@ -164,7 +164,8 @@ test('SHOULD-FIX 5: a promotion is recorded as whoever made it: the hub’s scre
     const evs = (await h.c('GET', '/capture/events')).body as any[];
     const by = (t: string) => evs.find((e) => e.text === t).id;
     const here = (await h.c('POST', '/capture/promote', { event_ids: [by('first fact')] })).body.memory;
-    assert.deepEqual([here.recorded_by, here.user_state], ['console', 'confirmed']);
+    // F-034: captured words wait for review; only words the person typed are confirmed at once.
+    assert.deepEqual([here.recorded_by, here.user_state], ['console', 'unreviewed']);
     assert.equal((await h.c('GET', `/capture/memory/${here.id}`)).body[0].by, 'console');
 
     const { dev, token } = await enroll(h, { kind: 'phone', name: 'Test phone' });

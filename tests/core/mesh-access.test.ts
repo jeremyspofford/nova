@@ -8,7 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { request as httpRequest, type IncomingMessage } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { createNova } from '../../src/server.js';
@@ -147,6 +147,66 @@ test('a browser by cookie and a phone by bearer get what the console gets, excep
     // A made-up token is nobody.
     assert.equal((await call(b.mesh, 'GET', '/api/v1/memory', undefined, { authorization: `Bearer nvs_${'A'.repeat(43)}` })).status, 401);
   } finally {
+    await b.stop();
+  }
+});
+
+// F-001..F-004 (owner rulings 2026-11-10, D1 and D2): approving a task, a provider's settings,
+// lowering an approval gate, loosening privacy and allowing a permission ("Run commands") are the
+// hub's own screen's or an approver device's. A paired device without approval rights is refused
+// whatever its body says, and a refused provider change reaches nothing.
+test('a paired device not allowed to approve can’t approve, repoint a provider, lower a gate, loosen privacy or allow commands; an approver can', async () => {
+  const b = await boot();
+  const heard: string[] = [];
+  const probe = createServer((req, res) => { heard.push(`${req.method} ${req.url} ${req.headers.authorization ?? ''}`); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"data":[]}'); });
+  await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+  const probeUrl = `http://127.0.0.1:${(probe.address() as AddressInfo).port}/v1`;
+  try {
+    const core = b.nova.core;
+    core.profile.set('privacy', 'default', 'local-only', 'settings');
+    const owner = [...core.ledger.workers.keys()][0]!;
+    const task = core.ledger.create({ title: 'Tier 3 work', owner, goal: 'done', origin: { kind: 'user' }, evidence_required: [{ kind: 'confirmation', note: 'x' }], privacy_mode: 'local-only', approval_tier: 3 } as never);
+
+    const phone = await b.enroll({ kind: 'phone', name: 'Phone' });
+    const bearer = { authorization: `Bearer ${(await phone.session()).body.token}` };
+    const as = (method: string, path: string, body?: unknown) => call(b.mesh, method, path, body, bearer);
+    const refused = async (r: Promise<{ status: number; body: any }>, what: string) => {
+      const x = await r;
+      assert.equal(x.status, 403, `${what}: ${JSON.stringify(x.body)}`);
+      assert.match(String(x.body.error), /allowed to approve/, what);
+    };
+
+    await refused(as('POST', `/api/v1/tasks/${task.id}/approve`, { confirm: true }), 'tier-3 approval by body flag');
+    assert.equal(core.ledger.get(task.id).approved_at, null);
+    await refused(as('PUT', '/api/v1/providers/openai-compatible/config', { config: { base_url: probeUrl, model: 'm', api_key: 'secret://K' }, confirm: true }), 'provider repoint');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.deepEqual(heard, [], 'the repointed address heard nothing, and got no stored secret');
+    assert.notEqual(core.providers.config('openai-compatible').base_url, probeUrl);
+    await refused(as('PUT', '/api/v1/approvals/coding.merge', { tier: 1, confirm: true }), 'lowering a gate');
+    assert.equal(core.approvals.effective('coding.merge'), 3);
+    await refused(as('PUT', '/api/v1/profile/privacy/default', { value: 'cloud-allowed', confirm: true }), 'loosening privacy');
+    assert.equal(core.profile.privacyDefault(), 'local-only');
+    await refused(as('POST', '/api/permissions/commands/allow'), 'Run commands');
+    assert.equal(core.ledger.get(task.id).state, 'waiting');
+    // Tightening and raising stay open to any paired person.
+    assert.equal((await as('PUT', '/api/v1/approvals/coding.write', { tier: 2 })).status, 200);
+    assert.equal((await as('POST', '/api/permissions/commands/ask')).status, 200);
+
+    // The same phone, allowed to approve: each one goes through, and the approval names it.
+    assert.equal((await b.c('PATCH', `/api/v1/mesh/devices/${phone.deviceId}`, { can_approve: true, confirm: true })).status, 200);
+    const approved = await as('POST', `/api/v1/tasks/${task.id}/approve`, { confirm: true });
+    assert.equal(approved.status, 200, JSON.stringify(approved.body));
+    const ev = core.ledger.events(task.id).find((e) => e.kind === 'approved') as { detail?: { by?: string } } | undefined;
+    assert.equal(ev?.detail?.by, `device:${phone.deviceId}`, 'the approval records who gave it');
+    assert.equal((await as('PUT', '/api/v1/approvals/coding.merge', { tier: 1, confirm: true })).status, 200);
+    assert.equal((await as('PUT', '/api/v1/profile/privacy/default', { value: 'cloud-allowed', confirm: true })).status, 200);
+    assert.equal((await as('POST', '/api/permissions/commands/allow')).status, 200);
+    assert.equal((await as('PUT', '/api/v1/providers/openai-compatible/config', { config: { model: 'm' } })).status, 200);
+    // The hub's own screen keeps its rights (with its passkey, as before).
+    assert.equal((await b.c('POST', '/api/permissions/commands/ask')).status, 200);
+    assert.equal((await b.c('POST', '/api/permissions/commands/allow')).status, 200);
+  } finally {
+    probe.close();
     await b.stop();
   }
 });

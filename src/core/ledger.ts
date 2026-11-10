@@ -229,13 +229,14 @@ export class Ledger extends EventEmitter {
   }
 
   // Tier 2 asks first; tier 3 needs an explicit confirmation every time (NOVA-SPEC §6).
-  approve(id: string, opts: { confirm?: boolean } = {}): Task {
+  // `by` is who gave the OK (console, or device:<id>), recorded with it; the API route is approver-only.
+  approve(id: string, opts: { confirm?: boolean; by?: string } = {}): Task {
     const t = this.get(id);
     if (t.approved_at) return t;
     if (t.state !== 'waiting' || t.approval_tier < 2) throw new CoreError('conflict', 'This task is not waiting for approval.');
     if (t.approval_tier === 3 && opts.confirm !== true) throw new CoreError('validation', 'This is a tier-3 task: approving it needs an explicit confirmation.');
     this.#db.run('UPDATE task SET approved_at = ? WHERE id = ?', this.#now().toISOString(), id);
-    this.#event(id, 'approved', null, null, { tier: t.approval_tier });
+    this.#event(id, 'approved', null, null, { tier: t.approval_tier, ...(opts.by ? { by: opts.by } : {}) });
     const next = this.#gate(this.get(id));
     void this.pump();
     return next;

@@ -10,6 +10,8 @@
 // An honest device's messages are plain one-line sentences, so they come through unchanged.
 // Escaping for HTML is not done here: the screens escape whatever they show.
 
+import { redactShapes } from '../../device/secret-shapes.ts';
+
 // The longest string a device report keeps, in UTF-16 code units. Every field the hub reads from a
 // report is shorter (a workload's `said` 300, a problem's detail 300, hardware names 120, versions 80).
 export const DEVICE_TEXT_MAX = 1000;
@@ -37,7 +39,8 @@ export function deviceText(s: string, max = DEVICE_TEXT_MAX): string {
 // booleans and null are kept as they are; the handler checks what each member means.
 export function deviceReport(body: Record<string, unknown>): Record<string, unknown> {
   const walk = (v: unknown, depth: number): unknown => {
-    if (typeof v === 'string') return deviceText(v);
+    // Secret shapes too: a device that predates its own scrubbing (X-001) can't put one in a record.
+    if (typeof v === 'string') return redactShapes(deviceText(v));
     if (v === null || typeof v !== 'object') return v;
     if (depth >= DEVICE_REPORT_DEPTH) return null;
     if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
