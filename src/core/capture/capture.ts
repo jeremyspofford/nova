@@ -1060,28 +1060,55 @@ export class Capture extends EventEmitter {
   // Deliberate: the person makes a memory from captured events. Its provenance (CONTRACTS §7) is
   // source capture:<ids>, observed when the first was captured, recorded by whoever asked (the
   // hub's own screen, "console", or a paired device, "device:<id>").
-  promote(body: { event_ids?: unknown; content?: unknown; kind?: unknown; scope?: unknown }, by: string, proposalId: string | null = null): { memory: MemoryRecord; events: string[] } {
+  // F-034 (owner ruling D7): captured text is outside content at promotion too, not only when triage
+  // proposes it. Every event is screened for instructions first; one that tries to give any is
+  // refused outright, never kept with a second confirmation. Without the person's own words, the
+  // memory holds the screened form (never the raw text) and waits for their review like any memory
+  // Nova wrote; only words the person typed are confirmed at once.
+  async promote(body: { event_ids?: unknown; content?: unknown; kind?: unknown; scope?: unknown }, by: string, proposalId: string | null = null): Promise<{ memory: MemoryRecord; events: string[] }> {
+    const { rows, screened } = await this.#screenForPromotion(body);
+    return this.#db.tx(() => this.#promote(body, by, proposalId, rows, screened));
+  }
+
+  async #screenForPromotion(body: { event_ids?: unknown }): Promise<{ rows: EventRow[]; screened: Map<string, string> }> {
     const ids = Array.isArray(body.event_ids) ? body.event_ids : [];
     if (!ids.length || ids.length > 20 || !ids.every((x) => typeof x === 'string')) throw new CoreError('validation', 'event_ids lists the captured events this memory comes from (1 to 20).');
     const rows = (ids as string[]).map((id) => this.#event(id)).sort((a, b) => a.at.localeCompare(b.at));
     // Only what a trusted check let through may become memory (screening, job 1).
     for (const r of rows) { const why = this.#rememberable(r); if (why) throw new CoreError('conflict', why); }
-    const content = typeof body.content === 'string' && body.content.trim() ? body.content.trim() : rows.map((r) => r.text ?? '').filter(Boolean).join('\n').trim();
+    const screened = new Map<string, string>();
+    for (const r of rows) {
+      if (!r.text) continue;
+      if (!this.#o.screen) throw new CoreError('conflict', 'Nova can’t check captured text for instructions right now, so it won’t make a memory from it. Try again once checking is back.');
+      const s = await this.#o.screen({ text: r.text.slice(0, 4000), kind: r.kind, origin: r.app || r.url || r.adapter });
+      if (s.verdict === 'block') throw new CoreError('conflict', `Nova won’t remember this: what was captured${r.app ? ` in ${r.app}` : ''} tried to give instructions, and captured text that does is never made into a memory. Nothing was kept.`);
+      // Let through (or held as unsure, which the person then reviews): the event's own text, which
+      // the sensitivity check already redacted. The extract is the outside-content envelope a model
+      // reads, not words to keep.
+      screened.set(r.id, r.text);
+    }
+    return { rows, screened };
+  }
+
+  #promote(body: { content?: unknown; kind?: unknown; scope?: unknown }, by: string, proposalId: string | null, rows: EventRow[], screened: Map<string, string>): { memory: MemoryRecord; events: string[] } {
+    const own = typeof body.content === 'string' && body.content.trim() ? body.content.trim() : null;
+    const content = own ?? rows.map((r) => screened.get(r.id) ?? '').filter(Boolean).join('\n').trim();
     if (!content) throw new CoreError('validation', 'These events have no words to remember; say what to remember as content.');
     const scope = typeof body.scope === 'string' ? body.scope : rows.find((r) => r.space)?.space ?? 'personal';
     const kind = (typeof body.kind === 'string' ? body.kind : 'fact') as MemoryKind;
     const at = this.#now().toISOString();
-    return this.#db.tx(() => {
+    {
       let memory = this.#o.memory.remember({ kind, content, recorded_by: by, source: `capture:${rows.map((r) => r.id).join(',')}`.slice(0, 2000), observed_at: rows[0]!.at, scope });
-      // Whoever promoted it chose it deliberately: it is confirmed, whatever kind of caller they are.
-      if (memory.user_state !== 'confirmed') memory = this.#o.memory.confirm(memory.id, by);
+      // The person's own words, typed as they promoted it, are theirs: confirmed. Captured words
+      // (screened) wait for their review.
+      if (own && memory.user_state !== 'confirmed') memory = this.#o.memory.confirm(memory.id, by);
       for (const r of rows) {
         this.#db.run('INSERT INTO capture_promotion (id, memory_id, event_id, proposal_id, by, at, event_at, event_kind, source_id, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           randomUUID(), memory.id, r.id, proposalId, by, at, r.at, r.kind, r.source_id, r.device_id);
       }
       this.#changed('events');
       return { memory, events: rows.map((r) => r.id) };
-    });
+    }
   }
 
   promotions(memoryId: string): { event_id: string; at: string; by: string; event_at: string | null; event_kind: string | null; source_id: string | null; device_id: string | null; proposal_id: string | null; present: boolean }[] {
@@ -1154,10 +1181,12 @@ export class Capture extends EventEmitter {
   }
 
   // The person's OK on a proposal: only now does it become a memory.
-  accept(id: string, body: { content?: unknown; scope?: unknown }, by: string): { memory: MemoryRecord; events: string[] } {
+  async accept(id: string, body: { content?: unknown; scope?: unknown }, by: string): Promise<{ memory: MemoryRecord; events: string[] }> {
     const p = this.#proposal(id);
+    const ask = { event_ids: [p.event_id], content: body.content, scope: body.scope };
+    const { rows, screened } = await this.#screenForPromotion(ask);
     return this.#db.tx(() => {
-      const out = this.promote({ event_ids: [p.event_id], content: body.content, scope: body.scope }, by, id);
+      const out = this.#promote(ask, by, id, rows, screened);
       this.#db.run(`UPDATE capture_proposal SET state = 'accepted', decided_at = ?, memory_id = ? WHERE id = ?`, this.#now().toISOString(), out.memory.id, id);
       return out;
     });

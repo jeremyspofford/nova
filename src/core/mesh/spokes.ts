@@ -17,8 +17,14 @@ import type { Device, Devices } from './devices.ts';
 import type { MeshIdentity } from './identity.ts';
 import { helloProofMessage, hubResetMessage, rosterDigest } from './wire.ts';
 import { runtimeBundle, type RuntimeBundle } from './agent.ts';
-import { deviceReport } from './device-text.ts';
+import { deviceReport, deviceText } from './device-text.ts';
 import { ReportThrottle } from './limiter.ts';
+
+// The longest a refusal reason is kept, stored and said.
+const REASON_MAX = 600;
+// A reason can quote what the device sent (a worker it named, a field it filled), and it is stored,
+// answered back and put into a problem: cleaned like every device text (X-004).
+const reasonText = (s: string): string => deviceText(s, REASON_MAX).replace(/\s+/g, ' ').trim();
 
 // Its tables, device_inbox and device_heartbeat, are migration 0007's.
 
@@ -212,6 +218,7 @@ export class Spokes extends EventEmitter {
       if (seen) return { key, kind: seen.kind, status: seen.status, duplicate: true, ...(seen.reason ? { reason: seen.reason } : {}), ...(seen.ref ? { ref: seen.ref } : {}) };
       const at = this.#now().toISOString();
       const keep = (status: InboxStatus, o: { reason?: string; ref?: string; body?: unknown; version?: string | null } = {}): InboxResult => {
+        if (o.reason) o = { ...o, reason: reasonText(o.reason) };
         this.#db.run(
           'INSERT INTO device_inbox (device_id, key, kind, status, reason, ref, body, created_at, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
           device.id, key, INBOX_KINDS.includes(kind as InboxKind) ? kind : 'event', status, o.reason ?? null, o.ref ?? null, o.body === undefined ? null : JSON.stringify(o.body), createdAt, at,
@@ -233,7 +240,7 @@ export class Spokes extends EventEmitter {
           try {
             return keep('accepted', { ref: this.#db.tx(() => this.#effects.task(device, key, body)).id });
           } catch (e) {
-            const reason = refusal(e);
+            const reason = reasonText(refusal(e));
             this.#problemOnce(device, 'task_request', `A task asked for by “${device.name}” wasn’t created: ${reason}`,
               (n) => `${n} more ${n === 1 ? 'was' : 'were'} refused since the last report; each is kept with its reason among the device’s refusals.`);
             return keep('refused', { reason, body });

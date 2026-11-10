@@ -474,6 +474,21 @@ export class Memory {
 
   // ---- search over dated notes ------------------------------------------------
 
+  // The notes a turn recalled, as they are now (A-023): one forgotten since is gone, one edited since
+  // reads as it does now. A run checks before every model call, so a note forgotten mid-conversation
+  // never reaches the next prompt. A hand-written note without an id is matched by its words.
+  current(recall) {
+    const out = [];
+    for (const n of recall) {
+      const file = typeof n.source === 'string' && n.source.startsWith('memory/') ? join(this.dir, n.source.slice('memory/'.length)) : null;
+      if (!file || !existsSync(file)) continue;
+      const entries = this.load(file).entries;
+      const e = n.id ? entries.find((x) => x.id === n.id) : entries.find((x) => (x.text.length > 400 ? `${x.text.slice(0, 400)}…` : x.text) === n.text);
+      if (e) out.push({ ...n, text: e.text.length > 400 ? `${e.text.slice(0, 400)}…` : e.text });
+    }
+    return out;
+  }
+
   search(query, { limit = 3 } = {}) {
     const q = terms(query);
     if (!q.length) return [];

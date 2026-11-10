@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs';
 import { homedir, platform, arch } from 'node:os';
 import { join } from 'node:path';
 import { Reply, type Route } from '../api.ts';
+import { redactShapes } from '../../device/secret-shapes.ts';
 import type { Core } from '../index.ts';
 
 export const MARKER = '**REDACTED**';
@@ -28,15 +29,7 @@ export const DETAIL_MAX = 2000;
 
 // Keys whose values are secrets (log.ts's pattern, widened): the value goes, whatever it is.
 export const SECRET_KEY = /pass(word)?|secret|token|api[_-]?key|authori[sz]ation|cookie|private|credential|session|^auth$|^key$|[_-]key$|^mac$|serial/i;
-// Secret-shaped strings, wherever they are.
-const SHAPES: [RegExp, string][] = [
-  [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/gi, `$1 ${MARKER}`],
-  [/(\/\/)[^/\s:@]+:[^/\s@]+@/g, `$1${MARKER}@`],
-  [/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}/g, MARKER],
-  [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{12,}|\bgh[pousr]_[A-Za-z0-9]{12,}|\bxox[abprs]-[A-Za-z0-9-]{8,}|\bAKIA[A-Z0-9]{12,}/g, MARKER],
-  [/\b((?:access_|refresh_|id_)?token|api[_-]?key|key|secret|password|code|sig|signature)=([^&\s"'<>]+)/gi, `$1=${MARKER}`],
-  [/secret:\/\/[A-Za-z0-9_./-]+/g, MARKER],
-];
+// Secret-shaped strings, wherever they are: the one list (device/secret-shapes.ts).
 
 // Every form a secret could take in text.
 export function formsOf(value: string): string[] {
@@ -70,7 +63,7 @@ export class Scrubber {
   text(s: string): string {
     let out = s;
     for (const re of this.#res) out = out.replace(re, () => { this.values++; return MARKER; });
-    for (const [re, to] of SHAPES) out = out.replace(re, (...m) => { this.values++; return to.replace('$1', String(m[1] ?? '')); });
+    out = redactShapes(out, MARKER, () => { this.values++; });
     for (const [p, to] of this.#paths) if (out.includes(p)) out = out.split(p).join(to);
     return out;
   }
