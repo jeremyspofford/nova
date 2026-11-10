@@ -123,7 +123,8 @@ test('M9 gate, progress: the 1 s and 10 s bands on a view that waits, with real 
     // A read Nova takes and never answers. The no-answer deadline comes after the last band (wait.js
     // NO_ANSWER_MS): the over-10 s words show first, and only at the deadline does the page say Nova
     // is out of reach. Both run on the page's clock, so the fake clock moves them together.
-    const n = await device(b, DESKTOP);
+    // No service worker, as above: the hold is a page route, and the worker's requests go past it.
+    const n = await device(b, { ...DESKTOP, serviceWorkers: 'block' });
     await pausedClock(n.page);
     const never = hold(n.page, /\/api\/v1\/(?!setup(?:[/?]|$)|events(?:[/?]|$))/);
     await never.ready;
