@@ -8,7 +8,7 @@ import { createServer as createTlsServer } from 'node:https';
 import { createReadStream, existsSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { ConfigError, loadConfig } from './config.js';
+import { ConfigError, loadConfig, ollamaUrlFrom } from './config.js';
 import { ensureGit, seedHome } from './home.js';
 import { SessionStore, validId } from './sessions.js';
 import { Runner, BusyError } from './runner.js';
@@ -23,7 +23,7 @@ import { buildActivity, notStarted } from './activity.js';
 import { ChatRun, SYSTEM } from './chat-run.js';
 import { render as renderPermissions } from './permissions.js';
 import { toolTier } from '../ui/js/status.js';
-import { APPROVER_ONLY, BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, UpgradeError, allows, createCore, ensureMark, finishReset, fromBrowserTask, htmlSecurityHeaders, ipcBroker, ipcLink, nonceStyles, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
+import { APPROVER_ONLY, BrokerClient, ConsolePasskeys, KIND_WORDS, NO_PASSKEY, PASSKEY_NEEDED, STATUS_BAR_TAG, UpgradeError, allows, createCore, ensureMark, localOllamaUrl, finishReset, fromBrowserTask, htmlSecurityHeaders, ipcBroker, ipcLink, nonceStyles, originHost, standInOs, statusBarTag, transportFromEnv } from './core/index.ts';
 import { AgentError } from './agent.js';
 import { shellHash, withShellHash } from './sw-version.js';
 
@@ -46,7 +46,8 @@ export const APP_PAGES = ['/', '/chat', '/new', '/tasks', '/memory', '/automatio
 // NOVA_MODELS_WAKE_POLL_MS shorten how often waiting work and a waking computer are checked.
 function modelOptions(env) {
   const o = {};
-  if (env.NOVA_OLLAMA_URL) o.ollamaUrl = env.NOVA_OLLAMA_URL;
+  // A host name, or anything off the person's machines, is refused in one plain line (F-046).
+  if (env.NOVA_OLLAMA_URL) o.ollamaUrl = ollamaUrlFrom(env.NOVA_OLLAMA_URL, localOllamaUrl);
   if (env.NOVA_HARDWARE_FILE) { const file = env.NOVA_HARDWARE_FILE; o.hardware = async () => JSON.parse(readFileSync(file, 'utf8')); }
   if (Number(env.NOVA_MODELS_WATCH_MS) > 0) o.watchMs = Number(env.NOVA_MODELS_WATCH_MS);
   if (Number(env.NOVA_MODELS_WAKE_POLL_MS) > 0) o.wakePollMs = Number(env.NOVA_MODELS_WAKE_POLL_MS);
@@ -143,6 +144,21 @@ export function createNova(config = loadConfig(), deps = {}) {
   runner.memory.readOnly = () => !!core.mesh.role.replica();
   runner.memory.sync();
   runner.chatProvider = chatProvider;
+  // When privacy refuses the chat model, the next step inside Nova (F-043): a local chat model that is
+  // already on and working, to choose; else Nova's own local model, to point chat at; else Settings ›
+  // Models, to set one up. Read from the core each time, so it names what is there now.
+  runner.chatNext = () => {
+    const rec = core.providers.recommend('chat');
+    const cloud = 'Or allow cloud help in Settings › Privacy.';
+    if (rec.id) {
+      let name = rec.id;
+      try { name = core.providers.view(rec.id).name; } catch { /* named by id */ }
+      return { words: `${name} is on and keeps this on your devices: choose it for chat in Settings › Providers, and I can answer here. ${cloud}`, label: `Use ${name} for chat`, href: '/settings#providers' };
+    }
+    const reasoner = core.models?.placement?.('reasoner');
+    if (reasoner) return { words: `A model for thinking and writing (${reasoner.model}) already runs on your devices. In Settings › Providers, open “Local model (Ollama or compatible)”, set it to use Nova’s local models (reasoner), turn it on and choose it for chat. ${cloud}`, label: 'Set up local chat', href: '/settings#providers' };
+    return { words: `There is no local chat model here yet. Settings › Models recommends one for this computer and downloads it with your OK; then choose it for chat in Settings › Providers. ${cloud}`, label: 'Set up a local model', href: '/settings#models' };
+  };
   runner.caps = core.caps;
   runner.ledger = core.ledger;
   // Coding through chat (M10c): the chat agent's code_change and code_status tools start and read the

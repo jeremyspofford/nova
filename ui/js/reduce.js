@@ -90,7 +90,7 @@ function applyTurnEvent(t, ev) {
       break;
     }
     case 'error':
-      t.items.push({ kind: 'error', message: ev.message, detail: ev.detail ?? '' });
+      t.items.push({ kind: 'error', message: ev.message, detail: ev.detail ?? '', ...(ev.next ? { next: ev.next } : {}) });
       t.state = 'error';
       t.endedAt = ev.ts;
       break;

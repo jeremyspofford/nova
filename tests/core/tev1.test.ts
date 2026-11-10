@@ -255,7 +255,13 @@ test('local only: an Ollama address that could be the internet is refused, also 
   assert.equal(localUrl('http://localhost:11434'), true);
   assert.equal(localUrl('http://192.168.1.20:11434'), true);
   assert.equal(localUrl('https://ollama.com'), false);
-  assert.throws(() => new Tev1Seat({ url: 'https://ollama.com' }), /could be anywhere/);
+  // Refused before any connection, without stopping Nova from starting (F-046): the seat is made, and
+  // says it is unavailable and why.
+  const remote = new Tev1Seat({ url: 'https://ollama.com' });
+  assert.throws(() => remote.client, /could be anywhere/);
+  const off = await remote.refresh();
+  assert.equal(off.available, false);
+  assert.match(off.why, /could be anywhere/);
   assert.equal(new Tev1Seat({ url: 'http://127.0.0.1:11434' }).egress, 'local');
   const s = await startTev1StandIn();
   try {

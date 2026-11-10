@@ -14,7 +14,7 @@ import { checkPurposes, fixedPurposes, PURPOSE_WORDS, purposeWords, type Purpose
 import { backendFor, SUPERVISOR_WORDS } from './onboard/backend.ts';
 import { detectOs, factsFrom, factsWords, recommendedHubPurposes, type DeviceFacts, type OsFamily } from './onboard/detect.ts';
 import type { Discovery } from './onboard/discover.ts';
-import { firstAction, type FirstView } from './onboard/first.ts';
+import { firstAction, importWords, type FirstView } from './onboard/first.ts';
 import { mentionsDevice, readPicks, readScope } from './onboard/consent.ts';
 import type { Imported, Source } from './onboard/sources.ts';
 import type { Hardware } from './models/hardware.ts';
@@ -118,8 +118,14 @@ function directnessFrom(text: string): 'gentle' | 'balanced' | 'blunt' | null {
 }
 
 // Saying no to the cloud must never turn it on, so refusals and local answers are read first.
+// The three set answers come back as their labels (PRIVACY_CHOICES) and are read exactly (F-044). A
+// typed answer that turns down local and asks for the cloud in one breath ("not local, use the
+// cloud") is asked again, never guessed: it once stored local-only.
 export function privacyFrom(text: string): PrivacyMode | null {
   const t = text.toLowerCase().replace(/’/g, "'");
+  const exact = PRIVACY_CHOICES.find((c) => c.label.toLowerCase() === t.trim().replace(/[.!]+$/, '') || c.id === t.trim());
+  if (exact) return exact.id;
+  if (/\b(not|no|never|don't|do not)\s+(\w+\s+){0,2}local\b/.test(t) && /\bcloud\b/.test(t)) return null;
   if (/\b(no|not|never|don['’]?t|do not|without|nothing (in|to|on)( the)?)\b[^.]*\bcloud/.test(t) || /\bcloud\b[^.]*\b(no|never|not)\b/.test(t)) return 'local-only';
   if (/local[- ]?only|^(keep|stay)|keep (it|everything)|stay local|private|this machine|^yes\b/.test(t)) return 'local-only';
   if (/always.*cloud|cloud.*(always|freely|any ?time|whenever)|cloud[- ]allowed/.test(t)) return 'cloud-allowed';
@@ -127,6 +133,14 @@ export function privacyFrom(text: string): PrivacyMode | null {
   if (/\blocal\b/.test(t)) return 'local-only';
   return null;
 }
+
+// The privacy step's three set answers, local-only recommended: one per mode, named as Settings
+// names them.
+export const PRIVACY_CHOICES: readonly { id: PrivacyMode; label: string; note: string }[] = Object.freeze([
+  { id: 'local-only', label: 'Local-only', note: 'Recommended. My model calls stay on your own devices.' },
+  { id: 'local-preferred', label: 'Local first', note: 'My own model work runs on your devices first, and the cloud helps when they can’t; chat goes wherever its chat program sends it.' },
+  { id: 'cloud-allowed', label: 'Cloud allowed', note: 'I may use cloud models when they’re the better tool, within your budget.' },
+]);
 
 const PRIVACY_WORDS: Record<PrivacyMode, string> = {
   'local-only': 'my model calls stay on your devices',
@@ -137,7 +151,6 @@ const PRIVACY_WORDS: Record<PrivacyMode, string> = {
 // What one cloud chat turn carries (src/context.js builds it), said where the mode is chosen.
 const CHAT_TURN = 'it carries my standing files (including your memory), today’s and yesterday’s day notes, the conversation and any file I read.';
 
-const IMPORT_FOLDER = 'You can put notes or exports in ~/workspace/import/ any time, and tell me.';
 
 export class Setup extends EventEmitter {
   #profile: Profile;
@@ -145,18 +158,21 @@ export class Setup extends EventEmitter {
   #now: () => Date;
   #detectedTz: string;
   #chat: { program: string; egress: Egress } | null;
+  // Where this Nova reads imports, in full (F-045); the server passes <home>/workspace/import.
+  #importDir: string;
   #on: Onboarding;
   #facts: DeviceFacts | null = null;
   // One answer at a time: discovery and import take a moment, and answers wait their turn.
   #turns: Promise<unknown> = Promise.resolve();
 
-  constructor(o: { profile: Profile; ledger: Ledger; now?: () => Date; detectedTimezone?: string; chat?: { program: string; egress: Egress }; onboarding?: Onboarding }) {
+  constructor(o: { profile: Profile; ledger: Ledger; now?: () => Date; detectedTimezone?: string; chat?: { program: string; egress: Egress }; onboarding?: Onboarding; importDir?: string }) {
     super();
     this.#profile = o.profile;
     this.#ledger = o.ledger;
     this.#now = o.now ?? (() => new Date());
     this.#detectedTz = o.detectedTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
     this.#chat = o.chat ?? null;
+    this.#importDir = o.importDir ?? 'the workspace/import folder in Nova’s home folder';
     this.#on = o.onboarding ?? quietOnboarding();
   }
 
@@ -284,7 +300,7 @@ export class Setup extends EventEmitter {
       }
       case 'privacy': {
         const p = skip ? 'local-only' : privacyFrom(text);
-        if (!p) return { reply: 'Keep it local-only, or allow cloud help when local isn’t enough?', next: step };
+        if (!p) return { reply: 'I couldn’t tell which you meant, so nothing is set yet. Local-only, Local first, or Cloud allowed?', next: step };
         set('privacy', 'default', p);
         return then(`Got it: ${PRIVACY_WORDS[p]}.${this.#chatWords(p)}`, 'discover');
       }
@@ -303,14 +319,14 @@ export class Setup extends EventEmitter {
         on.network_pending = false;
         if (scope === 'none') {
           on.discovery = null;
-          return then(`No looking, then. ${IMPORT_FOLDER}`, 'first_task');
+          return then(`No looking, then. ${this.#importFolder()}`, 'first_task');
         }
         const network = scope === 'network';
         const d = await this.#on.discover(network ? 'network' : 'device');
         on.discovery = d;
         on.sources = this.#on.sources();
         const lead = this.#foundWords(d);
-        return on.sources.length ? then(lead, 'import') : then(`${lead} I didn’t find notes, calendar files or browser bookmarks I could bring in. ${IMPORT_FOLDER}`, 'first_task');
+        return on.sources.length ? then(lead, 'import') : then(`${lead} I didn’t find notes, calendar files or browser bookmarks I could bring in. ${this.#importFolder()}`, 'first_task');
       }
       case 'import': {
         const sources = on.sources ?? [];
@@ -318,7 +334,7 @@ export class Setup extends EventEmitter {
         const read = readPicks(text, sources);
         if (read.kind === 'unclear') return { reply: `Which of these, if any: ${sources.map((x) => x.label).join('; ')}? (Say which, “all”, or “none”.)`, next: step };
         const picked: Source[] = read.kind === 'none' ? [] : sources.filter((x) => read.ids.includes(x.id));
-        if (!picked.length) { on.imported = []; return then(`Nothing brought in, then. ${IMPORT_FOLDER}`, 'first_task'); }
+        if (!picked.length) { on.imported = []; return then(`Nothing brought in, then. ${this.#importFolder()}`, 'first_task'); }
         const done = await this.#on.import(picked);
         on.imported = done;
         const waiting = done.reduce((n, r) => n + r.waiting, 0);
@@ -355,6 +371,11 @@ export class Setup extends EventEmitter {
     return ` Chat is the exception: every chat turn goes to ${this.#chat.program}, in the cloud, without trying your devices first, and ${CHAT_TURN}`;
   }
 
+  // Where to put notes later, said with the real folder: "~" would read as the person's own home.
+  #importFolder(): string {
+    return `You can put notes or exports in ${importWords(this.#importDir)} any time, and tell me.`;
+  }
+
   #ask(step: Step, s: SetupState): string {
     const me = identityOf(this.#profile);
     switch (step) {
@@ -386,7 +407,7 @@ export class Setup extends EventEmitter {
         const chat = this.#chat?.egress === 'remote'
           ? ` One thing to know: chat is set up to use ${this.#chat.program}, which runs in the cloud. With local-only, chat stays off until you add a local model. If you allow cloud, every chat turn goes to ${this.#chat.program} without trying your devices first, and ${CHAT_TURN}`
           : '';
-        return `Last setting: privacy. Local-only means my model calls stay on your own devices.${chat} I’d keep it local unless you want cloud help when local isn’t enough. Keep it local-only, or allow cloud when needed?`;
+        return `Last setting: privacy. Local-only means my model calls stay on your own devices.${chat} Pick one of three: Local-only (I recommend it), Local first (my own model work on your devices first, the cloud when they can’t), or Cloud allowed (I may use cloud models when they’re the better tool). You can change it later in Settings › Privacy. (Local-only, Local first, or Cloud allowed?)`;
       }
       case 'discover': {
         if (s.onboarding?.network_pending) return 'Looking on the network sends one short query to the devices on it, beyond this machine, with nothing about you in it. You chose local-only, so I ask first: go ahead? (Yes, “this computer only”, or no.)';
@@ -432,6 +453,8 @@ export class Setup extends EventEmitter {
           { id: 'network', label: 'The network too', note: 'One short query to the devices on it.', selected: false },
           { id: 'no', label: 'No', note: 'Look for nothing.', selected: false },
         ] };
+      case 'privacy':
+        return { kind: 'one', choices: PRIVACY_CHOICES.map((c) => ({ id: c.id, label: c.label, note: c.note, selected: c.id === 'local-only' })) };
       case 'import':
         return { kind: 'many', choices: (s.onboarding?.sources ?? []).map((x) => ({ id: x.id, label: x.label, note: x.kind === 'notes' ? `${x.files} file${x.files === 1 ? '' : 's'}` : x.kind === 'calendar' ? 'Upcoming and recent events' : 'One memory per folder', selected: true })) };
       default:
@@ -449,7 +472,7 @@ export class Setup extends EventEmitter {
     return {
       found: on.discovery?.found ?? [], looked: !!on.discovery, imported, waiting,
       device: { words: factsWords(facts), roles, roles_words: purposeWords(roles.filter((p) => p !== 'hub-candidate')), backend: on.backend ?? 'supervisor', backend_words: SUPERVISOR_WORDS, gpu: facts.gpus.length > 0 },
-      action: firstAction(waiting),
+      action: firstAction(waiting, this.#importDir),
     };
   }
 

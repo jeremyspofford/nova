@@ -373,6 +373,8 @@ export function renderTurn(turn, { live = null, isLast = false, memory = new Map
     if (it.kind === 'error') {
       nova += `<div class="error" role="alert"><p class="error-title">${esc(it.message)}</p>` +
         (it.detail ? `<details class="error-detail"><summary>Details</summary><pre tabindex="0">${esc(it.detail)}</pre></details>` : '') +
+        // A next step inside Nova (a local chat model to choose or set up), only to a page of the app.
+        `${!readOnly && it.next?.href?.startsWith('/') && !it.next.href.startsWith('//') ? `<a class="btn primary" href="${esc(it.next.href)}">${esc(it.next.label ?? 'Open')}</a>` : ''}` +
         `${readOnly ? '' : '<button type="button" class="btn" data-action="regenerate">Try again</button>'}</div>`;
     }
   }

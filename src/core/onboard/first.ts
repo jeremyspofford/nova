@@ -9,6 +9,9 @@
 import type { Discovery } from './discover.ts';
 import type { Imported } from './sources.ts';
 
+// The import folder in words: the full path, and that it is on the hub (a phone has its own files).
+export const importWords = (dir: string) => `${dir} on the hub, the computer Nova runs on,`;
+
 export interface FirstAction { id: string; label: string; why: string; go: 'memory'; needs: readonly string[] }
 
 export const FIRST_ACTIONS: readonly (FirstAction & { when: (s: { waiting: number }) => boolean })[] = Object.freeze([
@@ -19,7 +22,7 @@ export const FIRST_ACTIONS: readonly (FirstAction & { when: (s: { waiting: numbe
   },
   {
     id: 'bring-notes', label: 'Bring in your notes', go: 'memory', needs: ['first-run', 'import'],
-    why: 'Put notes, a profile you wrote or an export from another assistant in ~/workspace/import/, then tell Nova. They wait in Memory for your OK.',
+    why: 'Put notes, a profile you wrote or an export from another assistant in {import}, then tell Nova. They wait in Memory for your OK.',
     when: () => true,
   },
 ]);
@@ -34,8 +37,10 @@ export interface FirstView {
   action: FirstAction;
 }
 
-export function firstAction(waiting: number): FirstAction {
+// `importDir`: where this Nova reads imports, said in full (F-045): `{import}` in a why is that
+// folder, on the hub, never "~", which a person reads as their own home folder.
+export function firstAction(waiting: number, importDir = 'the import folder in Nova’s home folder'): FirstAction {
   const a = FIRST_ACTIONS.find((x) => x.when({ waiting }))!;
   const { when: _w, ...action } = a;
-  return action;
+  return { ...action, why: action.why.replace('{import}', importWords(importDir)) };
 }

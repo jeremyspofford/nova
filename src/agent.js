@@ -7,8 +7,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// `next`: a step the person can take from here, inside Nova ({ label, href }), shown with the error.
 export class AgentError extends Error {
-  constructor(message, detail = '') { super(message); this.detail = detail; }
+  constructor(message, detail = '', next = null) { super(message); this.detail = detail; this.next = next; }
 }
 
 // Nova's files are the agent's only memory. Ambient credentials, settings and host-session

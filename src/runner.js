@@ -297,7 +297,7 @@ export class Runner extends EventEmitter {
     this.emit('live', sessionId, { ...run.live });
     run.done = this.loop(sessionId, run)
       .catch((e) => {
-        this.record(sessionId, { type: 'error', turn, attempt, message: e instanceof AgentError ? e.message : 'Something went wrong inside Nova.', detail: e.detail ?? e.message });
+        this.record(sessionId, { type: 'error', turn, attempt, message: e instanceof AgentError ? e.message : 'Something went wrong inside Nova.', detail: e.detail ?? e.message, ...(e instanceof AgentError && e.next ? { next: e.next } : {}) });
       })
       .finally(() => {
         if (run.ir) this.irFinish(sessionId, run);
@@ -319,18 +319,25 @@ export class Runner extends EventEmitter {
   privacyFor(run) {
     const setting = this.identity?.privacy?.() ?? 'local-only';
     const mode = run.privacy ? stricter(run.privacy, setting) : setting;
+    // Refused, the person is walked to a working chat inside Nova (F-043): the next step comes from
+    // the core (chatNext: a local chat model to choose, or one to set up), never only config keys.
     const chat = this.chat();
+    const next = () => this.chatNext?.() ?? { words: 'Choose a local chat model in Settings › Providers, or allow cloud help in Settings › Privacy.', label: 'Choose a chat model', href: '/settings#providers' };
     if (chat && !permits(mode, chat.egress)) {
+      const n = next();
       throw new AgentError(
-        `Your privacy setting is ${mode}, and the model I chat with (${chat.name}) sends conversations off your devices, so I haven't sent this anywhere. Choose a local model in Settings › Providers, or allow cloud help in your privacy setting.`,
+        `Your privacy setting is ${mode}, and the model I chat with (${chat.name}) sends conversations off your devices, so I haven't sent this anywhere. ${n.words}`,
         `provider=${chat.id}; egress=${chat.receiptEgress}; privacy=${mode}`,
+        { label: n.label, href: n.href },
       );
     }
     if (!chat && !permits(mode, this.config.agentEgress)) {
       const program = this.config.agentCmd.trim().split(/\s+/).find((w) => !w.includes('=')) ?? 'the model command';
+      const n = next();
       throw new AgentError(
-        `Your privacy setting is ${mode}, and the model I chat with (${program}) runs in the cloud, so I haven't sent this anywhere. Add a local model (agent_cmd with agent_egress set to local), or allow cloud help in your privacy setting.`,
-        `agent_egress=${this.config.agentEgress}; privacy=${mode}`,
+        `Your privacy setting is ${mode}, and the model I chat with (${program}) runs in the cloud, so I haven't sent this anywhere. ${n.words}`,
+        `agent_egress=${this.config.agentEgress}; privacy=${mode}. Or, in nova.config.json: agent_cmd for a local model command, with agent_egress set to local.`,
+        { label: n.label, href: n.href },
       );
     }
     return mode;
