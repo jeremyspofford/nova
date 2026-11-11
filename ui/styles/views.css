@@ -450,15 +450,19 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
    compact width class) they have their own column beside the text and source line, kept free while hidden, so showing them moves
    nothing; narrower, they stack on their own line under the words, so the text keeps the row's width.
    Owner's calls, 2026-11-10: Confirm on a row awaiting review shows at rest, on every pointer (a plain
-   control on its row, not a badge or a count: F-034); a reviewed row has no action at rest: Edit and
-   Forget show on hover or focus, and always on touch. */
+   control on its row, not a badge or a count: F-034), and so do a held item's Keep and Drop; a
+   reviewed row has no action at rest: Edit and Forget show on hover or focus, and always on touch. */
 .memory-actions {
   display: flex;
   gap: var(--space-1);
   margin: var(--space-1) 0 0 calc(-1 * var(--space-2));
 }
 .memory-actions > * { opacity: 0; transition: opacity var(--motion-duration-fast) var(--motion-ease); }
-.memory-item:hover .memory-actions > *, .memory-item:focus-within .memory-actions > *, .memory-actions > [data-action="confirm-memory"] { opacity: 1; }
+/* At rest, on every pointer: an action that answers a decision waiting for the person. Confirm on a
+   memory awaiting review, and Keep and Drop on a held item ("Waiting for your OK"). Owner's call
+   2026-11-10 on Confirm, applied to held items the same way; hover-only is banned by the design rules. */
+.memory-item:hover .memory-actions > *, .memory-item:focus-within .memory-actions > *,
+.memory-actions > [data-action="confirm-memory"], .memory-actions > [data-action="keep-candidate"], .memory-actions > [data-action="drop-candidate"] { opacity: 1; }
 @media (hover: none) { .memory-actions > * { opacity: 1; } }
 .memory-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-3); align-items: start; }
 .memory-item > :not(.memory-actions) { grid-column: 1; }
