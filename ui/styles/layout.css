@@ -240,6 +240,13 @@ body[data-view="settings"][data-settings-layout="sidebar"] .aside-toggle { displ
   .topology .sheet-title { padding-right: 0; }
 }
 
+/* A Memory row under the compact width class: its actions stack on their own line under the words,
+   so the text keeps the row's width (owner's call, 2026-11-10; ui/styles/views.css, .memory-actions). */
+@media (max-width: 599px) {
+  .memory-item { display: block; }
+  .memory-item > .memory-actions { margin: var(--space-1) 0 0 calc(-1 * var(--space-2)); }
+}
+
 /* UI rebuild compositions (styleguide only; ui/styles/compositions.css): each frame answers to its
    own width, so a frame inside the styleguide's column and a full-screen frame lay out the same. */
 @container uc (min-width: 720px) {

@@ -445,17 +445,25 @@ a.margin-link { color: inherit; text-decoration: underline; text-decoration-thic
 .memory-unchecked { color: var(--text-secondary); font-style: italic; }
 .memory-from { color: inherit; text-decoration: underline; text-decoration-color: var(--border-subtle); text-underline-offset: 3px; }
 .memory-from:hover { text-decoration-color: var(--accent-primary); }
+/* A row's actions never cover its words (they were drawn over the end of a long memory, absolutely
+   placed in the corner: before F-038, and wider once Confirm joined them). From 600 px wide (the
+   compact width class) they have their own column beside the text and source line, kept free while hidden, so showing them moves
+   nothing; narrower, they stack on their own line under the words, so the text keeps the row's width.
+   Owner's calls, 2026-11-10: Confirm on a row awaiting review shows at rest, on every pointer (a plain
+   control on its row, not a badge or a count: F-034); a reviewed row has no action at rest: Edit and
+   Forget show on hover or focus, and always on touch. */
 .memory-actions {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
   display: flex;
   gap: var(--space-1);
-  opacity: 0;
-  transition: opacity var(--motion-duration-fast) var(--motion-ease);
+  margin: var(--space-1) 0 0 calc(-1 * var(--space-2));
 }
-.memory-item:hover .memory-actions, .memory-item:focus-within .memory-actions { opacity: 1; }
-@media (hover: none) { .memory-actions { position: static; opacity: 1; margin: var(--space-1) 0 0 calc(-1 * var(--space-2)); } }
+.memory-actions > * { opacity: 0; transition: opacity var(--motion-duration-fast) var(--motion-ease); }
+.memory-item:hover .memory-actions > *, .memory-item:focus-within .memory-actions > *, .memory-actions > [data-action="confirm-memory"] { opacity: 1; }
+@media (hover: none) { .memory-actions > * { opacity: 1; } }
+.memory-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-3); align-items: start; }
+.memory-item > :not(.memory-actions) { grid-column: 1; }
+.memory-item > .memory-actions { grid-column: 2; grid-row: 1 / span 2; margin: calc(-1 * var(--space-2)) 0 0; }
+/* Below the compact width class the actions stack under the words: ui/styles/layout.css. */
 .memory-item.is-editing .memory-actions { display: none; }
 .memory-item.is-leaving { opacity: 0.35; }
 .memory-edit {
