@@ -70,13 +70,15 @@ export function keepShape(view, el, blocks, id = '') {
 }
 
 // While the view waits: its skeleton (if its layout at this width is known) and the waiting line.
-// `units`: { done, total } for the 10 s words.
-export function showWaiting(view, el, text, { done = null, total = null, end = false, id = '' } = {}) {
+// `units`: { done, total } for the 10 s words. `head`: the view’s heading, which needs no data, so
+// with no skeleton it stands above the waiting line at once (walker W-4); a skeleton already holds
+// it where it will land.
+export function showWaiting(view, el, text, { done = null, total = null, end = false, id = '', head = '' } = {}) {
   // Not on screen yet (a view drawn before it is shown): nothing to size a skeleton by.
   if (!(contentBox(el).width > 0)) { el.innerHTML = ''; return; }
   const shape = read()[slot(view, el, id)];
   const line = waitingLine(text, { key: `view-${view}`, done, total, noun: 'part' });
-  if (!shape) { el.innerHTML = `<div class="view-waiting" data-waiting-view="${view}">${line}</div>`; return; }
+  if (!shape) { el.innerHTML = `${head}<div class="view-waiting" data-waiting-view="${view}">${line}</div>`; return; }
   const bars = (b) => b.lines.map(([x, y, w, h]) => `<span class="skel-line" style="left: ${x}px; top: ${y}px; width: ${w}px; height: ${h}px"></span>`).join('');
   const edge = shape.end ? 'bottom' : 'top';
   el.innerHTML = `<div class="skeleton${shape.end ? ' is-end' : ''}" data-skeleton="${view}" style="height: ${shape.height}px"><div aria-hidden="true">${shape.blocks.map((b) => `<div class="skel-block${b.card ? ' is-card' : ''}" style="left: ${b.x}px; ${edge}: ${b.y}px; width: ${b.w}px; height: ${b.h}px; border-radius: ${b.radius}">${bars(b)}</div>`).join('')}</div><div class="skel-status">${line}</div></div>`;
