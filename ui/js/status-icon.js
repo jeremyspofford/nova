@@ -3,7 +3,7 @@
 // geometry (nova-single-mark-n-direction-2026-11-08.md): a palette shift, brightness, and motion
 // (a twirl round the black core, a radial pulse). One shared offscreen WebGL context samples the
 // artwork as a mipmapped texture, so 16 px is a prefiltered downscale of the same picture as 180 px,
-// and copies into each instance's own 2D canvas; Canvas2D draws the artwork with composited tints if
+// and copies into each instance's own 2D canvas (at ANIMATION_FPS while it animates, below); Canvas2D draws the artwork with composited tints if
 // WebGL isn't there. Colours come from the design system's tokens, read at runtime.
 // The artwork itself is the page's: <img data-nova-mark> elements in its markup, each a downscale of
 // the one master (scripts/app-icon.py), and this file draws each icon from the one that suits its
@@ -17,6 +17,15 @@ export const MORPH_MS = 800;
 // success is a flourish, never a resting state: it settles to idle by itself.
 export const SUCCESS_MS = 1800; // the 800 ms change in, its sweep, then about a second shown
 const SWEEP_MS = 1000;
+// Owner, 2026-11-11: an icon that is animating (a loop, a morph, the success flourish) is redrawn at
+// ANIMATION_FPS, not on every display frame. Each redraw copies the shader's picture into the icon's
+// own canvas, and on a machine without a GPU that copy is a synchronous readback, most of a scroll
+// frame's work (#486). A change of state, anything else that marks an icon dirty, its first paint and
+// the frame an animation ends on are still drawn at once; reduced motion is unchanged (it doesn't loop).
+export const ANIMATION_FPS = 20;
+const STEP_MS = 1000 / ANIMATION_FPS;
+// A display frame's jitter: at 60 Hz every third frame is due (20 fps), never slipping to every fourth.
+const STEP_SLACK_MS = 2;
 // Where the artwork's vortex turns and where its black core is, as fractions of the master
 // (ui/icons/mark-master-1024.png: the largest disc at its centre that stays under luminance 16 is
 // centred at 480, 504 px with a radius of 63 px).
@@ -343,7 +352,7 @@ const reducedNow = () => forced ?? !!reduceQuery()?.matches;
 function kick() { if (!raf && !document.hidden) raf = requestAnimationFrame(frame); }
 function frame(now) {
   raf = 0;
-  const colours = tints();
+  let colours; // the tokens, read once a frame and only if something is drawn
   let more = false;
   for (const ic of live) {
     if (!ic.el.isConnected) {
@@ -356,7 +365,11 @@ function frame(now) {
     // A morph or the success flourish runs out whether seen or not; a resting loop runs only on screen.
     const morphing = ic.model.moving(now);
     const moving = morphing || (ic.visible && !ic.model.reduced && LOOPS.has(ic.model.status(now)));
-    if ((moving && ic.visible) || ic.dirty) { paint(ic, now, colours); ic.dirty = false; }
+    const animating = moving && ic.visible;
+    const due = animating && now - ic.painted >= STEP_MS - STEP_SLACK_MS;
+    const ended = ic.animating && !animating && ic.visible; // drawn on its final form, whatever the cadence
+    if (due || ended || ic.dirty) { paint(ic, now, colours ??= tints()); ic.dirty = false; ic.painted = now; }
+    ic.animating = animating;
     ic.label(ic.model.status(now));
     if (moving) more = true;
   }
@@ -400,7 +413,7 @@ export function statusIcon({ status = 'idle', size = 24, label = null, decorativ
   canvas.setAttribute('aria-hidden', 'true');
   el.append(canvas);
   const ic = {
-    el, canvas, px, model: new StatusModel(status, performance.now()), dirty: false, seen: false, unseen: 0, visible: true,
+    el, canvas, px, model: new StatusModel(status, performance.now()), dirty: false, seen: false, unseen: 0, visible: true, painted: -Infinity, animating: false,
     label(s) {
       if (el.dataset.status === s) return;
       el.dataset.status = s;
@@ -423,7 +436,8 @@ export function statusIcon({ status = 'idle', size = 24, label = null, decorativ
   Object.defineProperty(el, 'status', { get: () => ic.model.status(performance.now()) });
   live.add(ic);
   watchSight(ic);
-  paint(ic, performance.now(), tints());
+  ic.painted = performance.now();
+  paint(ic, ic.painted, tints());
   kick();
   return el;
 }
