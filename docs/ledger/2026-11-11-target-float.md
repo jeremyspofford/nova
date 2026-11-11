@@ -1,0 +1,5 @@
+**2026-11-11 · Pipeline · 44 px target checks read sizes at layout precision**
+- What changed: five UI-test checks of the 44 px hit target compared a measured size straight against 44. A measured height is computed as bottom minus top in floating point, so a 44 px button at a fractional scroll position can read 43.99997, and the check failed at random: Drop in Memory's held items did on PR #502's UI gate (#503). These checks now read sizes at the browser's own layout precision of 1/64 px, using one shared `snap()` in tests/ui/support.ts. That is the rule `shortTargets` already followed since #347. The affected checks are in the memory row actions, the empty chat's suggestions, the drawn navigation's menu button and rows, and the settings back row.
+- What you can now do: nothing changes for a person using Nova; the UI gate stops failing on a rounding error.
+- Still unfinished: nothing for this. It is not a tolerance: a target one layout unit (1/64 px) short of 44 still fails.
+- Checked: typecheck, and the ledger and changelog checks. The UI gate in CI runs the five changed tests.

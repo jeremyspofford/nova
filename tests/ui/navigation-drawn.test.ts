@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stop } from '../acceptance/support.ts';
-import { blank, browser, device, finishSetup, until } from './support.ts';
+import { blank, browser, device, finishSetup, snap, until } from './support.ts';
 import { drawn, press, trackDocument } from './navigation-support.ts';
 import { DESTINATIONS, placement } from '../../ui/js/nav.js';
 
@@ -86,7 +86,7 @@ test('the navigation drawer: every place, focus in and back, Esc, scrim and clos
       assert.deepEqual([await menu.getAttribute('aria-controls'), await menu.getAttribute('aria-expanded')], ['rail', 'false']);
       assert.equal(await page.locator('#rail a[href]').filter({ visible: true }).count(), 0, `${what}: closed, nothing in it is on screen`);
       const box = (await menu.boundingBox())!;
-      assert.ok(box.width >= 44 && box.height >= 44, `${what}: the menu button is a 44 px target`);
+      assert.ok(snap(box.width) >= 44 && snap(box.height) >= 44, `${what}: the menu button is a 44 px target`);
 
       // Open: every place is a row in it, focus moves in, the page behind is inert.
       await menu.tap();
@@ -95,7 +95,7 @@ test('the navigation drawer: every place, focus in and back, Esc, scrim and clos
       assert.equal(await page.locator('#more-btn').count(), 0, `${what}: nothing hidden under More`);
       assert.ok(await page.locator('#rail-search').isVisible() && await page.locator('#nav-close').isVisible(), `${what}: search and close`);
       assert.equal(await page.evaluate(() => document.getElementById('main')!.inert), true, `${what}: the page behind is inert`);
-      for (const r of await page.locator('#rail a[href], #rail button').filter({ visible: true }).evaluateAll((es) => es.map((e) => ({ w: e.getBoundingClientRect().width, h: e.getBoundingClientRect().height })))) assert.ok(r.w >= 44 && r.h >= 44, `${what}: a 44 px target (${JSON.stringify(r)})`);
+      for (const r of await page.locator('#rail a[href], #rail button').filter({ visible: true }).evaluateAll((es) => es.map((e) => ({ w: e.getBoundingClientRect().width, h: e.getBoundingClientRect().height })))) assert.ok(snap(r.w) >= 44 && snap(r.h) >= 44, `${what}: a 44 px target (${JSON.stringify(r)})`);
       // Focus stays inside: Tab and Shift Tab wrap at its ends.
       for (let i = 0; i < places.length + 4; i++) {
         await page.keyboard.press('Tab');

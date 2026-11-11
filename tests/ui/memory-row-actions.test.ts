@@ -11,8 +11,13 @@ import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import type { Browser, Page, Route } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
-import { browser, device } from './support.ts';
+import { browser, device, snap } from './support.ts';
 import { seeded, settled } from './m9-support.ts';
+
+// The 44 px target, read at the browser's layout precision (snap, 1/64 px: #347, #503): at a
+// fractional scroll offset a 44 px button's boundingBox() can read 43.99997. Not a tolerance: a box
+// one layout unit short still fails.
+const meetsTarget = (box: { width: number; height: number } | null) => !!box && snap(box.width) >= 44 && snap(box.height) >= 44;
 
 let server: Awaited<ReturnType<typeof seeded>> | null = null;
 before(async () => { server = await seeded('nova-rowactions-'); });
@@ -84,13 +89,13 @@ for (const size of SIZES) {
     assert.deepEqual(await shownAtRest(page, '[data-candidate="c1"]'), ['keep-candidate', 'drop-candidate'], `${size.name}: Keep and Drop shown at rest on a held item`);
     for (const action of ['keep-candidate', 'drop-candidate']) {
       const box = await page.locator(`[data-candidate="c1"] [data-action="${action}"]`).boundingBox();
-      assert.ok(box && box.width >= 44 && box.height >= 44, `${size.name}: ${action} is at least 44 px (${box?.width}×${box?.height})`);
+      assert.ok(meetsTarget(box), `${size.name}: ${action} is at least 44 px (${box?.width}×${box?.height})`);
     }
     for (const sel of unchecked) assert.ok((await shownAtRest(page, sel)).includes('confirm-memory'), `${size.name}: Confirm shown at rest on ${sel}`);
     assert.deepEqual(await shownAtRest(page, '#m-b0000001-0000-4000-8000-000000000002'), size.touch ? ['edit-memory', 'forget-memory'] : [], `${size.name}: a reviewed row at rest`);
     if (!size.touch) for (const sel of unchecked) assert.deepEqual(await shownAtRest(page, sel), ['confirm-memory'], `${size.name}: only Confirm at rest on ${sel}`);
     const confirmBox = await page.locator('#m-b0000001-0000-4000-8000-000000000001 [data-action="confirm-memory"]').boundingBox();
-    assert.ok(confirmBox && confirmBox.width >= 44 && confirmBox.height >= 44, `${size.name}: Confirm is at least 44 px (${confirmBox?.width}×${confirmBox?.height})`);
+    assert.ok(meetsTarget(confirmBox),`${size.name}: Confirm is at least 44 px (${confirmBox?.width}×${confirmBox?.height})`);
     // Stacked below the words when narrow, the text keeping the row's width; beside them when wide.
     for (const sel of [...unchecked, '[data-candidate="c1"]']) {
       const p = await placement(page, sel);
