@@ -170,6 +170,9 @@ export function quietNavigation(page: Page): (url: string) => Promise<unknown> {
 // in one task (a locator's two steps can be handed nodes a redraw has just replaced). `enabled`:
 // skip disabled controls; `visible`: skip hidden ones; `label`: a control's target is its label.
 export const LAYOUT_UNIT = 64;
+// A size measured in the test (a boundingBox(), a getBoundingClientRect() brought back) read at the
+// same 1/64 px, for comparing against a target: snap(43.99997) is 44, snap(43.984375) stays short (#503).
+export const snap = (px: number): number => Math.round(px * LAYOUT_UNIT) / LAYOUT_UNIT;
 export function shortTargets(page: Page, selector: string, { min = 44, enabled = true, visible = false, label = false } = {}): Promise<string[]> {
   return page.evaluate(({ selector, min, enabled, visible, label, unit }) => [...document.querySelectorAll<HTMLElement>(selector)]
     .filter((e) => (!enabled || !(e as HTMLInputElement).disabled) && (!visible || e.checkVisibility()))

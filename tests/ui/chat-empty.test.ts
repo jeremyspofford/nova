@@ -10,7 +10,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
-import { blank, browser, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
+import { blank, browser, device, finishSetup, ready, shoot, shotsDir, snap } from './support.ts';
 
 const WIDE = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
@@ -114,7 +114,7 @@ test('an empty chat: one orb, a greeting, the composer centred, suggestions that
         }
         const chips = d.page.locator('#dock .chips[role="group"][aria-label="Suggestions"] button.chip');
         assert.equal(await chips.count(), 3, `${where}: three suggestions`);
-        for (const c of await chips.all()) assert.ok(((await c.boundingBox())?.height ?? 0) >= 44, `${where}: a suggestion is a full target`);
+        for (const c of await chips.all()) assert.ok(snap((await c.boundingBox())?.height ?? 0) >= 44, `${where}: a suggestion is a full target`);
         if (shots) await shoot(d.page, join(shots, `empty-chat-${size}-nebula-${scheme}.png`));
         await chips.first().click();
         assert.equal(await input.inputValue(), await chips.first().textContent(), `${where}: a suggestion fills the composer`);

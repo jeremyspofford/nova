@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import type { Page } from 'playwright-core';
 import { stop } from '../acceptance/support.ts';
-import { blank, browser, device, finishSetup, ready, shoot, shortTargets, shotsDir } from './support.ts';
+import { blank, browser, device, finishSetup, ready, shoot, shortTargets, shotsDir, snap } from './support.ts';
 import { CATEGORIES, ENTRIES, filterSettings } from '../../ui/js/settings-ia.js';
 
 const DESKTOP = { width: 1440, height: 900 };
@@ -155,7 +155,7 @@ test('Settings: search at the head with "/", a filtered list with counts and mar
         assert.ok(await back.isVisible(), `${where}: with a back row`);
         const row = await back.boundingBox();
         const title = await d.page.locator('.settings-pane:not([hidden]) .settings-pane-title').boundingBox();
-        assert.ok(row && title && row.y < title.y && row.height >= 44, `${where}: the back row above the category's name`);
+        assert.ok(row && title && row.y < title.y && snap(row.height) >= 44, `${where}: the back row above the category's name`);
         assert.equal(await sideways(d.page), false, `${where}: nothing sideways in the detail`);
         if (shots) await shoot(d.page, join(shots, `${name}-privacy-nebula-${scheme}.png`));
         await back.click();
