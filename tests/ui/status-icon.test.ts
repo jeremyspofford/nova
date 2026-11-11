@@ -348,6 +348,101 @@ test('Status icon chromium at 2×: 96 and 112 px keep their top; a small icon af
   }
 });
 
+// Owner, 2026-11-11 (#486): the scroll budget stands and the render is fixed instead. An animating
+// icon is redrawn at ANIMATION_FPS, not on every display frame (each redraw is a copy out of the
+// shader's canvas, a synchronous readback without a GPU); a change is drawn at once, the frame a
+// morph ends on is drawn (never left part-way), a still state isn't redrawn at all, reduced motion
+// doesn't loop, and however many icons there are, they share one WebGL context. Redraws are counted
+// by each icon canvas's clearRect, which paint() calls once per draw on every path.
+test('Status icon chromium: an animating icon is redrawn at ANIMATION_FPS; changes and a morph’s end are drawn at once; one WebGL context', { timeout: 300_000 }, async () => {
+  let b: Browser | undefined;
+  try {
+    b = await webglChromium();
+    await fixture(async (base) => {
+      const d = await device(b!, { width: 1024, height: 768, scheme: 'dark', serviceWorkers: 'block' });
+      await d.ctx.addInitScript(() => {
+        const w = window as unknown as { __paints: WeakMap<HTMLCanvasElement, number>; __gl: number };
+        w.__paints = new WeakMap();
+        w.__gl = 0;
+        const clear = CanvasRenderingContext2D.prototype.clearRect;
+        CanvasRenderingContext2D.prototype.clearRect = function (this: CanvasRenderingContext2D, ...a: [number, number, number, number]) {
+          if (this.canvas.closest?.('.status-icon')) w.__paints.set(this.canvas, (w.__paints.get(this.canvas) ?? 0) + 1);
+          return clear.apply(this, a);
+        };
+        for (const proto of [HTMLCanvasElement.prototype, globalThis.OffscreenCanvas?.prototype].filter(Boolean) as { getContext: (...a: unknown[]) => unknown }[]) {
+          const real = proto.getContext;
+          proto.getContext = function (this: unknown, kind: unknown, ...rest: unknown[]) { if (/webgl/.test(String(kind))) w.__gl++; return real.call(this, kind, ...rest); };
+        }
+      });
+      await open(d.page, base);
+      const out = await d.page.evaluate(async () => {
+        const { statusIcon, setReducedMotion, ANIMATION_FPS } = await import('/js/status-icon.js' as string);
+        const w = window as unknown as { __paints: WeakMap<HTMLCanvasElement, number>; __gl: number };
+        setReducedMotion(false);
+        const row = document.createElement('div');
+        row.style.cssText = 'position:fixed;inset:0 auto auto 0;z-index:9;display:flex;flex-wrap:wrap;gap:4px';
+        document.body.append(row);
+        const frames = (n: number) => new Promise<void>((r) => { const f = () => (--n <= 0 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+        const paints = (el: HTMLElement) => w.__paints.get(el.querySelector('canvas')!) ?? 0;
+        // Paints and display frames over a window of real time.
+        const over = async (el: HTMLElement, ms: number) => {
+          const p0 = paints(el), t0 = performance.now();
+          let n = 0;
+          await new Promise<void>((r) => { const f = (t: number) => { n++; if (t - t0 >= ms) r(); else requestAnimationFrame(f); }; requestAnimationFrame(f); });
+          return { paints: paints(el) - p0, frames: n, ms: performance.now() - t0 };
+        };
+        const icon = statusIcon({ status: 'working', size: 24 });
+        row.append(icon);
+        await frames(30);
+        const loop = await over(icon, 2000);
+        // A change is drawn on the next frame, not when the cadence next comes round.
+        await frames(1);
+        const before = paints(icon);
+        icon.setStatus('paused');
+        await frames(1);
+        const change = paints(icon) - before;
+        // The morph to a still state runs out and its last frame is drawn; then nothing is redrawn.
+        await new Promise((r) => setTimeout(r, 1200));
+        const still = await over(icon, 1000);
+        const fresh = statusIcon({ status: 'paused', size: 24 });
+        row.append(fresh);
+        await frames(2);
+        const px = (el: HTMLElement) => { const c = el.querySelector('canvas')!; return c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data; };
+        const [a, z] = [px(icon), px(fresh)];
+        const endDiff = a.reduce((m, v, i) => Math.max(m, Math.abs(v - z[i]!)), 0);
+        // Reduced motion: a looping state doesn't loop. (A change under reduced motion still counts
+        // as moving for MORPH_MS, redrawing the same still frame, as before; measured after that.)
+        setReducedMotion(true);
+        icon.setStatus('working');
+        await new Promise((r) => setTimeout(r, 1000));
+        const reduced = await over(icon, 1000);
+        setReducedMotion(null);
+        // Forty more icons, every one looping: still the one WebGL context.
+        for (let i = 0; i < 40; i++) row.append(statusIcon({ status: i % 2 ? 'thinking' : 'idle', size: 16 + (i % 3) * 8 }));
+        await frames(5);
+        const renderer = icon.dataset.renderer;
+        row.remove();
+        return { fps: ANIMATION_FPS, loop, change, still, endDiff, reduced, gl: w.__gl, renderer };
+      });
+      console.log(`cadence: ${JSON.stringify(out)}`);
+      assert.equal(out.fps, 20, 'ANIMATION_FPS is the owner’s ~15–20 fps');
+      assert.equal(out.renderer, 'webgl', 'the shader draws');
+      const secs = out.loop.ms / 1000;
+      assert.ok(out.loop.paints <= out.fps * secs * 1.1 + 2, `a looping icon is redrawn at no more than ${out.fps} fps (${out.loop.paints} redraws in ${out.loop.ms.toFixed(0)} ms over ${out.loop.frames} display frames)`);
+      assert.ok(out.loop.paints >= Math.min(out.loop.frames, out.fps * secs) * 0.4, `a looping icon keeps moving (${out.loop.paints} redraws in ${out.loop.ms.toFixed(0)} ms over ${out.loop.frames} display frames)`);
+      assert.ok(out.change >= 1, `a change is drawn on the next frame (${out.change})`);
+      assert.equal(out.still.paints, 0, `a still state isn’t redrawn (${out.still.paints} in ${out.still.ms.toFixed(0)} ms)`);
+      assert.ok(out.endDiff <= 2, `the morph ends drawn on its final form, as a fresh icon of it is (max channel diff ${out.endDiff})`);
+      assert.equal(out.reduced.paints, 0, `reduced motion: a looping state isn’t redrawn (${out.reduced.paints})`);
+      assert.equal(out.gl, 1, `one WebGL context for every icon on the page (${out.gl})`);
+      assert.deepEqual(d.errors, [], 'no page errors');
+      await d.ctx.close();
+    });
+  } finally {
+    await b?.close();
+  }
+});
+
 // No WebGL at all (a browser without it, or one whose context is refused): the Canvas2D fallback
 // draws every state, at every size, sized from creation and not blank; and changes still land.
 for (const [engine, launch] of [['chromium', webglChromium], ['webkit', webkitBrowser]] as const) {
