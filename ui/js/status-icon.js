@@ -5,10 +5,10 @@
 // artwork as a mipmapped texture, so 16 px is a prefiltered downscale of the same picture as 180 px,
 // and copies into each instance's own 2D canvas; Canvas2D draws the artwork with composited tints if
 // WebGL isn't there. Colours come from the design system's tokens, read at runtime.
-// The artwork itself is the page's: an <img data-nova-mark> in its markup (ui/index.html and
-// styleguide.html load /icons/mark.svg, the master unchanged on a transparent background; pair.html
-// carries a 256 px downscale inline). This file only draws what is already on the page; it loads
-// nothing (it is served before pairing on that condition: tests/public-status-icon.test.js).
+// The artwork itself is the page's: <img data-nova-mark> elements in its markup, each a downscale of
+// the one master (scripts/app-icon.py), and this file draws each icon from the one that suits its
+// size (artwork() below). This file only draws what is already on the page; it loads nothing (it
+// is served before pairing on that condition: tests/public-status-icon.test.js).
 // The model (StatusModel, stateTreatment) is pure and unit-tested (tests/status-icon.test.js).
 
 export const STATUS_ICON_STATES = Object.freeze(['idle', 'listening', 'thinking', 'working', 'speaking', 'needs-you', 'success', 'paused', 'stopped', 'offline']);
@@ -153,7 +153,7 @@ void main() {
 }`;
 
 let gl; // undefined: not tried; null: unavailable
-let glCanvas, loc, tex, texOf;
+let glCanvas, loc, texOf; // texOf: the context the textures belong to
 function webgl() {
   if (gl !== undefined) return gl;
   gl = null;
@@ -179,23 +179,34 @@ function webgl() {
   return gl;
 }
 
-// The artwork: the page's own <img data-nova-mark>, once it has loaded. Until then an icon draws
-// nothing, and every icon is redrawn when it arrives.
-let waitingFor = null;
-function artwork() {
-  const img = document.querySelector('img[data-nova-mark]');
-  if (img?.complete && img.naturalWidth > 0) return img;
-  if (img && waitingFor !== img) {
-    waitingFor = img;
-    img.addEventListener('load', () => { for (const ic of live) ic.dirty = true; kick(); }, { once: true });
-  }
-  return null;
+// The artwork: the page's own <img data-nova-mark> elements, each a downscale of the same master at
+// its own size (scripts/app-icon.py). Owner, 2026-11-10: small uses draw from a small source, large
+// ones from a large one. An icon under LARGE_PX draws from the smallest loaded source at least
+// SMALL_X times its size; a large icon draws from the largest loaded one. The page decides what it
+// loads (an image with only a data-src is the page's to load, never this file's); until a better
+// source arrives an icon draws from the best one there, and every icon is redrawn as each arrives.
+// Until none has loaded an icon draws nothing.
+export const LARGE_PX = 96;
+const SMALL_X = 3;
+const watched = new WeakSet();
+const redraw = () => { for (const ic of live) ic.dirty = true; kick(); };
+function artwork(px) {
+  const imgs = [...document.querySelectorAll('img[data-nova-mark]')];
+  for (const img of imgs) if (!watched.has(img)) { watched.add(img); img.addEventListener('load', redraw); }
+  const ready = imgs.filter((img) => img.complete && img.naturalWidth > 0).sort((a, b) => a.naturalWidth - b.naturalWidth);
+  if (!ready.length) return null;
+  if (px >= LARGE_PX) return ready.at(-1);
+  return ready.find((img) => img.naturalWidth >= SMALL_X * px) ?? ready.at(-1);
 }
 
-// The artwork as a texture, mipmapped (it is 1024 px square) so every size is a prefiltered downscale.
+// The artwork as a texture, mipmapped (each source is a power of two) so every size is a
+// prefiltered downscale. One texture per source.
+let textures = new WeakMap();
 function texture(g, img) {
-  if (texOf === img) return tex;
-  tex = g.createTexture();
+  if (texOf !== g) { textures = new WeakMap(); texOf = g; }
+  const had = textures.get(img);
+  if (had) return had;
+  const tex = g.createTexture();
   g.bindTexture(g.TEXTURE_2D, tex);
   g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
   g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, img);
@@ -206,7 +217,7 @@ function texture(g, img) {
   g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR);
   g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE);
   g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
-  texOf = img;
+  textures.set(img, tex);
   return tex;
 }
 
@@ -239,7 +250,7 @@ function paint(ic, now, colours) {
   const size = canvas.width;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, size, size);
-  const img = artwork();
+  const img = artwork(ic.px);
   if (!img) { ic.el.dataset.renderer = 'waiting'; return; }
   const g = webgl();
   try {
@@ -272,10 +283,10 @@ function shade(g, ctx, size, img, tr) {
 
 // No WebGL: the artwork, downscaled by halving (so small sizes aren't aliased), with the state's
 // saturation, tint and brightness composited over it. Still, but every state still reads.
-const halves = new Map();
+const halvesOf = new WeakMap(); // source → its downscales by size
 function downscaled(img, size) {
-  const key = `${size}`;
-  if (halves.get('img') !== img) { halves.clear(); halves.set('img', img); }
+  if (!halvesOf.has(img)) halvesOf.set(img, new Map());
+  const halves = halvesOf.get(img), key = `${size}`;
   if (halves.has(key)) return halves.get(key);
   let c = img, w = img.naturalWidth;
   while (w / 2 >= size) {
@@ -389,7 +400,7 @@ export function statusIcon({ status = 'idle', size = 24, label = null, decorativ
   canvas.setAttribute('aria-hidden', 'true');
   el.append(canvas);
   const ic = {
-    el, canvas, model: new StatusModel(status, performance.now()), dirty: false, seen: false, unseen: 0, visible: true,
+    el, canvas, px, model: new StatusModel(status, performance.now()), dirty: false, seen: false, unseen: 0, visible: true,
     label(s) {
       if (el.dataset.status === s) return;
       el.dataset.status = s;

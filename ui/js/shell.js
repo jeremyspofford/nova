@@ -5,7 +5,7 @@ import { resolve, viewportOf } from './layout.js';
 import { DESTINATIONS, destination, placement } from './nav.js';
 import { ICONS, versionStamp } from './components.js';
 import { ICON_WORDS, iconState, orbState } from './status.js';
-import { statusIcon } from './status-icon.js';
+import { LARGE_PX, statusIcon } from './status-icon.js';
 import { escapeHtml as esc } from './markdown.js';
 
 const body = document.body;
@@ -259,7 +259,15 @@ function showLive(el) {
   // Its words can change while its state doesn't (quiet, or the problems couldn't be read).
   if (el.getAttribute('role') === 'img') { const w = words(iconNow); el.setAttribute('aria-label', w); el.title = w; }
 }
+// The mark's large source (owner, 2026-11-10: small uses get a small source, large renders a large
+// one): ui/index.html names it in data-src, and it loads only once a hero is shown, so a page with
+// only the rail, the top bar and rows never fetches it. status-icon.js draws from the small one
+// until it arrives.
+function loadLargeMark() {
+  for (const img of document.querySelectorAll('img[data-nova-mark][data-src]')) if (!img.getAttribute('src')) img.setAttribute('src', img.dataset.src);
+}
 function live(size, decorative) {
+  if ((LIVE_PX[size] ?? 0) >= LARGE_PX) loadLargeMark();
   const key = `${size}${decorative ? ':decorative' : ''}`;
   let el = pool.get(key);
   if (!el || el.isConnected) {

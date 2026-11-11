@@ -147,8 +147,9 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
         assert.equal(rows.css, 180, 'the hero is 180 px');
         assert.ok(rows.art > 0.3, `the artwork reaches the bottom rows (${(rows.art * 100).toFixed(0)}% lit)`);
         assert.ok(Math.abs(rows.share - rows.art) < 0.08, `the hero's bottom rows are drawn as the artwork's are (${(rows.share * 100).toFixed(0)}% lit, the artwork ${(rows.art * 100).toFixed(0)}%)`);
-        // It is the artwork: the page's own <img data-nova-mark>, loaded once.
-        assert.equal(await p.evaluate(() => document.querySelectorAll('img[data-nova-mark]').length), 1);
+        // It is the artwork: the page's own <img data-nova-mark> sources, each loaded once, at the
+        // sizes scripts/app-icon.py makes from the one master (owner, 2026-11-10).
+        assert.deepEqual(await p.evaluate(() => [...document.querySelectorAll<HTMLImageElement>('img[data-nova-mark]')].map((i) => i.naturalWidth)), [128, 1024]);
 
         // Moving: a looping state changes frame to frame.
         await p.getByRole('button', { name: 'working', exact: true }).click();
@@ -247,7 +248,7 @@ for (const [engine, launch, expected] of [['chromium', webglChromium, 'webgl'], 
             };
           });
           await seq.page.goto(`${base}/styleguide?entry=status-icon`);
-          await seq.page.waitForFunction(() => (document.querySelector('img[data-nova-mark]') as HTMLImageElement | null)?.complete);
+          await seq.page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('img[data-nova-mark]')].every((i) => i.complete && i.naturalWidth > 0));
           await seq.page.evaluate(async () => {
             const { statusIcon } = await import('/js/status-icon.js' as string);
             const tile = document.createElement('div');
