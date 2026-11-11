@@ -6,7 +6,7 @@
 | Nova application | `github.com/jeremyspofford/nova` | The ONLY Nova product repo. All Nova code lands here. |
 | System blueprint & foundation | `github.com/jeremyspofford/nova-foundation` (singular) | Cross-system design, vault/spaces scaffold, registries, templates. NOT an application. |
 | Relay | `github.com/jeremyspofford/relay` (private) | Standalone worker service (chat → supervised coding workers in git worktrees). Hardened as its own service; integrates into Nova later via adapter. Never rebuilt into Nova. |
-| Legacy experiment | `github.com/arialabs/nova` | Python, dormant since Apr 2026 (OpenClaw-era). Reference only. Do not build on it. |
+| Legacy experiment | `github.com/arialabs/nova` | Python, dormant since May 2026: last commit 2026-05-09 (`022b44609`, tag `v0.1.0-alpha`; local checkout on the hub's WSL at `~/workspace/legacy-nova-src`, verified 2026-11-11) (OpenClaw-era). Reference only. Do not build on it. |
 | Nova v2 / Cortex research | Aria Labs strand | Parked research. Cortex (sovereign memory protocol) may be consumed later as a dependency if the spec revives it. |
 | Obsidian vault (canonical personal memory surface) | The user's long-standing vault | Human-facing shared memory (books: Personal, Employer, per-client). Nova reads/writes through defined interfaces; the vault is the user's, not Nova's runtime store. |
 | Nova runtime home (`~/Nova`) | On the hub device | Runtime state only: config, ledger database, memory store, logs. Not a code repo. |
