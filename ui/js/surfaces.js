@@ -36,6 +36,9 @@ export const store = {
 export const partKnown = (p) => store.known.has(p);
 export const partFailed = (p) => store.failed.has(p);
 const partSettled = (p) => store.known.has(p) || store.failed.has(p);
+// One word for where a part stands, for the cards that draw it (components.js partBody): answered,
+// never answered and its last read failed, or still on its way. Only 'known' may say empty.
+export const partState = (p) => (store.known.has(p) ? 'known' : store.failed.has(p) ? 'failed' : 'pending');
 
 const settle = (p, fallback) => p.catch(() => fallback);
 const INITIAL_PARTS = ['tasks', 'problems', 'health', 'profile', 'memory', 'rules', 'messages', 'workers', 'devices', 'mesh', 'requests', 'resilience', 'caps'];
@@ -164,19 +167,20 @@ export function renderHome(el, now = new Date()) {
 </header>
 <div class="home-cards">
   ${needsCard}
-  ${briefCard()}
+  ${briefCard({ known: store.loaded })}
   ${verified ? verifiedResultCard(verified, { now }) : ''}
-  <div data-asideable>${handlingCard({ tasks: store.tasks, now })}</div>
-  <div data-asideable>${deviceMeshCard({ devices: meshDevices(), now })}</div>
-  ${memoryHighlightCard({ records: store.memory })}
+  <div data-asideable>${handlingCard({ tasks: store.tasks, now, state: partState('tasks') })}</div>
+  <div data-asideable>${deviceMeshCard({ devices: meshDevices(), now, state: partState('devices') })}</div>
+  ${memoryHighlightCard({ records: store.memory, state: partState('memory') })}
   <div data-asideable>${healthCard(cardState())}</div>
 </div>`;
 }
 
-// The right column (desktop) or context pane (tablet): three quiet cards.
+// The right column (desktop) or context pane (tablet): three quiet cards. Drawn from the first
+// moment, before any part has answered, so each says only what it knows (partState).
 export function renderAside(el, now = new Date()) {
-  el.innerHTML = `${handlingCard({ tasks: store.tasks, now })}
-${deviceMeshCard({ devices: meshDevices(), now })}
+  el.innerHTML = `${handlingCard({ tasks: store.tasks, now, state: partState('tasks') })}
+${deviceMeshCard({ devices: meshDevices(), now, state: partState('devices') })}
 ${healthCard(cardState())}`;
 }
 
@@ -196,17 +200,23 @@ const GROUPS = [
 export const unloaded = (part, title) => `<div class="empty-state" data-unloaded="${esc(part)}" role="status"><p class="empty-title">${esc(title)}</p><p class="empty-sub">${esc('Nova’s server didn’t give this part, so this page can’t say what is in it.')}</p><button type="button" class="btn" data-action="retry-part" data-part="${esc(part)}">Try again</button></div>`;
 const pending = (part, text) => waitingLine(text, { key: `view-${part}` });
 
+// A view’s heading needs no data: it is there while the view waits (walker W-4), and the same
+// heading once it is drawn.
+// “Nothing is done until Nova has checked the evidence” is backed by the eval claim.verified-only-with-evidence (tests/evals/tasks/claim-backlog.ts).
+const TASKS_HEAD = `<header class="view-head"><h2 class="view-title">Tasks</h2>
+<p class="view-lede">Everything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.</p></header>`;
+const healthHead = (lede = '') => `<header class="view-head"><h2 class="view-title">Health</h2>${lede ? `
+<p class="view-lede">${lede}</p>` : ''}</header>`;
+
 export function renderTasks(el, now = new Date()) {
-  if (!store.loaded && !store.tried) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('tasks', el, 'Loading Tasks', { total: INITIAL_PARTS.length, done: 0 }); return; }
+  if (!store.loaded && !store.tried) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('tasks', el, 'Loading Tasks', { total: INITIAL_PARTS.length, done: 0, head: TASKS_HEAD }); return; }
   const by = new Map(GROUPS.map(([k]) => [k, []]));
   for (const t of store.tasks) by.get(statusOf(t))?.push(t);
   const groups = GROUPS.filter(([k]) => by.get(k).length).map(([k, title]) => `<section class="panel task-group" aria-labelledby="tg-${k}">
   <h2 class="section-title" id="tg-${k}">${esc(title)}</h2>
   <ul class="task-list">${by.get(k).map((t) => taskRow(t, { now })).join('')}</ul>
 </section>`).join('');
-  // “Nothing is done until Nova has checked the evidence” is backed by the eval claim.verified-only-with-evidence (tests/evals/tasks/claim-backlog.ts).
-  el.innerHTML = `<header class="view-head"><h2 class="view-title">Tasks</h2>
-<p class="view-lede">Everything Nova takes on, in plain words. Nothing is done until Nova has checked the evidence; tap Verified to see it.</p></header>
+  el.innerHTML = `${TASKS_HEAD}
 ${groups || (partFailed('tasks') ? unloaded('tasks', 'Tasks couldn’t be loaded') : emptyState({ title: 'Nothing needs you', line: 'No tasks yet. When Nova takes something on, it shows here until it’s verified.', action: '<a class="btn" href="/chat" data-nav="chat">Ask Nova to do something</a>' }))}`;
 }
 
@@ -476,7 +486,13 @@ export function renderAboutSettings() {
 <div class="connection-actions"><a class="btn small" href="/about">Open About Nova</a><a class="btn small quiet" href="/changelog">What’s new</a><a class="btn small quiet" href="/pipeline">Where Nova stands</a></div></section>`;
 }
 
+// What Health shows above its fold, read in the first load. Its costs are read when it opens and
+// are its own panel's wait (a Caps-only failure belongs to that panel, not the whole view).
+const HEALTH_PARTS = ['problems', 'health', 'resilience'];
 export function renderHealth(el) {
+  // Until those parts have answered (or failed), Health waits as one view under its heading: panels
+  // drawn early would be pushed down when the problems and their playbooks land (walker W-6, CLS).
+  if (!HEALTH_PARTS.every(partSettled)) { if (!el.querySelector('[data-skeleton], .view-waiting')) showWaiting('health', el, 'Loading Health', { head: healthHead() }); return; }
   const retained = el.querySelector('[data-work-limits]');
   const opened = [...el.querySelectorAll('.work-costs details, .diagnostics-download details')].map(d => d.open);
   const h = store.health;
@@ -510,8 +526,7 @@ export function renderHealth(el) {
   const checksBody = h ? `<ul class="settings-list">${checks}</ul><p class="settings-note">Version ${esc(h.version)} · running for ${esc(uptime(h.uptime_s))}.</p>${buildStamp(store.version)}`
     : partFailed('health') ? unloaded('health', 'Health checks couldn’t be loaded')
       : waitingLine('Checking Nova’s health', { key: 'health' });
-  next.innerHTML = `<header class="view-head"><h2 class="view-title">Health</h2>
-<p class="view-lede">${lede}</p></header>
+  next.innerHTML = `${healthHead(lede)}
 <section class="panel" aria-labelledby="h-problems"><h3 class="section-title" id="h-problems">Problems</h3>
 ${problems}</section>
 ${keepingRunning()}

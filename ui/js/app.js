@@ -414,6 +414,8 @@ function open(id, { quiet = false } = {}) {
     state.session = snap.session;
     state.live = snap.live;
     state.snapshot = true;
+    // In at last (the stream kept trying): whatever was said while it couldn’t be opened is over.
+    state.missing = false;
     if (state.pending && state.session.turns.some((t) => !t.kind && t.text === state.pending.text && t.ts >= state.pending.since)) state.pending = null;
     renderAll({ enter: first && !quiet });
     if (first && state.session.turns.length) rememberShape('chat', el.thread, id);
@@ -432,23 +434,27 @@ function open(id, { quiet = false } = {}) {
   });
   es.addEventListener('open', () => setReachable(true));
   es.addEventListener('error', () => {
+    // A stream that fails before any snapshot: the wait is over, never left waiting for good. Refused
+    // (closed), or never answered (a network failure: the browser keeps trying, so it stays open;
+    // walker W-7). A failed stream doesn't say why, so one ordinary read asks (F-024): "no such
+    // conversation" is said as that, with Nova still reachable; only no answer at all is an outage.
+    // A stream still trying while Nova answers that read is still on its way: it keeps waiting.
+    if (es === stream && !state.snapshot) {
+      const closed = es.readyState === EventSource.CLOSED;
+      reach(`/api/sessions/${encodeURIComponent(id)}`).then((r) => {
+        if (es !== stream || state.snapshot) return;
+        if (r.status === 404) { Object.assign(state, { snapshot: true, missing: 'gone', session: emptySession(id) }); setReachable(true); renderThread(); renderChrome(); return; }
+        if (!closed && r.ok && !fromCache(r)) return;
+        throw new Error('refused');
+      }).catch(() => {
+        if (es !== stream || state.snapshot) return;
+        Object.assign(state, { snapshot: true, missing: 'unreachable', session: emptySession(id) });
+        renderThread(); renderChrome();
+        setReachable(false);
+      });
+      return;
+    }
     if (es.readyState === EventSource.CLOSED) {
-      // A stream refused before any snapshot: the wait is over, never left waiting for good. A
-      // refused stream doesn't say why, so one ordinary read asks (F-024): "no such conversation"
-      // is said as that, with Nova still reachable; only no answer at all is an outage.
-      if (es === stream && !state.snapshot) {
-        reach(`/api/sessions/${encodeURIComponent(id)}`).then((r) => {
-          if (es !== stream || state.snapshot) return;
-          if (r.status === 404) { Object.assign(state, { snapshot: true, missing: 'gone', session: emptySession(id) }); setReachable(true); renderThread(); renderChrome(); return; }
-          throw new Error('refused');
-        }).catch(() => {
-          if (es !== stream || state.snapshot) return;
-          Object.assign(state, { snapshot: true, missing: 'unreachable', session: emptySession(id) });
-          renderThread(); renderChrome();
-          setReachable(false);
-        });
-        return;
-      }
       setReachable(false);
       return;
     }
@@ -511,7 +517,7 @@ function flash(node) {
 // conversation, or Nova's server isn't answering. Never the greeting of an empty chat.
 const MISSING = {
   gone: '<div class="empty" data-missing="gone"><p class="empty-line">This conversation doesn’t exist.</p><p class="memory-lede">It may have been deleted, or the link is wrong. <a href="/chat">Open the main conversation</a>.</p></div>',
-  unreachable: '<div class="empty" data-missing="unreachable"><p class="empty-line">This conversation couldn’t be opened.</p><p class="memory-lede">Nova’s server isn’t answering. Your conversations are safe on disk; <a href="/chat">open the main conversation</a> once it’s back.</p></div>',
+  unreachable: '<div class="empty" data-missing="unreachable"><p class="empty-line">This conversation couldn’t be opened.</p><p class="memory-lede">Nova’s server isn’t answering. Your conversations are safe on disk; <a href="/chat">open the main conversation</a> once it’s back.</p><button type="button" class="btn" data-action="retry-chat">Try again</button></div>',
 };
 let emptyKey = '';
 
@@ -667,8 +673,11 @@ const readOnly = () => state.view === 'chat' && ['helper', 'run'].includes(state
 // Every view's heading names it, Home's too (UX review 1, F5: never an empty heading); beside a
 // rail, and on a phone's Home, it is there for screen readers only (layout.css).
 const TITLES = { home: 'Home', tasks: 'Tasks', memory: 'Memory', automations: 'Automations', skills: 'Skills', activity: 'Activity', health: 'Health', settings: 'Settings', capture: 'Capture', topology: 'Topology', about: 'About Nova', changelog: 'What’s new', pipeline: 'Where Nova stands', receipts: 'Receipts' };
+// A conversation's own title, from its snapshot or the list. "Untitled" only once it is in and has
+// none: while it loads, or when it couldn't be opened, its title isn't known (W-7).
+const chatTitle = () => state.session.title || (Array.isArray(state.list) ? state.list.find((s) => s.id === state.id)?.title : '') || (state.snapshot && !state.missing ? 'Untitled' : 'Conversation');
 function renderChrome() {
-  const title = state.view === 'chat' ? (!state.id ? 'New chat' : state.missing === 'gone' ? 'Conversation not found' : state.id !== 'main' ? state.session.title || 'Untitled' : 'Nova') : TITLES[state.view] ?? '';
+  const title = state.view === 'chat' ? (!state.id ? 'New chat' : state.missing === 'gone' ? 'Conversation not found' : state.id !== 'main' ? chatTitle() : 'Nova') : TITLES[state.view] ?? '';
   el.dock.hidden = state.view !== 'chat' || readOnly();
   // An empty chat asks; a thread with turns is replied to. The field is two rows while it is centred.
   // Only a chat known to be empty: while one loads, the field stays one row, as most land.
@@ -1041,7 +1050,7 @@ function renderMemoryView({ enter: entering = false } = {}) {
       if (typing != null) { box.focus({ preventScroll: true }); box.setSelectionRange(typing, typing); }
     }
   } else if (state.memoryError) el.memory.innerHTML = errorEmpty("Memory couldn't be read.", state.memoryError, 'retry-memory');
-  else if (!el.memory.querySelector('[data-skeleton], .view-waiting')) showWaiting('memory', el.memory, 'Loading Memory');
+  else if (!el.memory.querySelector('[data-skeleton], .view-waiting')) showWaiting('memory', el.memory, 'Loading Memory', { head: '<header class="memory-intro"><p class="empty-date">What Nova knows</p></header>' });
   if (state.memory && (entering || waited)) rememberShape('memory', el.memory);
   // An edit gives the memory a new id; focus stays where it was in the list.
   if (focused) (document.getElementById(`m-${focused}`) ?? el.memory.querySelectorAll('.memory-item')[at])?.focus({ preventScroll: true });
@@ -2236,7 +2245,9 @@ const CORE_ACTIONS = {
   'backup-now': resilienceAction, 'drill-now': resilienceAction, 'repair-problem': resilienceAction,
   // A part that couldn't be loaded (F-021, F-023): that part alone, read again and drawn in place.
   // One part failing again says nothing about whether Nova answers, so reachability is left alone.
-  'retry-part': (b) => (['tasks', 'problems', 'health', 'rules'].includes(b.dataset.part) ? core.load([b.dataset.part]).then(() => renderCore()) : null),
+  'retry-part': (b) => (['tasks', 'problems', 'health', 'rules', 'memory', 'devices'].includes(b.dataset.part) ? core.load([b.dataset.part]).then(() => renderCore()) : null),
+  // A conversation that couldn’t be opened (W-7): open it again, waiting as at first.
+  'retry-chat': () => { if (state.view === 'chat' && state.id) open(state.id); },
   'resolve-problem': toasting(async (b) => { await post(`/api/v1/problems/${encodeURIComponent(b.dataset.problem)}/resolve`); scheduleRefresh(['problems', 'health']); toast('Marked as dealt with.'); }),
   'read-message': toasting(async (b) => { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/read`); scheduleRefresh(['messages']); }),
   'send-message': toasting(async (b) => { await post(`/api/v1/messages/${encodeURIComponent(b.dataset.message)}/approve`); scheduleRefresh(['messages']); toast('Sent.'); }),
@@ -2392,6 +2403,23 @@ coreStream();
 keepSession();
 renderVoice();
 
+// The page asked for, before Nova has said whether setup is needed (walker W-4: on a slow server that
+// first read takes as long as any other): its title, the rail's mark, its heading and its waiting
+// state, and the right column waiting. None of it needs data, so none of it claims any; route()
+// draws the same view again once the app starts. Setup, if it is needed, opens over it.
+function frame() {
+  const r = routeOf(location.pathname);
+  const view = r.unknown ? 'home' : r.dest;
+  if (!VIEWS[view]) return;
+  if (view === 'chat') Object.assign(state, { id: r.conversation, snapshot: false, missing: false });
+  setView(view);
+  renderChrome();
+  if (view === 'chat') { renderThread(); if (state.id) showWaiting('chat', el.thread, 'Loading the conversation', { end: true, id: state.id }); core.renderAside(el.aside); }
+  else if (view === 'memory') { renderMemoryView(); core.renderAside(el.aside); }
+  else if (['home', 'tasks', 'health'].includes(view)) renderCore();
+  else core.renderAside(el.aside);
+}
+
 let booted = false;
 function boot() {
   if (booted) return;
@@ -2411,6 +2439,7 @@ function boot() {
   document.body.dataset.shown = '';
   route();
 }
+frame();
 // A blank profile opens the setup conversation, full screen, before anything else.
 if (!(await startSetup({ done: (path = '/') => { boot(); navigate(path); } }))) boot();
 document.body.dataset.shown = '';

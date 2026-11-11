@@ -96,10 +96,21 @@ export function emptyState({ title = 'Nothing needs you', line = '', action = ''
 
 // ---- cards ----------------------------------------------------------------------------------
 
-// No brief workflow exists yet, so the Brief card says so plainly.
-export function briefCard({ brief = null } = {}) {
+// A card whose part of the page isn’t in (the status-truth rule; F-021, walker W-3 and W-4): still
+// on its way, a waiting line; never answered, said with Try again for that part alone (app.js
+// retry-part). Never the card’s empty state, which is only true once the part has answered.
+// `state`: 'known' | 'pending' | 'failed' (surfaces.js partState).
+function partBody(state, { part, title, waiting }) {
+  if (state === 'failed') return `<p class="card-lead" data-status="needs-you">${esc(title)}</p><p class="card-line">${esc('Nova’s server didn’t give this part, so this page can’t say what is in it.')}</p><button type="button" class="btn small" data-action="retry-part" data-part="${esc(part)}">Try again</button>`;
+  return waitingLine(waiting, { key: `view-card-${part}` });
+}
+
+// No brief workflow exists yet, so the Brief card says so plainly; but only once Nova has answered
+// at all (`known`): with nothing in from Nova, it can’t say even that.
+export function briefCard({ brief = null, known = true } = {}) {
   const body = brief
     ? `<p class="card-lead">${esc(clip(brief.headline, 90))}</p>${(brief.lines ?? []).slice(0, 2).map((l) => `<p class="card-line">${esc(clip(l, 90))}</p>`).join('')}`
+    : !known ? '<p class="card-lead" data-status="needs-you">Brief couldn’t be loaded</p><p class="card-line">Nova isn’t answering. This page reconnects when it’s back.</p>'
     : '<p class="card-lead">No brief yet.</p><p class="card-line">A daily brief arrives here once you set one up.</p>';
   return card({ kind: 'brief-card', title: 'Brief', icon: 'brief', body });
 }
@@ -119,9 +130,11 @@ export function taskRow(t, { now = new Date(), compact = false } = {}) {
 }
 
 // "Nova is handling": background work, up to three rows, then a way to the ledger.
-export function handlingCard({ tasks = [], now = new Date() } = {}) {
+// `state`: whether the tasks have answered (partBody); only then is "Nothing in progress" true.
+export function handlingCard({ tasks = [], now = new Date(), state = 'known' } = {}) {
   const open = tasks.filter((t) => isOpen(t) && t.user_visibility !== 'silent');
-  const body = open.length
+  const body = state !== 'known' && !open.length ? partBody(state, { part: 'tasks', title: 'Tasks couldn’t be loaded', waiting: 'Loading tasks' })
+    : open.length
     ? `<ul class="task-list">${open.slice(0, 3).map((t) => taskRow(t, { now, compact: true })).join('')}</ul>${open.length > 3 ? `<p class="card-line">and ${open.length - 3} more</p>` : ''}`
     : '<p class="card-lead">Nothing in progress.</p><p class="card-line">Work Nova takes on shows here until it’s verified.</p>';
   return card({ kind: 'handling-card', title: 'Nova is handling', icon: 'handling', body, action: '<a class="link" href="/tasks" data-nav="tasks">All tasks</a>' });
@@ -279,11 +292,15 @@ export function rolesReviewSheet(d, next, change, stops = []) {
 </form>`;
 }
 
-// The trusted devices, at most three rows. "Only this device for now" only while that is true.
-export function deviceMeshCard({ devices = [], now = new Date() } = {}) {
+// The trusted devices, at most three rows. "Only this device for now" only while that is true: once
+// the registry has answered (`state`, partBody). Before then, this device alone is a fact, the rest
+// isn’t known.
+export function deviceMeshCard({ devices = [], now = new Date(), state = 'known' } = {}) {
   const trusted = devices.filter((d) => d.trust !== 'revoked');
   const alone = trusted.length <= 1;
-  const body = `<ul class="device-list">${trusted.slice(0, 3).map((d) => deviceRow(d, { now })).join('')}</ul>${trusted.length > 3 ? `<p class="card-line">and ${trusted.length - 3} more</p>` : ''}${alone ? '<p class="card-line is-faint">Only this device for now. Pair your phone to reach Nova from it.</p>' : ''}`;
+  const rest = state !== 'known' ? partBody(state, { part: 'devices', title: 'Devices couldn’t be loaded', waiting: 'Loading devices' })
+    : alone ? '<p class="card-line is-faint">Only this device for now. Pair your phone to reach Nova from it.</p>' : '';
+  const body = `<ul class="device-list">${trusted.slice(0, 3).map((d) => deviceRow(d, { now })).join('')}</ul>${trusted.length > 3 ? `<p class="card-line">and ${trusted.length - 3} more</p>` : ''}${rest}`;
   return card({ kind: 'device-mesh-card', title: 'Devices', icon: 'device', body, action: '<a class="link" href="/topology">Machines and services</a>' });
 }
 
@@ -556,9 +573,11 @@ export function diagnosticsDownload({ available = true, why = 'unreachable' } = 
   return `<section class="diagnostics-download" aria-label="Diagnostics" data-diagnostics-state="${available ? 'available' : 'unavailable'}"><p class="card-line">Download versions, health, settings and recent diagnostic logs. Work, memory and conversations are represented by counts and states, without conversation, memory or captured screen/audio content.</p><p class="card-line">Built in memory for your download. Nova keeps no copy and uploads nothing.</p><details class="work-cost-details"><summary>Review before sharing</summary><p class="card-line">Known secrets and secret-shaped values are redacted. Logs and error details can still contain other free text; this is not a guarantee that every private detail is removed. Review the file before sharing.</p></details>${available ? '<a class="btn" href="/api/v1/diagnostics" download data-download-diagnostics>Download diagnostics</a>' : `<p class="card-line">${esc(unavailable)}</p><button class="btn" disabled>Download diagnostics</button>`}</section>`;
 }
 
-export function memoryHighlightCard({ records = [] } = {}) {
+// `state`: whether memory has answered (partBody); only then is "Nothing kept yet" true.
+export function memoryHighlightCard({ records = [], state = 'known' } = {}) {
   const r = records.find((m) => m.active && m.user_state !== 'forgotten');
-  const body = r
+  const body = state !== 'known' && !r ? partBody(state, { part: 'memory', title: 'Memory couldn’t be loaded', waiting: 'Loading memory' })
+    : r
     ? `<p class="card-lead">${esc(clip(r.content, 90))}</p><p class="card-line">${esc(r.kind)} · <time>${esc(ago(r.created_at))}</time></p>`
     : '<p class="card-lead">Nothing kept yet.</p><p class="card-line">What lasts from your conversations shows here.</p>';
   return card({ kind: 'memory-highlight-card', title: 'Memory', icon: 'memory', body, action: '<a class="link" href="/memory" data-nav="memory">Memory</a>' });
