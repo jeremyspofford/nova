@@ -2410,14 +2410,15 @@ renderVoice();
 function frame() {
   const r = routeOf(location.pathname);
   const view = r.unknown ? 'home' : r.dest;
-  if (!VIEWS[view]) return;
+  // Only the views that can wait before the app starts; the rest (Settings and its children, the
+  // older panes) open with route() as before.
+  if (!['home', 'tasks', 'health', 'memory', 'chat'].includes(view)) return;
   if (view === 'chat') Object.assign(state, { id: r.conversation, snapshot: false, missing: false });
   setView(view);
   renderChrome();
   if (view === 'chat') { renderThread(); if (state.id) showWaiting('chat', el.thread, 'Loading the conversation', { end: true, id: state.id }); core.renderAside(el.aside); }
   else if (view === 'memory') { renderMemoryView(); core.renderAside(el.aside); }
-  else if (['home', 'tasks', 'health'].includes(view)) renderCore();
-  else core.renderAside(el.aside);
+  else renderCore();
 }
 
 let booted = false;
