@@ -410,10 +410,11 @@ test('Status icon chromium: an animating icon is redrawn at ANIMATION_FPS; chang
         const px = (el: HTMLElement) => { const c = el.querySelector('canvas')!; return c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data; };
         const [a, z] = [px(icon), px(fresh)];
         const endDiff = a.reduce((m, v, i) => Math.max(m, Math.abs(v - z[i]!)), 0);
-        // Reduced motion: a looping state is drawn once and not redrawn.
+        // Reduced motion: a looping state doesn't loop. (A change under reduced motion still counts
+        // as moving for MORPH_MS, redrawing the same still frame, as before; measured after that.)
         setReducedMotion(true);
         icon.setStatus('working');
-        await frames(3);
+        await new Promise((r) => setTimeout(r, 1000));
         const reduced = await over(icon, 1000);
         setReducedMotion(null);
         // Forty more icons, every one looping: still the one WebGL context.
