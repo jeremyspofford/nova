@@ -102,6 +102,9 @@ export async function load(parts = INITIAL_PARTS) {
 const asksYou = (t) => statusOf(t) === 'needs-you';
 export const needsYou = () => store.tasks.filter(asksYou).length + store.messages.filter((m) => m.hold === 'needs_ok').length + store.requests.length;
 export const working = () => store.tasks.filter((t) => t.state === 'active' || t.state === 'verifying').length;
+// The privacy mode Nova acts under: Local only for an unread profile, the strict default for what
+// Nova may do (saveProfile's looser check, voice). Not a fact to show: a surface that names the mode
+// asks partKnown('profile') first and names none until then (V-1, V-3).
 export const privacy = () => store.profile?.privacy?.default ?? 'local-only';
 
 // ---- this device ---------------------------------------------------------------------------
@@ -834,20 +837,30 @@ ${settingsRow({ id: 'directness-row', title: 'Directness', note: 'Telling you wh
 </ul></section>`;
 }
 
+// Until the profile has answered (partState, F-021) the section names no mode (V-3): no choice is
+// checked, the choices wait disabled (a pick can't be weighed against a mode not yet read), and the
+// note says the setting is on its way, or that it couldn't be read, with a retry.
 export function renderPrivacy() {
+  const state = partState('profile');
+  const known = state === 'known';
+  const note = known ? esc(PRIVACY.find(([v]) => v === privacy())?.[2] ?? '')
+    : state === 'failed' ? esc('Nova’s server didn’t give your privacy setting, so this page can’t say what it is.')
+    : esc('Reading your privacy setting from Nova…');
+  const retry = state === 'failed' ? '<button type="button" class="btn small" data-action="retry-privacy">Try again</button>' : '';
   return `<section class="memory-section" id="privacy" aria-labelledby="set-privacy"><h2 class="memory-heading" id="set-privacy">Privacy</h2>
 <p class="memory-lede">The default for every task. A task can be stricter, never looser.</p>
-<fieldset class="set-field"><legend class="sr-only">Privacy mode</legend><div class="choices">${PRIVACY.map(([v, l]) => `<label class="choice"><input type="radio" name="privacy" value="${v}"${privacy() === v ? ' checked' : ''}><span class="choice-name">${l}</span></label>`).join('')}</div></fieldset>
-<p class="settings-note">${esc(PRIVACY.find(([v]) => v === privacy())?.[2] ?? '')}</p>${chatPrivacyNote()}
+<fieldset class="set-field"${known ? '' : ' disabled'}><legend class="sr-only">Privacy mode</legend><div class="choices">${PRIVACY.map(([v, l]) => `<label class="choice"><input type="radio" name="privacy" value="${v}"${known && privacy() === v ? ' checked' : ''}><span class="choice-name">${l}</span></label>`).join('')}</div></fieldset>
+<p class="settings-note"${known ? '' : ` data-privacy-unknown="${state}" role="status"`}>${note}</p>${retry}${chatPrivacyNote()}
 <div class="connection-actions"><a class="btn" href="/receipts">Receipts: what left your devices</a></div></section>`;
 }
 
 // Where chat goes, and what a chat turn carries, said where the mode is chosen and before the first
 // send (F-025, F-027, A-006): the hub builds the words from the chat model actually chosen. Under
 // local-only, what choosing the cloud would mean for chat is said before the person chooses it.
+// Nothing until the profile has answered: the words are the current mode's, and it isn't known (V-3).
 function chatPrivacyNote() {
   const s = store.providers?.chat?.sends;
-  if (!s?.modes) return '';
+  if (!s?.modes || !partKnown('profile')) return '';
   const now = s.modes[privacy()] ?? '';
   const ifCloud = privacy() === 'local-only' && s.modes['local-preferred'] !== now ? ` With Local first or Cloud allowed: ${s.modes['local-preferred']}` : '';
   return `<p class="settings-note" data-chat-privacy>${esc(`${now}${ifCloud}`)}</p>`;

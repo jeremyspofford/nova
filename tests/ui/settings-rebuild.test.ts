@@ -18,7 +18,9 @@ const PHONE = { width: 390, height: 844 };
 const DUO = { width: 380, height: 900 };
 
 const listed = (page: Page) => page.$$eval('#settings-nav .settings-cats > li', (lis) => lis.filter((li) => (li as HTMLElement).checkVisibility()).map((li) => ({ cat: (li as HTMLElement).dataset.cat!, count: (li.querySelector('.cat-count') as HTMLElement).checkVisibility() ? Number.parseInt(li.querySelector('.cat-count')!.textContent!, 10) : null })));
-const settled = (page: Page) => page.waitForFunction(() => document.querySelector('#settings-you .settings-row') && document.querySelector('#settings-privacy input[name="privacy"]'));
+// Privacy's choices are drawn (disabled, none checked) before the profile is in (V-3): settled is
+// once a mode is checked, the profile's answer, not merely once the choices are there.
+const settled = (page: Page) => page.waitForFunction(() => document.querySelector('#settings-you .settings-row') && document.querySelector('#settings-privacy input[name="privacy"]:checked'));
 const sideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth > innerWidth || document.getElementById('scroller')!.scrollWidth > document.getElementById('scroller')!.clientWidth);
 
 test('Settings: search at the head with "/", a filtered list with counts and marks, two screens on a phone, every setting reachable', async (t) => {
