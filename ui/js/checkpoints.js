@@ -56,7 +56,9 @@ function row(c) {
 }
 
 export function renderCheckpoints() {
-  const head = '<section class="memory-section" id="checkpoints" aria-labelledby="set-checkpoints"><h2 class="memory-heading" id="set-checkpoints">Backups</h2><p class="conn-sub">Checkpoints</p>';
+  // Its heading reads Backups, as the backup settings above it do; its name takes the line under it
+  // too, so the two are told apart as landmarks (W-11, axe landmark-unique). The words are unchanged.
+  const head = '<section class="memory-section" id="checkpoints" aria-labelledby="set-checkpoints set-checkpoints-sub"><h2 class="memory-heading" id="set-checkpoints">Backups</h2><p class="conn-sub" id="set-checkpoints-sub">Checkpoints</p>';
   if (!data) return `${head}${part.failed ? `<p class="memory-lede">${esc(part.failed)}</p><button type="button" class="btn set-retry" data-action="cp-retry">Try again</button>` : waitingLine('Loading checkpoints', { key: 'checkpoints' })}</section>`;
   const pending = restoring ?? (data.restoring ? `Restoring “${data.restoring.checkpoint.label}”. Nova restarts by itself and finishes it as it starts.` : null);
   // The one standout: a restore or a delete being confirmed, else taking a checkpoint.

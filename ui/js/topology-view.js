@@ -20,9 +20,9 @@ import { emptyState, status } from './components.js';
  * Live callers supply hubId; unknown/absent hubs have no hub links. Legacy specimens retain their first hub.
  */
 
-const group = (words) => `<h5 class="topology-group">${esc(words)}</h5>`;
+const group = (words) => `<h4 class="topology-group">${esc(words)}</h4>`;
 const back = (words) => `<button type="button" class="btn quiet topology-back" data-topology-back>${esc(words)}</button>`;
-const heading = (name, meta = '', tone = '') => `<header class="topology-heading"><div><h4 class="view-title" tabindex="-1" data-topology-heading>${esc(name)}</h4>${meta ? `<p class="topology-meta">${esc(meta)}</p>` : ''}</div>${tone ? status(tone) : ''}</header>`;
+const heading = (name, meta = '', tone = '') => `<header class="topology-heading"><div><h3 class="view-title" tabindex="-1" data-topology-heading>${esc(name)}</h3>${meta ? `<p class="topology-meta">${esc(meta)}</p>` : ''}</div>${tone ? status(tone) : ''}</header>`;
 const observations = (machine) => !machine.observations.length ? '' : `${group('Observations')}<ul class="topology-observations">${machine.observations.map((o) => `<li><p>${esc(o.source)}: ${esc(o.reason)}</p><p class="topology-meta">${esc(o.age)}</p></li>`).join('')}</ul>`;
 
 /** @param {{machines: TopologyMachine[], selectedMachine?: string|null, selectedService?: string|null, state?: string, hubId?: string|null}} input

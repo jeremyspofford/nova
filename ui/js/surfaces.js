@@ -181,8 +181,12 @@ export function renderHome(el, now = new Date()) {
 
 // The right column (desktop) or context pane (tablet): three quiet cards. Drawn from the first
 // moment, before any part has answered, so each says only what it knows (partState).
+// The aside's own heading, for those who read by headings: its cards' h3 then always follow an h2,
+// even on a view that draws none of its own (Activity with nothing this week). It says what the
+// aside's name says, unseen (W-11, axe heading-order).
 export function renderAside(el, now = new Date()) {
-  el.innerHTML = `${handlingCard({ tasks: store.tasks, now, state: partState('tasks') })}
+  el.innerHTML = `<h2 class="sr-only">At a glance</h2>
+${handlingCard({ tasks: store.tasks, now, state: partState('tasks') })}
 ${deviceMeshCard({ devices: meshDevices(), now, state: partState('devices') })}
 ${healthCard(cardState())}`;
 }
