@@ -24,7 +24,7 @@ import { testEnv } from '../providers/checks.ts';
 import { TEST_FILE, editableList, outOfScope, runsTests, scopeOf } from '../providers/taskspace.ts';
 import { Git, OID, checkBranch } from './git.ts';
 import { applyChanges, changes as changesOf, copyWalk, digest, refusals, walk, type Change } from './tree.ts';
-import { alive, freePort, procStart, startPreview, stopPreview, stopRecorded } from './preview.ts';
+import { alive, procStart, startPreview, stopPreview, stopRecorded } from './preview.ts';
 import type { ChildProcess } from 'node:child_process';
 import { jsonOrNull as parse, type Db } from '../db.ts';
 import type { Log } from '../log.ts';
@@ -545,12 +545,11 @@ export class Coding {
     let summary = `Nova ran \`${r.test_command}\` itself on ${short(r.head)}: it passed (${(rec.ms / 1000).toFixed(1)} s).`;
     const evidence: Evidence[] = [testEvidence];
     if (r.preview_command) {
-      const port = await freePort();
       const home2 = join(this.#runDir(r.id), 'preview-home');
       mkdirSync(home2, { recursive: true });
       let started;
       try {
-        started = await startPreview({ command: r.preview_command, cwd: tree, env: testEnv(home2), port, timeoutMs: (this.#o.previewTimeoutS ?? 60) * 1000, signal });
+        started = await startPreview({ command: r.preview_command, cwd: tree, env: testEnv(home2), timeoutMs: (this.#o.previewTimeoutS ?? 60) * 1000, signal });
       } catch (e) {
         if (signal.aborted) throw e;
         return report('failed', `${summary} The preview didn’t come up: ${(e as Error).message}`, { evidence });
@@ -562,7 +561,7 @@ export class Coding {
         stopPreview(started.child);
         if (this.#previews.get(r.id) === started.child) { this.#previews.delete(r.id); this.#markStopped(r.id, 'its command exited'); }
       });
-      const p: PreviewRecord = { run_id: r.id, round: r.round, task_id: brief.task_id, command: r.preview_command, commit: r.head, url: started.url, port, pid: started.child.pid!, start: started.start, status: started.status, loopback: started.loopback, started_at: this.#now().toISOString(), stopped_at: null, why_stopped: null };
+      const p: PreviewRecord = { run_id: r.id, round: r.round, task_id: brief.task_id, command: r.preview_command, commit: r.head, url: started.url, port: started.port, pid: started.child.pid!, start: started.start, status: started.status, loopback: started.loopback, started_at: this.#now().toISOString(), stopped_at: null, why_stopped: null };
       this.#writeRecord('previews', `${r.id}-${r.round}`, p);
       this.#set(r.id, { preview: JSON.stringify(p) });
       evidence.push({ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `preview:${r.id}:${r.round}` });

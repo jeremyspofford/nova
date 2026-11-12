@@ -1,7 +1,7 @@
 // A coding run's preview (M10c): the project's own preview command, started in the worktree at the
-// reviewed commit, on 127.0.0.1 and a free port, kept running while the person reviews. It runs code
-// the agent wrote, so it starts only after the person's OK (the check step, tier 2), and Nova checks
-// that it listens on this computer alone before it shows the link.
+// reviewed commit, on 127.0.0.1 and a port the kernel gives it, kept running while the person reviews.
+// It runs code the agent wrote, so it starts only after the person's OK (the check step, tier 2), and
+// Nova checks that it listens on this computer alone before it shows the link.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync, readdirSync, readlinkSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -9,8 +9,10 @@ import { platform } from 'node:os';
 import { CoreError } from '../errors.ts';
 import { trackChild } from '../children.ts';
 
-// A port nobody listens on now. Something else could take it before the preview does; then the
-// preview fails to start, and the step says so (nothing is exposed).
+// A port nobody listens on now. It is closed again before it is returned, so something else can take
+// it before the caller's program binds it (#516). The coding preview uses it only where Nova can't
+// read the kernel's socket tables; the services supervisor checks that the port it health-checks is
+// held by the service's own process group.
 export function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const s = createServer();
@@ -89,12 +91,14 @@ export function groupListeners(pgid: number): Listening[] | null {
   return all.filter((l) => inodes.has(l.inode));
 }
 
-// What the preview's group listens on off this computer, in words, or null when nothing does.
-export function wideListeners(pgid: number, port: number): string | null {
-  const heard = [...(listening()?.filter((l) => l.port === port) ?? []), ...(groupListeners(pgid) ?? [])];
+// What the preview's group listens on off this computer, in words, or null when nothing does; with a
+// port (the preview's own), anything listening on that port off this computer too, and any other
+// port named. Without one (before Nova knows the preview's port), no port is named.
+export function wideListeners(pgid: number, port?: number): string | null {
+  const heard = [...(port === undefined ? [] : listening()?.filter((l) => l.port === port) ?? []), ...(groupListeners(pgid) ?? [])];
   const wide = heard.filter((l) => !loopbackAddress(l.address));
   if (!wide.length) return null;
-  const said = [...new Set(wide.map((l) => (l.address === '0.0.0.0' || l.address === '::' ? `every address (${l.address})` : l.address) + (l.port === port ? '' : ` on port ${l.port}`)))];
+  const said = [...new Set(wide.map((l) => (l.address === '0.0.0.0' || l.address === '::' ? `every address (${l.address})` : l.address) + (port === undefined || l.port === port ? '' : ` on port ${l.port}`)))];
   return said.join(' and ');
 }
 
@@ -104,41 +108,81 @@ export interface Started { child: ChildProcess; url: string; port: number; statu
 
 const tail = (s: string) => s.trimEnd().split('\n').slice(-12).join('\n').slice(-2000);
 
-// Starts the preview and waits until it answers an HTTP request at its address (any status below
-// 500). Throws, with the end of its output, when it exits first, doesn't answer in time, or listens
-// on an address other than loopback; the process is stopped then.
-export async function startPreview(o: { command: string; cwd: string; env: Record<string, string>; port: number; timeoutMs: number; signal?: AbortSignal }): Promise<Started> {
-  const child = trackChild(spawn('/bin/sh', ['-c', o.command], { cwd: o.cwd, env: { ...o.env, HOST: '127.0.0.1', PORT: String(o.port) }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { group: true });
+// How a URL reaches a listening address: an IPv6 address in brackets, an IPv4-mapped one as IPv4.
+const urlHost = (a: string) => (a.startsWith('::ffff:') ? a.slice(7) : a.includes(':') ? `[${a}]` : a);
+
+// One HTTP request; its status, or null when nothing answered.
+async function ask(url: string): Promise<number | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(1000), redirect: 'manual' });
+    await res.body?.cancel();
+    return res.status;
+  } catch { return null; }
+}
+
+// Starts the preview and waits until it answers an HTTP request (any status below 500). Throws, with
+// the end of its output, when it exits first, doesn't answer in time, or listens on an address other
+// than loopback; the process is stopped then.
+//
+// Where Nova can read the kernel's socket tables (Linux), the preview is given PORT=0 and binds a
+// port the kernel picks for it at that moment, so no port is ever free between Nova choosing it and
+// the preview taking it (#516). Nova then reads which loopback port the preview's own process group
+// holds a listening socket on, asks there, and takes the answer only if that same socket is still
+// the group's afterwards: while it is held, nothing else can listen on that address and port, so
+// the answer is the preview's. Nothing the previewed app says (its output, its page) decides which
+// port is its own. Elsewhere it is given a port found free (freePort), which another program can
+// still take first.
+export async function startPreview(o: { command: string; cwd: string; env: Record<string, string>; timeoutMs: number; signal?: AbortSignal }): Promise<Started> {
+  const kernel = platform() === 'linux' && listening() !== null;
+  const given = kernel ? 0 : await freePort();
+  const child = trackChild(spawn('/bin/sh', ['-c', o.command], { cwd: o.cwd, env: { ...o.env, HOST: '127.0.0.1', PORT: String(given) }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }), { group: true });
   let output = '';
   const keep = (d: Buffer) => { output = (output + d.toString('utf8')).slice(-16_000); };
   child.stdout!.on('data', keep);
   child.stderr!.on('data', keep);
   let exited: number | null | undefined;
   child.once('exit', (code) => { exited = code; });
-  const url = `http://127.0.0.1:${o.port}/`;
   const until = Date.now() + o.timeoutMs;
+  const words = () => (output.trim() ? ` Its last words: ${tail(output)}` : '');
+  const forbidden = (wide: string) => new CoreError('forbidden', `The preview listened on ${wide}, not only on this computer, so Nova stopped it: what the agent wrote isn’t shown to your network before you’ve reviewed it. Make it listen on HOST (127.0.0.1), which Nova sets.`);
   let status = 0;
+  let port = given;
+  let url = `http://127.0.0.1:${given}/`;
   try {
     for (;;) {
       if (o.signal?.aborted) throw new CoreError('conflict', 'Stopped before the preview answered.');
-      if (exited !== undefined) throw new CoreError('conflict', `The preview command exited (code ${exited ?? 'none'}) before it answered.${output.trim() ? ` Its last words: ${tail(output)}` : ''}`);
-      try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(1000), redirect: 'manual' });
-        await res.body?.cancel();
-        if (res.status < 500) { status = res.status; break; }
-      } catch { /* not listening yet */ }
-      if (Date.now() > until) throw new CoreError('conflict', `The preview didn’t answer at ${url} within ${Math.round(o.timeoutMs / 1000)} s.${output.trim() ? ` Its last words: ${tail(output)}` : ''}`);
+      if (exited !== undefined) throw new CoreError('conflict', `The preview command exited (code ${exited ?? 'none'}) before it answered.${words()}`);
+      if (kernel) {
+        const own = groupListeners(child.pid!) ?? [];
+        const wide = wideListeners(child.pid!);
+        if (wide) throw forbidden(wide);
+        let found: Listening | null = null;
+        for (const l of own.filter((x) => loopbackAddress(x.address)).sort((a, b) => a.port - b.port)) {
+          const at = `http://${urlHost(l.address)}:${l.port}/`;
+          const s = await ask(at);
+          if (s === null || s >= 500) continue;
+          // Still the group's own socket after it answered: the answer came from it.
+          if (!(groupListeners(child.pid!) ?? []).some((x) => x.inode === l.inode)) continue;
+          found = l; status = s; port = l.port; url = at;
+          break;
+        }
+        if (found) break;
+      } else {
+        const s = await ask(url);
+        if (s !== null && s < 500) { status = s; break; }
+      }
+      if (Date.now() > until) throw new CoreError('conflict', kernel ? `The preview didn’t answer on a loopback port of its own within ${Math.round(o.timeoutMs / 1000)} s.${words()}` : `The preview didn’t answer at ${url} within ${Math.round(o.timeoutMs / 1000)} s.${words()}`);
       await new Promise((r) => setTimeout(r, 150));
     }
     // Everything its process group listens on, twice, a moment apart: a second server the command
     // starts beside the one that answered is seen too, if it is up by then.
     for (const wait of [0, 400]) {
       if (wait) await new Promise((r) => setTimeout(r, wait));
-      const wide = wideListeners(child.pid!, o.port);
-      if (wide) throw new CoreError('forbidden', `The preview listened on ${wide}, not only on this computer, so Nova stopped it: what the agent wrote isn’t shown to your network before you’ve reviewed it. Make it listen on HOST (127.0.0.1), which Nova sets.`);
+      const wide = wideListeners(child.pid!, port);
+      if (wide) throw forbidden(wide);
     }
-    const heard = listeners(o.port);
-    return { child, url, port: o.port, status, loopback: heard && heard.length ? 'yes' : 'unchecked', start: procStart(child.pid!) };
+    const heard = listeners(port);
+    return { child, url, port, status, loopback: heard && heard.length ? 'yes' : 'unchecked', start: procStart(child.pid!) };
   } catch (e) {
     stopPreview(child);
     throw e;
