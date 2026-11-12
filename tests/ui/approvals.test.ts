@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { stop } from '../acceptance/support.ts';
-import { ROOT, blank, browser, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
+import { ROOT, blank, browser, composerShown, device, finishSetup, ready, shoot, shotsDir } from './support.ts';
 
 test('M3: an irreversible command needs the confirm box; an ordinary one asks once', async (t) => {
   const b = await browser();
@@ -18,6 +18,8 @@ test('M3: an irreversible command needs the confirm box; an ordinary one asks on
     const { page, errors } = await device(b, { width: 1280 });
     await page.goto(`${m.base}/chat`);
     await ready(page);
+    // V-1: the composer is inert until the main conversation is in; typing before then reaches nothing.
+    await composerShown(page);
 
     await page.fill('#input', 'clear out the scratch folder');
     await page.keyboard.press('Enter');

@@ -21,7 +21,7 @@ test('Receipts: from Settings › Privacy, the real receipt of a cloud chat turn
     const csp = await watchCsp(page);
     await page.goto(`${m.base}/chat`);
     await ready(page);
-    await composerShown(page);
+    await composerShown(page); // V-1: the composer is inert until the main conversation is in
     await page.fill('#input', 'hello');
     await page.keyboard.press('Enter');
     const receipts = await until<any[]>(() => m.get('/api/v1/receipts?egress=remote'), (x) => Array.isArray(x) && x.length > 0);

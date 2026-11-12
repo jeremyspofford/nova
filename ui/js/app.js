@@ -2077,8 +2077,13 @@ function renderVoice() {
   el.mic.innerHTML = ICONS.mic;
   el.mic.disabled = !v.enabled;
   el.mic.title = v.enabled ? 'Talk to Nova' : v.reason || 'Talk to Nova';
+  // The note's line arrives with the profile and changes the dock's height: a conversation (or its
+  // waiting skeleton) read at its end stays at its end, as on any resize (M9 skeleton gate).
+  const end = state.view === 'chat' && nearBottom();
+  const before = el.dock.offsetHeight;
   el.voiceNote.hidden = v.enabled || !v.reason;
   el.voiceNote.textContent = v.reason;
+  if (end && el.dock.offsetHeight !== before) scrollToEnd();
   if (!v.enabled && recognition) stopListening();
 }
 function stopListening() {

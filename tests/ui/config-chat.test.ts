@@ -17,7 +17,7 @@ test('Config door 3: Nova proposes a settings change in chat, shown as a diff; i
     const { page, errors } = await device(b, { width: 1280, height: 900 });
     await page.goto(`${m.base}/chat`);
     await ready(page);
-    await composerShown(page);
+    await composerShown(page); // V-1: the composer is inert until the main conversation is in
     await page.fill('#input', 'set my timezone to Asia/Tokyo');
     await page.keyboard.press('Enter');
     const card = page.locator('.approval[data-tool]');
