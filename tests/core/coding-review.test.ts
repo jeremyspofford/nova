@@ -5,14 +5,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCore, type Core } from '../../src/core/index.ts';
 import { Git } from '../../src/core/coding/git.ts';
 import { changes, refusals, walk } from '../../src/core/coding/tree.ts';
-import { procStart } from '../../src/core/coding/preview.ts';
+import { groupPids, procStart } from '../../src/core/coding/preview.ts';
 import { FAKE_CLAUDE, git, makeRepos, treeHash, type Repos } from '../support/coding.ts';
 
 const LINUX = process.platform === 'linux';
@@ -47,7 +47,21 @@ const taskOf = (core: Core, run: string, step: string, round?: number) => {
   return ref ? core.ledger.get(ref.id) : null;
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const gone = async (url: string) => { try { await fetch(url, { signal: AbortSignal.timeout(2000) }); return false; } catch { return true; } };
+// Whether a process is being stopped, read from the kernel at once rather than inferred from a port
+// a while later: that port is free once the process is gone, and under a full suite another test's
+// server can take it and answer there (#509). Stopped: gone, a zombie, or with a signal in `mask`
+// pending for its thread group (/proc/<pid>/status ShdPnd: bit 9 is SIGKILL, bit 15 SIGTERM). The
+// signals Nova sends here end these processes (none of them handles one). Linux only.
+const SIGKILL = 0x100n, SIGTERM = 0x4000n;
+const stopping = (pid: number, mask = SIGKILL) => {
+  let st: string;
+  try { st = readFileSync(`/proc/${pid}/status`, 'utf8'); } catch { return true; }
+  if (/^State:\s+[ZX]/m.test(st)) return true;
+  return (BigInt(`0x${/^ShdPnd:\s+([0-9a-f]+)/m.exec(st)?.[1] ?? '0'}`) & mask) !== 0n;
+};
+// The processes of a group that nothing is stopping.
+const unstopped = (pgid: number) => (groupPids(pgid) ?? []).filter((pid) => !stopping(pid, SIGKILL | SIGTERM));
+const until = async (cond: () => boolean) => { while (!cond()) await sleep(25); };
 
 async function toMergeAsk(core: Core, repos: Repos, more: Record<string, unknown> = {}) {
   const { run: { id: run }, task } = await core.coding.start({ repo: repos.person, goal: 'Fix greet().', test_command: 'node --test', ...more });
@@ -89,21 +103,24 @@ test('review 1: once a confirmed merge passed its commit point, decline, cancel 
   }
 });
 
-test('review 2: a preview whose shell exits takes its process group with it; decline and close leave nothing listening', { timeout: 120_000 }, async () => {
+test('review 2: a preview whose shell exits takes its process group with it; decline and close leave nothing listening', { timeout: 120_000, skip: LINUX ? false : 'reads /proc' }, async () => {
   const { core } = boot();
   const repos = makeRepos();
   claude(core, script(repos, [FIX]));
-  let url = '';
+  let pgid = 0;
   try {
     const { run } = await toMergeAsk(core, repos, { preview_command: 'node server.mjs & sleep 1' });
-    url = core.coding.view(run).preview!.url;
-    await sleep(2500);
+    pgid = JSON.parse(core.db.get<{ preview: string }>('SELECT preview FROM coding_run WHERE id = ?', run)!.preview).pid;
+    // The shell exits after a second (the wait is for that event, however long load makes it). Nova
+    // reaps it and, in the same callback, signals its group: by the time the record says it isn't
+    // running, everything left of the group is being stopped.
+    await until(() => core.coding.view(run).preview!.running === false);
     assert.equal(core.coding.view(run).preview!.running, false, 'its leader exited');
-    assert.ok(await gone(url), 'and nothing of it still answers');
+    assert.deepEqual(unstopped(pgid), [], 'and nothing of it still answers');
   } finally {
     await core.close();
   }
-  assert.ok(await gone(url));
+  assert.deepEqual(unstopped(pgid), []);
 });
 
 test('review 2: after a restart Nova stops a preview group it recorded, and only one that is still the process it started', { timeout: 120_000, skip: LINUX ? false : 'reads /proc' }, async () => {
@@ -115,20 +132,32 @@ test('review 2: after a restart Nova stops a preview group it recorded, and only
   // A preview left by a Nova that stopped without its close (as a crash would): a group of its own.
   const server = "require('node:http').createServer((q,s)=>s.end('left')).listen(0,'127.0.0.1',function(){console.log(this.address().port)})";
   const left = spawn('/bin/sh', ['-c', `node -e "${server}"`], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  // 'close' comes once the leader has exited and every process holding its stdout (the shell and the
+  // server it started, the whole group) is gone: the event the test waits on, with how it ended.
+  // Not "nothing answers at the port a while later": that port came from the kernel's ephemeral
+  // range, and under a full suite another test's server can take it once it is free (#509).
+  const leftClosed = new Promise<NodeJS.Signals | null>((r) => left.once('close', (_code, sig) => r(sig)));
   const port = await new Promise<number>((r) => left.stdout!.once('data', (d) => r(Number(String(d).trim()))));
+  left.stdout!.resume();
   const other = spawn('/bin/sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' });
+  const otherClosed = new Promise<NodeJS.Signals | null>((r) => other.once('close', (_code, sig) => r(sig)));
   const again = boot(home).core;
   try {
     const rec = (pid: number, start: string | null) => JSON.stringify({ run_id: run, round: 1, task_id: 'x', command: 'x', commit: 'x', url: `http://127.0.0.1:${port}/`, port, pid, start, status: 200, loopback: 'yes', started_at: new Date().toISOString(), stopped_at: null, why_stopped: null });
     again.db.run('UPDATE coding_run SET preview = ? WHERE id = ?', rec(left.pid!, procStart(left.pid!)), run);
     again.start();
-    await sleep(500);
-    assert.ok(await gone(`http://127.0.0.1:${port}/`), 'the recorded preview group was stopped');
+    // start() signals synchronously: the kill is already on the leader now (or it is gone), and then
+    // the whole group closes, ended by it.
+    assert.ok(stopping(left.pid!), 'the recorded preview group was stopped');
+    assert.equal(await leftClosed, 'SIGKILL', 'the recorded preview group was stopped');
     // A record whose process isn't the one Nova started (another start time) is left alone.
     again.db.run('UPDATE coding_run SET preview = ? WHERE id = ?', rec(other.pid!, '1'), run);
     again.coding.recover();
-    await sleep(300);
     assert.doesNotThrow(() => process.kill(other.pid!, 0), 'a process Nova didn’t start isn’t touched');
+    // recover() signals synchronously, so had it ended this one, a SIGKILL would already be pending:
+    // the test's own SIGTERM, sent now, is what ends it.
+    process.kill(other.pid!, 'SIGTERM');
+    assert.equal(await otherClosed, 'SIGTERM', 'a process Nova didn’t start isn’t touched');
   } finally {
     try { process.kill(-other.pid!, 'SIGKILL'); } catch { /* gone */ }
     try { process.kill(-left.pid!, 'SIGKILL'); } catch { /* gone */ }
