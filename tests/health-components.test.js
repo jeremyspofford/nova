@@ -99,3 +99,13 @@ test('playbook events: the same event apart (another between) stays apart; a dif
   assert.deepEqual(many.map((e) => [e.said, e.count]), [['two', 1], ['three', 1], ['four', 3]]);
   assert.deepEqual(components.playbookEvents(undefined), []);
 });
+
+// Owner order, 2026-11-11: a repair may not close its own problem. A repair that said it worked
+// carries what its independent check made of it, and that is part of the event: a repair still
+// being checked and one the check saw not hold are not the same line.
+test("playbook events: a repair waiting on its check, and one that didn’t hold, keep what the check said", () => {
+  const r = (at, o = {}) => ({ at, name: "reconnect", by: "nova", ok: true, said: "Mail is connected again.", ...o });
+  const events = components.playbookEvents([r("a", { verified: false, checked: "Mail isn’t listening yet." }), r("b", { verified: null })]);
+  assert.deepEqual(events.map((e) => [e.verified, e.checked, e.count]), [[false, "Mail isn’t listening yet.", 1], [null, undefined, 1]]);
+  assert.equal(components.playbookEvents([r("a"), r("b")])[0].verified, undefined, "nothing checks it: no verified field");
+});

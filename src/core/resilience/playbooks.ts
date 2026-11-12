@@ -2,8 +2,11 @@
 // playbook: what happened in a few words, the steps the person can take, and, where one is safe,
 // a repair Nova makes by itself. "Safe" means it can't lose or change the person's data: start a
 // process again, ask a worker again, put work that never ran back in the queue, reconnect, copy
-// again. Every attempt is recorded with the problem, so the person sees what Nova already did, and
-// a problem is marked dealt with only when the repair could tell the cause is gone.
+// again. Every attempt is recorded with the problem, so the person sees what Nova already did.
+// A repair never closes its own problem (owner, 2026-11-11): what a repair says about itself is
+// only its claim. A problem closes when an independent check, the detector's own re-read of what
+// went wrong, sees it hold again (`check`, run by the heartbeat's sweep), or when the person marks
+// it dealt with. A playbook without such a check stays open for the person after any repair.
 import { EventEmitter } from 'node:events';
 import type { Db } from '../db.ts';
 import { UNSAVED_FROM, type Log, type Problem } from '../log.ts';
@@ -162,11 +165,23 @@ export const PLAYBOOKS: Readonly<Record<string, PlaybookDef>> = {
   },
 };
 
-export interface Repair { at: string; name: string; by: 'nova' | 'person'; ok: boolean; said: string }
+// `verified`, on a repair that said it worked, of a playbook with an independent check: null while
+// the check hasn't looked yet ("repaired, checking"), true once it saw the problem gone, false when
+// it looked and it wasn't (`checked`: what the check saw). Absent: nothing checks this repair.
+export interface Repair { at: string; name: string; by: 'nova' | 'person'; ok: boolean; said: string; verified?: boolean | null; checked?: string }
+// `resolved` is the repair's own claim that the cause is gone. It is kept in the log line and
+// never closes the problem (owner, 2026-11-11): only an independent check does.
 export interface RepairOutcome { ok: boolean; said: string; resolved?: boolean }
 export type RepairFn = (subject: string | null, problem: Problem) => Promise<RepairOutcome> | RepairOutcome;
+// An independent check: the detector's own re-read of the invariant (a connection listening, the
+// standby caught up), never anything a repair returned. `holds`: the problem is gone; `said`: what
+// it saw, in plain words. `after`: when the last repair was recorded (null: none), for a check
+// that must see something happen after it.
+export type CheckFn = (subject: string | null, problem: Problem, after: string | null) => Promise<{ holds: boolean; said: string }> | { holds: boolean; said: string };
 
-export interface PlaybookView extends PlaybookDef { subject: string | null; repairs: Repair[] }
+// `check`: when the problem closes by itself, completing "this closes when …"; null when nothing
+// checks it and closing it is the person's.
+export interface PlaybookView extends PlaybookDef { subject: string | null; repairs: Repair[]; check: string | null }
 
 // Classifies a problem other modules opened in their own words (a failed task, a standby behind)
 // into its playbook, and what it is about. Null: there's no playbook for it.
@@ -185,6 +200,7 @@ export class Playbooks extends EventEmitter {
   #log: Log;
   #now: () => Date;
   #repairs = new Map<string, RepairFn>();
+  #checks = new Map<string, { when: string; fn: CheckFn }>();
   #classifiers: Classifier[] = [];
   #running = new Set<number>();
 
@@ -209,6 +225,12 @@ export class Playbooks extends EventEmitter {
 
   repair(name: string, fn: RepairFn): void {
     this.#repairs.set(name, fn);
+  }
+
+  // The independent check for a playbook's problems. `when` completes "this closes when …".
+  check(playbook: string, when: string, fn: CheckFn): void {
+    if (!PLAYBOOKS[playbook]) throw new Error(`No playbook ${playbook}.`);
+    this.#checks.set(playbook, { when, fn });
   }
 
   classify(fn: Classifier): void {
@@ -263,7 +285,7 @@ export class Playbooks extends EventEmitter {
     const r = this.#row(problemId);
     if (!r) return null;
     const def = PLAYBOOKS[r.playbook];
-    return def ? { ...def, subject: r.subject, repairs: JSON.parse(r.repairs) as Repair[] } : null;
+    return def ? { ...def, subject: r.subject, repairs: JSON.parse(r.repairs) as Repair[], check: this.#checks.get(r.playbook)?.when ?? null } : null;
   }
 
   // Open problems with their playbooks, newest first.
@@ -273,7 +295,7 @@ export class Playbooks extends EventEmitter {
 
   // Runs the problem's repair once, now. Nova's own attempts are limited (three, a minute apart);
   // the person may ask again whenever they like. The outcome is recorded either way.
-  async attempt(problemId: number, by: 'nova' | 'person'): Promise<RepairOutcome & { repairs: Repair[] }> {
+  async attempt(problemId: number, by: 'nova' | 'person'): Promise<RepairOutcome & { repairs: Repair[]; checking?: true }> {
     const r = this.#row(problemId);
     if (!r) throw new CoreError('not_found', 'That problem has no playbook.');
     const def = PLAYBOOKS[r.playbook];
@@ -299,26 +321,61 @@ export class Playbooks extends EventEmitter {
     } finally {
       this.#running.delete(problemId);
     }
-    const repairs = [...(JSON.parse(this.#row(problemId)?.repairs ?? '[]') as Repair[]), { at: this.#now().toISOString(), name: def.repair, by, ok: out.ok, said: out.said }];
+    // A repair that says it worked leaves the problem open (owner, 2026-11-11: a repair may not
+    // close its own problem). With an independent check, it waits for that check ("repaired,
+    // checking"); without one, closing it stays the person's.
+    const checking = out.ok && this.#checks.has(r.playbook);
+    const repairs: Repair[] = [...(JSON.parse(this.#row(problemId)?.repairs ?? '[]') as Repair[]), { at: this.#now().toISOString(), name: def.repair, by, ok: out.ok, said: out.said, ...(checking ? { verified: null } : {}) }];
     this.#update(problemId, repairs);
-    this.#log.info('playbooks', `${def.title}: ${out.said}`, { problem: problemId, repair: def.repair, by, ok: out.ok });
-    if (out.ok && out.resolved) this.#log.resolve(problemId);
+    this.#log.info('playbooks', `${def.title}: ${out.said}`, { problem: problemId, repair: def.repair, by, ok: out.ok, ...(out.resolved ? { claimed_resolved: true } : {}), ...(checking ? { checking: true } : {}) });
     this.emit('change', { problem_id: problemId, repair: def.repair, ok: out.ok });
-    return { ...out, repairs };
+    return { ...out, repairs, ...(checking ? { checking: true as const } : {}) };
   }
 
-  // The cause went away by itself (a connection is listening again): recorded, and closed.
+  // An independent observation saw the cause gone (Nova is running again, the folder owed a forget
+  // has it, a check held): recorded, and closed. Only detectors and checks call this, never a
+  // repair. A repair still waiting on the check is marked as having held.
   settle(problemId: number, said: string): void {
     const r = this.#row(problemId);
     if (!r) return;
-    const repairs = [...(JSON.parse(r.repairs) as Repair[]), { at: this.#now().toISOString(), name: 'watch', by: 'nova' as const, ok: true, said }];
+    const repairs: Repair[] = [...(JSON.parse(r.repairs) as Repair[]).map((x) => (x.verified === null ? { ...x, verified: true } : x)), { at: this.#now().toISOString(), name: 'watch', by: 'nova' as const, ok: true, said }];
     this.#update(problemId, repairs);
     this.#log.resolve(problemId);
     this.emit('change', { problem_id: problemId, settled: true });
   }
 
-  // Nova's own retries of repairs that haven't worked yet (the heartbeat calls this).
+  // Each open problem whose playbook has an independent check is looked at again: it closes when
+  // the check sees it hold; a repair that said it worked and is still waiting is marked as not
+  // having held when the check sees it hasn't.
+  async verify(): Promise<void> {
+    const saved = this.#db.all<{ problem_id: number; playbook: string }>(
+      `SELECT pp.problem_id, pp.playbook FROM problem_playbook pp JOIN problem p ON p.id = pp.problem_id WHERE p.resolved_at IS NULL`);
+    const open = [...saved, ...[...this.#mem].map(([id, m]) => ({ problem_id: id, playbook: m.playbook }))];
+    for (const { problem_id: id, playbook } of open) {
+      const c = this.#checks.get(playbook);
+      const r = this.#row(id);
+      const p = this.#problem(id);
+      if (!c || !r || !p || p.resolved_at || this.#running.has(id)) continue;
+      const lastOf = (repairs: string | undefined) => (JSON.parse(repairs ?? '[]') as Repair[]).filter((x) => x.name !== 'watch').at(-1)?.at ?? null;
+      const last = lastOf(r.repairs);
+      let seen: { holds: boolean; said: string };
+      try { seen = await c.fn(r.subject, p, last); } catch (e) { seen = { holds: false, said: `The check couldn’t look: ${(e as Error).message}` }; }
+      // A repair that started or ended while the check looked is judged at the next sweep, by a
+      // look that came after it.
+      if (this.#problem(id)?.resolved_at || this.#running.has(id) || lastOf(this.#row(id)?.repairs) !== last) continue;
+      if (seen.holds) { this.settle(id, seen.said); continue; }
+      const now = JSON.parse(this.#row(id)?.repairs ?? '[]') as Repair[];
+      if (!now.some((x) => x.verified === null)) continue;
+      this.#update(id, now.map((x) => (x.verified === null ? { ...x, verified: false, checked: seen.said } : x)));
+      this.#log.info('playbooks', `${PLAYBOOKS[playbook]!.title}: the repair didn’t hold. ${seen.said}`, { problem: id });
+      this.emit('change', { problem_id: id, verified: false });
+    }
+  }
+
+  // The independent checks first, then Nova's own retries of repairs that haven't worked yet (the
+  // heartbeat calls this).
   async sweep(): Promise<void> {
+    await this.verify();
     const rows = this.#db.all<{ problem_id: number; playbook: string }>(
       `SELECT pp.problem_id, pp.playbook FROM problem_playbook pp JOIN problem p ON p.id = pp.problem_id WHERE p.resolved_at IS NULL`);
     for (const r of rows) {

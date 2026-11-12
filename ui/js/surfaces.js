@@ -542,7 +542,10 @@ ${store.resolved.length ? `<details class="panel raw"><summary>Dealt with recent
 function playbookBlock(p, resolve = '') {
   const pb = store.resilience?.playbooks?.[p.id];
   if (!pb) return '';
-  const did = playbookEvents(pb.repairs).map((r) => `<li>${esc(r.said)} <span class="playbook-when">${r.count > 1 ? `${r.count} times, last ` : ''}<time datetime="${esc(r.at)}">${esc(ago(r.at))}</time></span></li>`).join('');
+  // A repair that said it worked isn’t “fixed” until its independent check sees it (owner,
+  // 2026-11-11): “Repaired, checking” until then, and said plainly when the check saw it didn’t hold.
+  const checking = (r) => r.verified === null ? ` Repaired, checking: this closes when ${pb.check ?? 'Nova checks it again'}.` : r.verified === false ? ` It didn’t hold: ${r.checked ?? 'the check after it still saw the problem.'}` : '';
+  const did = playbookEvents(pb.repairs).map((r) => `<li>${esc(r.said)}${esc(checking(r))} <span class="playbook-when">${r.count > 1 ? `${r.count} times, last ` : ''}<time datetime="${esc(r.at)}">${esc(ago(r.at))}</time></span></li>`).join('');
   const repair = pb.repair ? `<button type="button" class="btn small" data-action="repair-problem" data-problem="${esc(String(p.id))}">Try the repair now</button>` : '';
   return `<div class="playbook" data-playbook="${esc(pb.id)}">
   ${did ? `<p class="settings-note"><b>What Nova did</b></p><ul class="steps">${did}</ul>` : pb.automatic ? `<p class="settings-note">${esc(pb.automatic)}</p>` : ''}
@@ -592,7 +595,7 @@ export async function resilienceAction(action, id) {
   try {
     if (action === 'backup-now') { await api('POST', '/backups'); toast('Backing up now. It shows in Tasks.'); }
     if (action === 'drill-now') { await api('POST', '/backups/drill'); toast('Running the restore drill. It shows in Tasks.'); }
-    if (action === 'repair-problem') { const r = await api('POST', `/problems/${encodeURIComponent(id)}/repair`); toast(r.said); }
+    if (action === 'repair-problem') { const r = await api('POST', `/problems/${encodeURIComponent(id)}/repair`); toast(r.checking ? `${r.said} Repaired, checking: it closes once Nova’s own check sees it.` : r.said); }
   } catch (e) { toast(e.message); }
 }
 

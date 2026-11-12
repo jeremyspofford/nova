@@ -507,12 +507,15 @@ export function healthCard({ health = null, problems = [], reachable = true, kno
 // all for this one problem. When it happened (`at`) is not part of it, and neither is who asked
 // (`by`): the line doesn't say who, so a person's retry that ended the same way reads the same.
 // Only neighbours merge; the same event after a different one is a new entry. The last `keep`.
+// A repair that said it worked carries what its independent check made of it (owner, 2026-11-11:
+// a repair never closes its own problem): `verified` null while the check hasn’t looked yet,
+// false with `checked` (what the check saw) when it didn’t hold. Those are part of the event.
 export function playbookEvents(repairs = [], keep = 3) {
   const out = [];
   for (const r of repairs ?? []) {
     const last = out.at(-1);
-    if (last && last.name === r.name && last.ok === r.ok && last.said === r.said) { last.count++; last.at = r.at; continue; }
-    out.push({ name: r.name, ok: r.ok, said: r.said, at: r.at, count: 1 });
+    if (last && last.name === r.name && last.ok === r.ok && last.said === r.said && last.verified === r.verified && last.checked === r.checked) { last.count++; last.at = r.at; continue; }
+    out.push({ name: r.name, ok: r.ok, said: r.said, at: r.at, count: 1, ...(r.verified !== undefined ? { verified: r.verified } : {}), ...(r.checked !== undefined ? { checked: r.checked } : {}) });
   }
   return out.slice(-keep);
 }
