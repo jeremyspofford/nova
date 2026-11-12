@@ -37,7 +37,7 @@ import { chmod, lstat, readFile, realpath, writeFile } from 'node:fs/promises';
 import { totalmem } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sameServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, commandProblem, platformKey, programName, promotionTier, type ProgramArtifact, type ServiceDefinition, type ServiceDriver, type ServiceOutcome, type ServicePlan, type ServicePlanStep, type ServiceSay, type ServiceStatus, type ServiceVersionStatus, type ServiceVersionView, type SupervisorProblem, freePort, writeJson } from '../core/index.ts';
+import { sameServiceExpected, SERVICE_CHANGED, type ServiceExpectedState, CONSOLE, commandProblem, platformKey, programName, promotionTier, type ProgramArtifact, type ServiceDefinition, type ServiceDriver, type ServiceOutcome, type ServicePlan, type ServicePlanStep, type ServiceSay, type ServiceStatus, type ServiceVersionStatus, type ServiceVersionView, type SupervisorProblem, freePort, groupListeners, writeJson } from '../core/index.ts';
 import { CrashWindow } from './crashes.ts';
 import { bootId, hasProc, same, stat, type ProcId } from './procs.ts';
 import { ServerProcess } from './server.ts';
@@ -732,7 +732,8 @@ export class SupervisorDriver implements ServiceDriver {
   // ---- instances ---------------------------------------------------------------------------------------
 
   // A port found free can be taken by another program before the service binds it: a start that
-  // ends at once is tried again on new ports, twice at most.
+  // ends at once is tried again on new ports, twice at most. Health counts only an answer from a
+  // socket the instance itself holds (#ownGet), so the other program is never taken for it.
   async #startInstance(def: ServiceDefinition, state: string): Promise<{ ok: true; inst: Instance } | { ok: false; said: string }> {
     let r = await this.#startOnce(def, state);
     for (let i = 0; i < 2 && !r.ok && r.early; i++) r = await this.#startOnce(def, state);
@@ -805,7 +806,20 @@ export class SupervisorDriver implements ServiceDriver {
   async #health(def: ServiceDefinition, inst: Instance): Promise<Outcome> {
     const port = def.ports[0] ? inst.ports[def.ports[0].name] : undefined;
     if (!port) return { ok: false, said: 'It has no port to check.' };
-    return get(port, def.health.http);
+    return this.#ownGet(inst, port, def.health.http);
+  }
+
+  // A request to the instance at its port, counted only if the port is its own: on Linux, a socket
+  // its process group listens on, before and after the request. Its ports were found free and closed
+  // again before it started, so another program can take one first (#516); that program's answer is
+  // not the service's, whatever it says. Elsewhere (no /proc) the request alone.
+  async #ownGet(inst: Instance, port: number, path: string): Promise<Outcome> {
+    const pid = inst.proc.pid;
+    const own = () => (pid ? groupListeners(pid)?.some((l) => l.port === port) ?? null : null);
+    if (own() === false) return { ok: false, said: `Nothing of its own listens on port ${port}.` };
+    const r = await get(port, path);
+    if (r.ok && own() === false) return { ok: false, said: `Port ${port} answered, but not from a socket of its own.` };
+    return r;
   }
 
   async #healthPasses(def: ServiceDefinition, inst: Instance): Promise<Outcome> {
@@ -824,7 +838,7 @@ export class SupervisorDriver implements ServiceDriver {
     if (!port) return { ok: false, said: 'It has no port to test.' };
     const failed: string[] = [];
     for (const t of def.contract_tests) {
-      const r = await get(port, t.slice('http:'.length));
+      const r = await this.#ownGet(inst, port, t.slice('http:'.length));
       if (!r.ok) failed.push(`${t}: ${r.said}`);
     }
     return failed.length ? { ok: false, said: failed.join('; ') } : { ok: true, said: `${def.contract_tests.length} passed: ${def.contract_tests.join(', ')}.` };

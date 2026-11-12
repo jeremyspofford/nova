@@ -167,7 +167,7 @@ export type { RestoreBackupOptions, RestoreBackupResult } from './resilience/res
 export { RESET_MARKER, RESET_REPORT, finishReset, homeEntries, supervisorResetPending } from './resilience/reset.ts';
 export { HOME_MARK, ensureMark, unsafeHome } from './resilience/home-mark.ts';
 export { alive, makeScratch, dropScratch } from './resilience/scratch.ts';
-export { freePort } from './coding/preview.ts';
+export { freePort, groupListeners } from './coding/preview.ts';
 export { restoreBackup, loadMigrations, UpgradeError } from './db.ts';
 // Checkpoints (M7 amendment §1): the supervisor takes one before a release switch on the stopped
 // home; the server applies a staged restore before anything opens the home.
