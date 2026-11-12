@@ -90,7 +90,7 @@ test('CI changes: every UI surface makes ui=true, alone or among non-UI files', 
 test('CI changes: non-UI code is heavy with ui=false; docs only stays docs only', () => {
   const nonUi = [
     'src/core/memory.ts', 'src/agent.js', 'src/core/computer/policy.ts', 'tests/core/memory.test.ts', 'tests/ci-changes.test.js',
-    'tests/ui-shard.test.js', 'tests/acceptance/m10a-image.test.ts', 'scripts/ci-changes.sh', 'scripts/ci-gate.sh', 'scripts/merge-on-green.sh',
+    'tests/ui-shard.test.js', 'tests/acceptance/m10a-image.test.ts', 'tests/ci-gate.test.js', 'scripts/check-changelog.sh', 'scripts/deploy-record.sh',
     'charts/nova/values.yaml', 'system/AGENT.md', 'templates/x.md', 'skills/x/SKILL.md', 'schedules/x.md', 'connectors/x.md',
   ];
   for (const f of nonUi) {
@@ -99,6 +99,15 @@ test('CI changes: non-UI code is heavy with ui=false; docs only stays docs only'
   }
   assert.deepEqual(sort(nonUi).ui, 'false', 'all of them together');
   assert.deepEqual(sort(['docs/PIPELINE.md', 'handoffs/x.md', 'README.md']), { heavy: 'false', computer: 'false', ui: 'false', kind: 'docs' });
+});
+
+// A change to the gate itself must not skip the UI gate: the pipeline's own decision scripts run
+// everything, like .github/** (lead review of PR #514).
+test('CI changes: the pipeline decision scripts run everything, like a workflow change', () => {
+  for (const f of ['scripts/ci-changes.sh', 'scripts/ci-gate.sh', 'scripts/merge-on-green.sh', 'scripts/deploy-watch.sh']) {
+    assert.deepEqual(sort([f]), { heavy: 'true', computer: 'false', ui: 'true', kind: 'code' }, f);
+    assert.equal(sort(['src/core/memory.ts', f]).ui, 'true', `${f} among non-UI files`);
+  }
 });
 
 test('CI changes: an unknown file or an empty diff counts as UI (fail safe)', () => {

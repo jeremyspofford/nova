@@ -37,7 +37,9 @@
 #                                 the Playwright pin (playwright-core, the container tag), axe-core
 #                                 and the Node version the UI jobs run
 #   .github/**                    a workflow change always runs everything
-#   anything unknown              a file in none of the folders below counts as UI (fail safe)
+#   scripts/ci-changes.sh, scripts/ci-gate.sh, scripts/merge-on-green.sh, scripts/deploy-watch.sh
+#                                 the pipeline's own decisions: like .github/**, always run everything
+#   anything unknown             a file in none of the folders below counts as UI (fail safe)
 #
 # Not UI: docs (above), and the rest of src/**, tests/**, scripts/**, charts/**, system/**,
 # templates/**, skills/**, schedules/**, connectors/**. The UI gate drives the whole server, so a
@@ -61,6 +63,7 @@ while IFS= read -r f; do
   esac
   case "$f" in
     .github/*|ui/*|design-systems/*|tests/ui/*) ui=1 ;;
+    scripts/ci-changes.sh|scripts/ci-gate.sh|scripts/merge-on-green.sh|scripts/deploy-watch.sh) ui=1 ;;
     src/core/design.ts|src/core/extensions.ts|src/core/csp.ts|src/sw-version.js|src/server.js) ui=1 ;;
     scripts/shots.js|scripts/ui-shard.js|scripts/ui-timings.js|scripts/ui-timings.json|scripts/ui-test.sh|scripts/tripwire.sh) ui=1 ;;
     scripts/fake-*.js|scripts/form-site.js|scripts/make-zip.js|scripts/stand-ins/*) ui=1 ;;

@@ -71,6 +71,9 @@ A change is UI when any file matches one of these (derived from what `tests/ui/*
 - `package.json`, `package-lock.json`, `mise.toml`: the Playwright pin (`playwright-core`, matched
   by the container tag), axe-core, and the Node version the UI jobs run
 - `.github/**`: a workflow change always runs everything
+- `scripts/ci-changes.sh`, `scripts/ci-gate.sh`, `scripts/merge-on-green.sh`,
+  `scripts/deploy-watch.sh`: the pipeline's own decisions, treated like `.github/**`, so a change to
+  the gate itself never skips the UI gate
 - any file that is in none of the known folders (fail safe: an unforeseen file is UI)
 
 Not UI: docs, and the rest of `src/**`, `tests/**`, `scripts/**`, `charts/**`, `system/**`,
@@ -113,6 +116,14 @@ push-run `gate` check passed. While the newest main commit's gate is running it 
 failed, the preview stays on the last green commit and the watcher's log says so once. A commit
 whose main gate did not pass is never deployed. Because main's gate includes the UI gate and shots
 for every heavy merge, nothing reaches the preview without them.
+
+What the preview says about itself stays true. The watcher still writes `deploy/latest.json` with
+the newest commit on main (and its merge time) as soon as it lands, deployed or not, exactly as
+before; only the checkout and restart wait for green. `/api/v1/version` (`src/core/build.ts`)
+compares that with the commit the preview is running, so while main's newest merge is pending or
+red the preview reports that it is behind the latest merged build ("redeploy pending") rather than
+claiming to be it. Its words carry no reason (pending or red) yet: that would be a change to
+`src/`, not made here; the watcher's log says which.
 
 ## Main goes red: an issue, and merges pause
 

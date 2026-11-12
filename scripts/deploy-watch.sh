@@ -7,6 +7,11 @@
 # not pass. If the newest main commit's gate is still running it waits; if it failed, the preview
 # stays on the last green commit and the log says so once. A non-UI merge's UI gate runs only on
 # main, so waiting for main's gate is what keeps an untested UI from reaching the preview.
+# deploy/latest.json still records the newest origin/main commit (with its merge time) whenever it
+# changes, deployed or not, as before: /api/v1/version (src/core/build.ts) compares it with the
+# running commit, so while main's newest merge is pending or red the preview honestly says it is
+# behind the latest merged build ("redeploy pending") instead of claiming to be it. Only the
+# checkout and restart follow the green rule.
 # The host runs its own copy (~/Nova-preview/deploy-watch.sh in tmux session deploy-watch);
 # install this one there after it merges.
 WT=/home/jeremy/workspace/nova-build/.claude/nova-preview
@@ -34,10 +39,18 @@ gate_of() {
   echo "${out:-unknown}"
 }
 
+# The newest origin/main commit last written to deploy/latest.json by this watcher.
+RECORDED=""
 while true; do
   git fetch origin --quiet 2>/dev/null
   REMOTE=$(git rev-parse origin/main 2>/dev/null)
   LOCAL=$(git rev-parse HEAD 2>/dev/null)
+  # The latest merged build, whether or not it is deployed (merged is not served).
+  if [ -n "$REMOTE" ] && [ "$REMOTE" != "$RECORDED" ]; then
+    MT=$(git log -1 --format=%cI "$REMOTE")
+    printf '{"commit":"%s","merged_at":"%s","source":"deploy-watcher"}\n' "$REMOTE" "$MT" > "$NOVA_HOME_DIR/deploy/latest.json"
+    RECORDED=$REMOTE
+  fi
   if [ -n "$REMOTE" ] && [ "$REMOTE" != "$LOCAL" ]; then
     TIP_GATE=$(gate_of "$REMOTE")
     TARGET=""
@@ -61,8 +74,6 @@ while true; do
     fi
     if [ -n "$TARGET" ] && [ "$TARGET" != "$LOCAL" ]; then
       if git checkout --quiet "$TARGET" 2>>"$LOG"; then
-        MT=$(git log -1 --format=%cI "$TARGET")
-        printf '{"commit":"%s","merged_at":"%s","source":"deploy-watcher"}\n' "$TARGET" "$MT" > "$NOVA_HOME_DIR/deploy/latest.json"
         tmux kill-session -t nova-preview 2>/dev/null
         sleep 1
         tmux new-session -d -s nova-preview -c "$WT" "env NOVA_HOME='$NOVA_HOME_DIR' NOVA_PORT='4318' NOVA_INSTANCE=preview NOVA_MESH_URL='http://127.0.0.1:4320' NOVA_MESH_TRANSPORT='proxy' NOVA_MESH_PUBLIC_URL='https://dell-xps-8950-windows.tailba0abb.ts.net:9446' '$NODE' src/server.js 2>&1 | tee -a '$NOVA_HOME_DIR/preview.log'"
