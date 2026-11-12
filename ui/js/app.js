@@ -2014,6 +2014,7 @@ el.settings.addEventListener('click', (e) => {
   }
   else if (action === 'toggle-permission') togglePermission(b);
   else if (action === 'retry-settings') loadPermissions();
+  else if (action === 'retry-privacy') refreshCore(['profile']).then(() => renderSettingsView({ only: 'privacy' }));
   else if (action === 'save-profile') core.saveProfile(b.dataset.section, b.dataset.key, $(b.dataset.field).value.trim());
   else if (['pick-ds', 'save-ds', 'cancel-ds', 'undo-ds', 'fix-contrast', 'undo-fix'].includes(action)) lookAction(action, b);
   else if (action === 'install') core.install().then(() => renderSettingsView({ only: 'devices' }));
