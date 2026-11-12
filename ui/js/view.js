@@ -416,7 +416,11 @@ export function renderHandoff(h) {
       ? `<p class="notice handoff-stopped">${esc(h.text)} ${again.replace('class="btn"', 'class="act"')}</p>`
       : `<div class="error" role="alert"><p class="error-title">${esc(h.text)}</p>${again}</div>`;
   const name = h.helper ? `<a href="/activity#a-${esc(h.helper)}">${esc(h.name)}</a> · a helper` : `<a href="/schedules#sc-${esc(h.schedule)}">${esc(h.name)}</a>`;
-  return `<section class="turn handoff${h.helper ? ' is-helper' : ''}${h.ok ? '' : h.stopped ? ' is-stopped' : ' is-failed'}" id="h-${esc(h.id)}" data-turn="${esc(h.id)}" aria-label="${esc(h.name)}">
+  // A report is a landmark (region), and one schedule reports on many days, so its name says
+  // which: what the kicker and the dateline above it show, the name, the day and the time (W-11,
+  // axe landmark-unique).
+  const label = `${h.name}, ${new Date(h.ts).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}, ${when}`;
+  return `<section class="turn handoff${h.helper ? ' is-helper' : ''}${h.ok ? '' : h.stopped ? ' is-stopped' : ' is-failed'}" id="h-${esc(h.id)}" data-turn="${esc(h.id)}" aria-label="${esc(label)}">
   <p class="handoff-kicker">${name} · ${esc(when)}${late}</p>
   ${body}
   ${h.ok ? `<div class="actions"><button type="button" class="act" data-action="copy" data-copy="${esc(h.id)}" aria-label="Copy report">${icons.copy}<span>Copy</span></button></div>` : ''}

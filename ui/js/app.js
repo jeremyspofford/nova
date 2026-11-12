@@ -29,7 +29,7 @@ import { bindServices, loadServices, renderServices } from './services.js';
 import { bindReset, loadReset, renderReset } from './reset.js';
 import { startSetup, setupShowing } from './setup.js';
 import { renew, sessionEnds } from './device-key.js';
-import { begin, over, remember, waitingLine } from './wait.js';
+import { QUIET_MS, begin, over, remember, waitingLine } from './wait.js';
 import { blocksOf, doneWaiting, keepShape, showWaiting } from './skeleton.js';
 import { initPalette, openPalette } from './palette.js';
 
@@ -72,6 +72,21 @@ const state = {
   busy: { working: 0, waiting: 0 }, // Era 2's own work, from the activity nudge
   listening: false,     // voice input is on
 };
+
+// Automations draws from the top down (walker W-12, layout shift): the Rules panel waits with one
+// line and takes its real height only when the rules are in (a two-line "No rules yet", or a list),
+// so the schedules under it are not drawn until then. Until the rules settle (read, or failed) the
+// schedules box stays empty, taking no room; then the schedules (or their own waiting line) come in
+// below a panel that won't grow again on its own, and nothing that was on screen moves.
+// The hold is bounded: the rules settle with the first load's slowest part, which a read with no
+// answer gives up only at NO_ANSWER_MS (15 s), and schedules a person has are never kept from them
+// that long. QUIET_MS after the view opens (the second in which no wait shows anything, wait.js)
+// the schedules are drawn whether the rules are in or not, and a later Rules panel may move them.
+let schedulesHeld = false;
+let afterSchedules = null;
+let holdTimer = null;
+let holdOver = false;
+const whenSchedulesDrawn = (f) => { if (schedulesHeld) afterSchedules = f; else f(); };
 
 let stream = null;
 let rendered = new Map(); // block key → html
@@ -368,7 +383,7 @@ function renderCore({ enter: entering = false } = {}) {
   if (state.view === 'home') keep(el.home, core.renderHome);
   if (state.view === 'tasks') keep(el.tasks, core.renderTasks);
   if (state.view === 'health') keep(el.health, core.renderHealth);
-  if (state.view === 'automations') core.renderRules(el.rules);
+  if (state.view === 'automations') { core.renderRules(el.rules); if (schedulesHeld) renderSchedulesView(); }
   // An empty chat too: its greeting takes the name once the profile is in.
   if (state.view === 'chat') renderThread();
   showSignals();
@@ -1456,16 +1471,23 @@ rove(el.skills, '.skill', { enter: togglePlaybook, del: removeSkill, canDel: (it
 
 function showSchedules() {
   leaveChat('automations');
+  afterSchedules = null;
+  clearTimeout(holdTimer);
+  holdOver = core.partState('rules') !== 'pending';
+  if (!holdOver) holdTimer = setTimeout(() => { holdOver = true; if (schedulesHeld && state.view === 'automations') renderSchedulesView(); }, QUIET_MS); // wait: expiry: the schedules are never held back longer
   core.renderRules(el.rules);
   renderSchedulesView({ enter: true });
-  loadSchedules().then(() => {
+  loadSchedules().then(() => whenSchedulesDrawn(() => {
     const target = location.hash.length > 1 && document.getElementById(location.hash.slice(1));
     if (target) { target.scrollIntoView({ block: 'center' }); target.focus({ preventScroll: true }); flash(target); }
     else el.automations.querySelector('.trigger-row button, #schedules')?.focus({ preventScroll: true });
-  });
+  }));
 }
 
 function renderSchedulesView({ enter: entering = false } = {}) {
+  if (!holdOver && core.partState('rules') === 'pending') { schedulesHeld = true; el.schedules.replaceChildren(); return; }
+  const released = schedulesHeld;
+  schedulesHeld = false;
   const focused = document.activeElement;
   const focusKey = focused?.closest?.('.skill')?.id;
   const inForm = focused?.closest?.('form') ? focused.name : null;
@@ -1483,7 +1505,8 @@ function renderSchedulesView({ enter: entering = false } = {}) {
     const item = $(focusKey);
     (inForm && item?.querySelector(`[name="${inForm}"]`) || item)?.focus({ preventScroll: true });
   }
-  if (entering) enter(el.schedules);
+  if (entering || released) enter(el.schedules);
+  if (released && afterSchedules) { const f = afterSchedules; afterSchedules = null; f(); }
 }
 // "Next: tomorrow at 7:00 AM" stays true as the clock moves.
 setInterval(() => { if (state.view === 'automations' && !document.hidden) renderSchedulesView(); }, 60_000); // wait: clock: “Next: …” stays true
