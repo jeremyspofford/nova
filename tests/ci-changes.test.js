@@ -51,15 +51,66 @@ test('CI changes: actual checkout depth makes a real shallow PR merge classify c
   fixture('code', ({ git, classify, base }) => {
     assert.equal(git('rev-parse', '--is-shallow-repository'), 'true', 'changes checkout is genuinely shallow');
     assert.equal(git('rev-parse', 'HEAD^1'), base);
-    assert.deepEqual(classify('pull_request', ''), { heavy: 'true', computer: 'true', kind: 'code' });
+    assert.deepEqual(classify('pull_request', ''), { heavy: 'true', computer: 'true', ui: 'false', kind: 'code' });
   });
 });
 
 test('CI changes: shallow merge first-parent docs stay docs-only; an unavailable older BEFORE fails closed', () => {
   fixture('docs', ({ git, classify, older, base }) => {
     assert.equal(git('rev-parse', 'HEAD^1'), base);
-    assert.deepEqual(classify('pull_request', ''), { heavy: 'false', computer: 'false', kind: 'docs' });
+    assert.deepEqual(classify('pull_request', ''), { heavy: 'false', computer: 'false', ui: 'false', kind: 'docs' });
     assert.throws(() => git('cat-file', '-e', `${older}^{commit}`), 'older push BEFORE is absent at the actual workflow depth');
-    assert.deepEqual(classify('push', older), { heavy: 'true', computer: 'false', kind: 'code' });
+    assert.deepEqual(classify('push', older), { heavy: 'true', computer: 'false', ui: 'true', kind: 'code' });
   });
+});
+
+// The ui= output (owner pipeline ruling, 2026-11-11): a pull request runs the UI gate and shots only
+// when it touches a UI surface; the list is in scripts/ci-changes.sh and docs/PIPELINE.md. The two
+// fixtures above gained the ui key in their deepEqual: they assert every output, so they still do.
+const sort = (files) => Object.fromEntries(execFileSync('sh', ['scripts/ci-changes.sh'], { input: files.map(f => `${f}\n`).join(''), encoding: 'utf8' })
+  .trim().split('\n').map(line => line.split('=')));
+
+test('CI changes: every UI surface makes ui=true, alone or among non-UI files', () => {
+  const surfaces = [
+    'ui/index.html', 'ui/js/app.js', 'ui/styles/stage2.css', 'ui/icons/icon-192.png', 'ui/sw.js', 'ui/manifest.webmanifest',
+    'design-systems/nova.json', 'src/core/design.ts', 'src/core/extensions.ts', 'src/core/csp.ts', 'src/sw-version.js', 'src/server.js',
+    'tests/ui/fold-postures.test.ts', 'tests/ui/support.ts', 'tests/ui/baselines/fold/chromium-duo-cover-chat.png',
+    'scripts/shots.js', 'scripts/ui-shard.js', 'scripts/ui-timings.js', 'scripts/ui-timings.json', 'scripts/ui-test.sh', 'scripts/tripwire.sh',
+    'scripts/fake-google.js', 'scripts/form-site.js', 'scripts/make-zip.js', 'scripts/stand-ins/shop-site.js',
+    'tests/support/models.ts', 'tests/acceptance/support.ts', 'tests/acceptance/m4c-support.ts', 'tests/core/mesh-support.ts',
+    'package.json', 'package-lock.json', 'mise.toml', '.github/workflows/ci.yml',
+  ];
+  for (const f of surfaces) {
+    assert.equal(sort([f]).ui, 'true', `${f} alone is a UI surface`);
+    assert.equal(sort(['src/core/memory.ts', f, 'docs/x.md']).ui, 'true', `${f} among non-UI files`);
+    assert.equal(sort([f]).heavy, 'true', `${f} is heavy`);
+  }
+});
+
+test('CI changes: non-UI code is heavy with ui=false; docs only stays docs only', () => {
+  const nonUi = [
+    'src/core/memory.ts', 'src/agent.js', 'src/core/computer/policy.ts', 'tests/core/memory.test.ts', 'tests/ci-changes.test.js',
+    'tests/ui-shard.test.js', 'tests/acceptance/m10a-image.test.ts', 'tests/ci-gate.test.js', 'scripts/check-changelog.sh', 'scripts/deploy-record.sh',
+    'charts/nova/values.yaml', 'system/AGENT.md', 'templates/x.md', 'skills/x/SKILL.md', 'schedules/x.md', 'connectors/x.md',
+  ];
+  for (const f of nonUi) {
+    const out = sort([f]);
+    assert.deepEqual([out.heavy, out.ui], ['true', 'false'], f);
+  }
+  assert.deepEqual(sort(nonUi).ui, 'false', 'all of them together');
+  assert.deepEqual(sort(['docs/PIPELINE.md', 'handoffs/x.md', 'README.md']), { heavy: 'false', computer: 'false', ui: 'false', kind: 'docs' });
+});
+
+// A change to the gate itself must not skip the UI gate: the pipeline's own decision scripts run
+// everything, like .github/** (lead review of PR #514).
+test('CI changes: the pipeline decision scripts run everything, like a workflow change', () => {
+  for (const f of ['scripts/ci-changes.sh', 'scripts/ci-gate.sh', 'scripts/merge-on-green.sh', 'scripts/deploy-watch.sh']) {
+    assert.deepEqual(sort([f]), { heavy: 'true', computer: 'false', ui: 'true', kind: 'code' }, f);
+    assert.equal(sort(['src/core/memory.ts', f]).ui, 'true', `${f} among non-UI files`);
+  }
+});
+
+test('CI changes: an unknown file or an empty diff counts as UI (fail safe)', () => {
+  for (const f of ['tsconfig.json', 'LICENSE', '.gitignore', 'new-folder/thing.js']) assert.equal(sort([f]).ui, 'true', f);
+  assert.deepEqual(sort([]), { heavy: 'true', computer: 'false', ui: 'true', kind: 'code' });
 });

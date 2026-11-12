@@ -1,4 +1,5 @@
 # Every change to Nova passes these before it can merge (OPERATING-RULES: a red suite blocks merges).
+# What blocks what, by kind of pull request, and what happens on main: docs/PIPELINE.md.
 name: ci
 on:
   push:
@@ -9,13 +10,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # A newer push to a PR branch makes the older run moot, so it is cancelled. On main every merge
-  # commit's run finishes: cancelling it left main red ("cancelled") with no answer for that commit.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  # A pull request's runs share one group, so a new push cancels the run for the push before it.
+  # Main gets a group per commit and is never cancelled: every merge commit's run is its record.
+  # (The old shared ci-refs/heads/main group did not cancel a running main run, but GitHub keeps
+  # only one pending run per group, so a third merge cancelled the second one's queued run: 56 main
+  # runs ended "cancelled" that way, e.g. run 42872635055 on 2026-11-10.)
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-main-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # What the change touches (scripts/ci-changes.sh): a docs-only change skips the heavy jobs.
+  # What the change touches (scripts/ci-changes.sh): a docs-only change skips the heavy jobs, and a
+  # pull request that touches no UI surface leaves the UI gate and shots to the push to main.
   changes:
     name: changes
     runs-on: ubuntu-latest
@@ -23,6 +28,7 @@ jobs:
     outputs:
       heavy: ${{ steps.sort.outputs.heavy }}
       computer: ${{ steps.sort.outputs.computer }}
+      ui: ${{ steps.sort.outputs.ui }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -100,17 +106,20 @@ jobs:
     # rest of test:ui.
     name: UI gate (Chromium and WebKit) ${{ matrix.shard }}
     needs: changes
-    if: needs.changes.outputs.heavy == 'true'
+    # On a pull request only when it touches a UI surface; on the push to main for every heavy merge,
+    # whatever it touched (docs/PIPELINE.md).
+    if: needs.changes.outputs.heavy == 'true' && (github.event_name == 'push' || needs.changes.outputs.ui == 'true')
     runs-on: ubuntu-latest
-    # The suite runs in four shards side by side, every test file in exactly one of them: by November
+    # The suite runs in eight shards side by side, every test file in exactly one of them: by November
     # 2026 the whole suite took over 45 minutes in one job and the backstop below cut it off mid-run.
     # scripts/ui-shard.js balances the shards by measured file times (Node's --test-shard dealt files
     # round-robin by name: one half took ~32 minutes, the other ~17). A failed or cancelled shard fails the gate.
+    # Four shards took 15.6–20.8 minutes each (2026-11-11), the pipeline's long pole; eight halve that.
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1/4', '2/4', '3/4', '4/4']
-    # Each shard takes about 13 minutes. PR #236's first run hung for 90: a failed test left a server
+        shard: ['1/8', '2/8', '3/8', '4/8', '5/8', '6/8', '7/8', '8/8']
+    # Each shard's tests take about 9 minutes. PR #236's first run hung for 90: a failed test left a server
     # open, so its file never ended (test:ui now force-exits and times tests out). This is the backstop.
     timeout-minutes: 45
     # The Playwright image for the pinned playwright-core (package.json): its Chromium and system
@@ -131,7 +140,7 @@ jobs:
       # from failing this job or the gate.
       - name: accessibility (advisory, never fails)
         # Once, in the first shard's job (scripts/ui-shard.js gives that shard less test time to match).
-        if: ${{ !cancelled() && matrix.shard == '1/4' }}
+        if: ${{ !cancelled() && matrix.shard == '1/8' }}
         continue-on-error: true
         timeout-minutes: 15
         run: npm run ui:axe
@@ -145,11 +154,11 @@ jobs:
   # The Era-2 walkthrough (scripts/shots.js, Ponytail D4): the only browser run of the install-skill,
   # schedule, helper, zip-add, memory and Gmail flows, plus the golden screens in every theme. The
   # shots go to $RUNNER_TEMP and up as an artifact, never into git (decision N2; D5 deleted the
-  # committed copies). It gates, like the UI gate.
+  # committed copies). It gates, like the UI gate, and runs when the UI gate does.
   shots:
     name: shots (Era-2 walkthrough)
     needs: changes
-    if: needs.changes.outputs.heavy == 'true'
+    if: needs.changes.outputs.heavy == 'true' && (github.event_name == 'push' || needs.changes.outputs.ui == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     container: mcr.microsoft.com/playwright:v1.56.1-noble
@@ -165,9 +174,10 @@ jobs:
           path: ${{ runner.temp }}/shots
           if-no-files-found: ignore
 
-  # The one required check. It always runs. It passes when the heavy jobs passed, or were skipped
-  # because the change is docs only, and fails on anything else, so a skipped job never blocks a
-  # merge and a failed or cancelled one always does.
+  # The one required check. It always runs. scripts/ci-gate.sh decides (tests/ci-gate.test.js):
+  # docs only, every heavy job skipped; a UI pull request, checks, UI gate and shots all passed; a
+  # non-UI pull request, checks passed and the UI gate and shots skipped; the push to main, all
+  # three passed. Anything else fails, so a failed, cancelled or unexpectedly skipped job always does.
   gate:
     name: gate
     if: always()
@@ -175,18 +185,57 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci-gate.sh
+          sparse-checkout-cone-mode: false
       - env:
+          EVENT: ${{ github.event_name }}
           CHANGES: ${{ needs.changes.result }}
           HEAVY: ${{ needs.changes.outputs.heavy }}
+          UI_SURFACE: ${{ needs.changes.outputs.ui }}
           CHECKS: ${{ needs.checks.result }}
           UI: ${{ needs.ui-gate.result }}
           SHOTS: ${{ needs.shots.result }}
+        run: sh scripts/ci-gate.sh
+
+  # Main went red after a merge: an issue says so (labelled main-red), and scripts/merge-on-green.sh
+  # merges nothing more until a pull request that fixes it forward ("Fixes #N") lands. Only this job
+  # may write issues. One open main-red issue at a time: a later red run comments on it.
+  main-red:
+    name: main red → issue
+    needs: [changes, checks, ui-gate, shots, gate]
+    if: always() && github.event_name == 'push' && needs.gate.result != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          RESULTS: "changes ${{ needs.changes.result }} · checks ${{ needs.checks.result }} · UI gate ${{ needs.ui-gate.result }} · shots ${{ needs.shots.result }} · gate ${{ needs.gate.result }}"
         run: |
-          echo "changes: $CHANGES · heavy: $HEAVY · checks: $CHECKS · UI gate: $UI · shots: $SHOTS"
-          [ "$CHANGES" = success ] || { echo "The change couldn't be sorted."; exit 1; }
-          if [ "$HEAVY" = true ]; then
-            [ "$CHECKS" = success ] && [ "$UI" = success ] && [ "$SHOTS" = success ] || { echo "A required job didn't pass."; exit 1; }
+          set -eu
+          short=$(printf '%s' "$SHA" | cut -c1-8)
+          # The merged pull request, from the merge commit's first line ("Merge pull request #N from …").
+          pr=$(printf '%s\n' "$HEAD_MSG" | head -1 | grep -oE '#[0-9]+' | head -1 || true)
+          failing=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out") | "- \(.name): \(.conclusion)"' || true)
+          [ -n "$failing" ] || failing="- (job list unavailable) $RESULTS"
+          body=$(printf 'Main went red at %s after merging %s.\n\nRun: %s\n\nFailing jobs:\n%s\n\nResults: %s\n\nMerges pause until this is fixed forward: scripts/merge-on-green.sh refuses every pull request except one whose body says "Fixes #<this issue>" (docs/PIPELINE.md).\n' \
+            "$SHA" "${pr:-a direct push}" "$RUN_URL" "$failing" "$RESULTS")
+          gh label create main-red --color B60205 --description "Main is red after a merge: merges pause until fixed forward (docs/PIPELINE.md)" 2>/dev/null || true
+          open=$(gh issue list --label main-red --state open --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$body"
+            echo "Commented on main-red issue #$open"
           else
-            [ "$CHECKS" = skipped ] && [ "$UI" = skipped ] && [ "$SHOTS" = skipped ] || { echo "Docs only, but the heavy jobs weren't skipped."; exit 1; }
-            echo "Docs only: the heavy jobs were skipped."
+            gh issue create --title "Pipeline: main is red at $short" --label main-red --label pipeline --body "$body"
           fi
