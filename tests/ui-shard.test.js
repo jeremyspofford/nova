@@ -9,7 +9,8 @@ import { parseJob, titleMatchers } from '../scripts/ui-timings.js';
 
 const files = readdirSync('tests/ui').filter((f) => f.endsWith('.test.ts'));
 const timings = loadTimings();
-const COUNTS = [1, 2, 3, 4, 6];
+// 8 is CI's shard count since the owner's pipeline ruling of 2026-11-11 (was 4, still covered).
+const COUNTS = [1, 2, 3, 4, 6, 8];
 // New UI files get DEFAULT until the next `npm run ui:timings`. A few is fine; more than this and the
 // shards are guesswork, so the committed timings must be refreshed.
 const MAX_UNMEASURED = 8;
@@ -37,7 +38,7 @@ test('UI shards: the five slowest measured files never share a shard when there 
   const slow = Object.entries(timings.seconds).filter(([f]) => files.includes(f))
     .sort((a, b) => b[1] - a[1]).slice(0, 5).map(([f]) => f);
   assert.equal(slow.length, 5);
-  for (const n of [5, 6]) {
+  for (const n of [5, 6, 8]) {
     const where = shards(files, n, timings).map((s) => s.filter((f) => slow.includes(f)).length);
     assert.ok(where.every((c) => c <= 1), `${n} shards, slow files per shard: ${where}`);
   }
@@ -45,9 +46,20 @@ test('UI shards: the five slowest measured files never share a shard when there 
   assert.ok(four.every((c) => c === 1), `4 shards, the four slowest one each: ${four}`);
 });
 
-test('UI shards: at CI\'s four shards, the projected totals are within 5% of each other', () => {
-  const totals = plan(files, 4, timings).map((s) => s.seconds);
-  assert.ok(Math.max(...totals) <= 1.05 * Math.min(...totals), `projected seconds: ${totals.map(Math.round)}`);
+// CI runs eight shards since the owner's pipeline ruling of 2026-11-11; four (the old count) is kept
+// to the same 5% bound, so the check covers both and is no looser.
+test('UI shards: at CI\'s eight shards (and the former four), the projected totals are within 5% of each other', () => {
+  for (const n of [4, 8]) {
+    const totals = plan(files, n, timings).map((s) => s.seconds);
+    assert.ok(Math.max(...totals) <= 1.05 * Math.min(...totals), `${n} shards, projected seconds: ${totals.map(Math.round)}`);
+  }
+});
+
+test('UI shards: the workflow matrix is the shard count balanced here, and the advisory runs in shard 1', () => {
+  const yml = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  const matrix = /shard: \[([^\]]*)\]/.exec(yml)?.[1].split(',').map((s) => s.trim().replace(/'/g, ''));
+  assert.deepEqual(matrix, Array.from({ length: 8 }, (_, i) => `${i + 1}/8`));
+  assert.match(yml, /matrix\.shard == '1\/8'/, 'the accessibility advisory runs in the shard ui-shard.js lightens for it');
 });
 
 test('UI timings: the committed JSON loads and measures the current UI files', () => {
