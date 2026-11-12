@@ -44,10 +44,13 @@ test('the local model dies mid-call: the work waits (local-only), a problem with
     const first = await repairs(core, p.id);
     assert.equal(first[0]!.ok, false, 'the automatic check finds it still down');
 
-    // It comes back on the same address: the repair finds it answering and closes the problem.
+    // It comes back on the same address: the repair finds it answering. That used to close the
+    // problem; now (owner’s order, 2026-11-11: a repair may not close its own problem; closure requires a verification independent of the repair action) the check, Nova's own probe at the heartbeat, closes it.
     back = await startFakeOllama({ models: INSTALLED.concat([{ name: 'example-mid:8b', size: 5e9, parameter_size: '8B', family: 'example', capabilities: ['completion'] }]), port });
     const r = await core.resilience.playbooks.attempt(p.id, 'person');
     assert.equal(r.ok, true, r.said);
+    assert.equal(core.log.problems({ open: true }).some((x) => x.id === p.id), true, 'repaired, checking');
+    await core.resilience.playbooks.verify();
     assert.equal(core.log.problems({ open: true }).some((x) => x.id === p.id), false);
   } finally {
     await core.close();

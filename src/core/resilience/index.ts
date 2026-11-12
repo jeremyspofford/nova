@@ -3,7 +3,7 @@
 // backup.ts (and archive.ts for the encrypted copy), drill.ts, sandbox.ts, playbooks.ts, clock.ts,
 // link.ts (the supervisor's side is src/supervisor).
 import { existsSync, statSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { Db, Migration } from '../db.ts';
@@ -76,6 +76,9 @@ export class Resilience {
     this.worker = this.#makeWorker();
     o.verifier.registerConfirmation(CONFIRMATION_SYSTEM, (e, brief) => this.#confirm(e as { id?: string }, brief));
     this.playbooks.repair('retry-backup', () => this.#retryBackup());
+    // A backup that failed closes when a backup made since is read back from its folder, not when
+    // the backup (a retry or the nightly one) says it finished (owner, 2026-11-11).
+    for (const pb of ['backup-failed', 'backup-target-missing']) this.playbooks.check(pb, 'Nova reads a backup made since back from its folder', (subject, p) => this.#backupHeld(subject, p.at));
     this.playbooks.repair('free-scratch', () => this.#freeScratch());
     this.playbooks.repair('clock', () => this.#clockRepair());
     this.playbooks.repair('restart-server', async () => {
@@ -201,8 +204,9 @@ export class Resilience {
         if (i.action === 'backup') {
           try {
             const r = this.nightly.run({ taskId: brief.task_id });
+            // A backup-failed problem this backup answers closes at the next sweep, once its check
+            // reads the backup back (#backupHeld); the backup's own word doesn't close it.
             if (r.encrypted_error) this.playbooks.open('backups', r.encrypted_error, 'backup-failed', { subject: 'encrypted', taskId: brief.task_id });
-            else this.#resolveOpen(['backup-failed', 'backup-target-missing'], [null, 'encrypted']);
             const mb = (r.bytes / 1e6).toFixed(1);
             return report('done', `Backed up the database and ${r.files} files (${mb} MB) to ${r.path}.${r.encrypted_path ? ` The encrypted copy is ${r.encrypted_path}.` : ''}`, {
               evidence: [{ kind: 'confirmation', system: CONFIRMATION_SYSTEM, id: `backup:${r.id}@${r.manifest.db.sha256}` }],
@@ -330,7 +334,10 @@ export class Resilience {
 
   #record(id: string, r: DrillResult, taskId?: string): DrillResult & { id: string } {
     this.#o.db.run('INSERT INTO backup_drill (id, at, backup_id, ok, checks, task_id) VALUES (?, ?, ?, ?, ?, ?)', id, this.#o.now().toISOString(), r.backup, r.ok ? 1 : 0, JSON.stringify(r.checks), taskId ?? null);
-    if (r.ok) this.#resolveOpen(['drill-failed'], [null]);
+    // A failed drill closes when a drill passes: the detector itself, run again (drill-failed has no
+    // repair of its own).
+    const failed = r.ok ? this.playbooks.openFor('drill-failed', null) : null;
+    if (failed) this.#o.log.resolve(failed.id);
     return { ...r, id };
   }
 
@@ -369,8 +376,7 @@ export class Resilience {
     if (s.target && !existsSync(s.target)) return { ok: false, said: `The backup folder ${s.target} still isn’t there.` };
     try {
       const r = this.nightly.run();
-      this.#resolveOpen(['backup-failed', 'backup-target-missing'], [null]);
-      return { ok: true, said: `Backed up again: ${r.id}.`, resolved: true };
+      return { ok: true, said: `Backed up again: ${r.id}.` };
     } catch (e) {
       return { ok: false, said: (e as Error).message };
     }
@@ -421,11 +427,21 @@ export class Resilience {
 
   // ---- helpers --------------------------------------------------------------------------------
 
-  #resolveOpen(playbooks: string[], subjects: (string | null)[]): void {
-    for (const pb of playbooks) for (const s of subjects) {
-      const p = this.playbooks.openFor(pb, s);
-      if (p) this.#o.log.resolve(p.id);
+  // The check for a backup that failed: the newest backup in the folder (or encrypted copy, for
+  // `encrypted`), made since the problem, read back from disk. A backup's database must match the
+  // hash its sealed manifest records; an encrypted copy must open under the backup key.
+  #backupHeld(subject: string | null, since: string): { holds: boolean; said: string } {
+    const after = (at: string | null) => !!at && Date.parse(at) >= Date.parse(since);
+    if (subject === 'encrypted') {
+      const c = this.nightly.encrypted()[0];
+      if (!c || !after(c.at)) return { holds: false, said: 'No encrypted copy has been made since.' };
+      return this.nightly.authentic(c.path) ? { holds: true, said: `Nova read the encrypted copy ${basename(c.path)} back: it opens under the backup key.` } : { holds: false, said: `The newest encrypted copy, ${basename(c.path)}, doesn’t open under the backup key.` };
     }
+    const b = this.nightly.complete()[0];
+    if (!b || !after(b.manifest.at)) return { holds: false, said: 'No backup has been made in the backup folder since.' };
+    let actual: string | null = null;
+    try { actual = sha256File(join(b.path, 'nova.db')); } catch { /* unreadable: below */ }
+    return actual === b.manifest.db.sha256 ? { holds: true, said: `Nova read ${b.manifest.id} back from the backup folder: its database matches its manifest.` } : { holds: false, said: `${b.manifest.id}’s database doesn’t match its manifest.` };
   }
 
   #task(id: string): Task | null {

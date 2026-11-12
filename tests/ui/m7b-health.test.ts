@@ -54,10 +54,25 @@ test('M7b: Health shows the supervisor, backups and the last drill, and a proble
     assert.match((await pb.textContent()) ?? '', /Plug in or mount the drive/);
     if (shots) { await pb.scrollIntoViewIfNeeded(); await shoot(page, join(shots, 'health-playbook.png')); }
 
-    // The drive is back; the person runs the repair: a backup is made and the problem closes.
+    // The drive is back; the person runs the repair: a backup is made. The repair's own word no
+    // longer closes the problem (owner's order, 2026-11-11: a repair may not close its own problem;
+    // closure requires a verification independent of the repair action). Health says it is
+    // repaired and being checked, and the problem closes at the next heartbeat (every 30 s), once
+    // the check reads the new backup back from its folder.
+    const problemId = (await m.get(api('/problems'))).find((x: any) => !x.resolved_at && /isn’t there/.test(x.message)).id;
     mkdirSync(target);
     await pb.locator('[data-action="repair-problem"]').click();
-    await page.locator('.playbook[data-playbook="backup-target-missing"]').waitFor({ state: 'detached', timeout: 15_000 });
+    const checking = page.locator('.playbook[data-playbook="backup-target-missing"]', { hasText: 'Repaired, checking: this closes when Nova reads a backup made since back from its folder.' });
+    // Unless the heartbeat's check happened to run in between, Health shows it as being checked.
+    await Promise.race([checking.waitFor({ timeout: 15_000 }), page.locator('.playbook[data-playbook="backup-target-missing"]').waitFor({ state: 'detached', timeout: 15_000 })]);
+    await page.locator('.playbook[data-playbook="backup-target-missing"]').waitFor({ state: 'detached', timeout: 75_000 });
+    // Closed by the check, not the repair: the repair is marked as having held, and the check's
+    // words are the last thing recorded.
+    const done = await m.get(api(`/problems/${problemId}/playbook`));
+    const repair = done.repairs.find((x: any) => x.name === 'retry-backup' && x.ok);
+    assert.equal(repair.verified, true, JSON.stringify(done.repairs));
+    assert.equal(done.repairs.at(-1).name, 'watch');
+    assert.match(done.repairs.at(-1).said, /read nova-backup-\d+ back from the backup folder/);
     // The folder came back empty (the old backup went with it): the repair's backup is the one kept.
     await page.locator('[data-resilience]', { hasText: '1 kept' }).waitFor({ timeout: 15_000 });
     assert.equal((await m.get(api('/resilience'))).backups.count, 1);

@@ -49,7 +49,16 @@ test('the standby partitioned from the hub: behind is a problem on both sides, a
     assert.ok(p.core.memory.list().some((m) => m.content === 'Written while the standby was cut off.'));
     const back = await p.h.core.resilience.playbooks.attempt(onHub.id, 'person');
     assert.equal(back.ok, true, back.said);
+    // The repairs said they worked; neither closes its own problem (owner’s order, 2026-11-11: a repair may not close its own problem; closure requires a verification independent of the repair action).
+    // Each closes when its check sees it: on the hub the standby's acknowledgements, on the standby
+    // its own copying loop reaching the hub after the repair.
+    assert.equal(p.h.core.log.problems({ open: true }).some((x) => x.id === onHub.id), true, 'repaired, checking');
+    await p.h.core.resilience.playbooks.verify();
     assert.equal(p.h.core.log.problems({ open: true }).some((x) => x.id === onHub.id), false);
+    // Time moves on and the hub writes something, so the standby's own loop copies after the repair.
+    p.h.tick(1000);
+    p.h.core.memory.remember({ kind: 'fact', content: 'Written after the standby came back.', recorded_by: 'person' });
+    await until(async () => { await p.core.resilience.playbooks.verify(); return p.core.log.problems({ open: true }).some((x) => x.id === onStandby.id); }, (o) => !o, 30_000, 'the standby’s problem to close once its own copying reaches the hub');
   } finally {
     await p.stop();
   }
@@ -113,11 +122,15 @@ test('a device agent in safe mode: a problem with its playbook; Nova asks its bo
     // The ask goes out once, with the next heartbeat in safe mode.
     assert.equal((await beat(true)).body.restart_runtime, true);
     assert.equal((await beat(true)).body.restart_runtime, undefined);
-    // The boot agent restarted it: running again closes the problem.
+    // The boot agent restarted it. The repair seeing it running doesn't close the problem
+    // (owner’s order, 2026-11-11: a repair may not close its own problem; closure requires a verification independent of the repair action); the check, that computer's own heartbeat, does.
     await beat(false);
     const done = await h.core.resilience.playbooks.attempt(p.id, 'person');
     assert.equal(done.ok, true, done.said);
+    assert.equal(h.core.log.problems({ open: true }).some((x) => x.id === p.id), true, 'repaired, checking');
+    await h.core.resilience.playbooks.verify();
     assert.equal(h.core.log.problems({ open: true }).some((x) => x.id === p.id), false);
+    assert.match(h.core.resilience.playbooks.view(p.id)!.repairs.at(-1)!.said, /heartbeat says its runtime is running again/);
   } finally {
     await h.stop();
   }

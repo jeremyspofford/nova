@@ -3,6 +3,9 @@
 // reconnecting a connection, letting the standby copy again, asking a computer's boot agent to
 // start its runtime again. Each is safe: none deletes or changes the person's data, and none
 // runs work again that may already have had an outside effect (the ledger's own rule decides).
+// And the independent checks that close those problems: never the repair's own word (owner,
+// 2026-11-11), but the detector's re-read of what went wrong (the model's probe, the connection's
+// own state, the standby's copying, the computer's heartbeat).
 import { lookup as dnsLookup } from 'node:dns/promises';
 import type { Problem } from '../log.ts';
 import type { Ledger } from '../ledger.ts';
@@ -87,7 +90,19 @@ export function wireRepairs(pb: Playbooks, d: RepairDeps): void {
       const problem = await d.models.probe(role).catch((e: Error) => e.message);
       if (problem) return { ok: false, said: `Still not answering: ${problem}` };
     }
-    return { ok: true, said: `The local model answers again.${released.length ? ` ${released.length} waiting task${released.length === 1 ? '' : 's'} can run now.` : ''}`, resolved: true };
+    return { ok: true, said: `The local model answers again.${released.length ? ` ${released.length} waiting task${released.length === 1 ? '' : 's'} can run now.` : ''}` };
+  });
+  // Its check: the model manager's own probe of every role placed on a local model, run by the
+  // heartbeat, not by the repair.
+  pb.check('local-model-down', 'Nova’s own probe of the local model gets an answer', async () => {
+    let placed = 0;
+    for (const role of ['triage-text', 'reasoner', 'embedder'] as const) {
+      if (!d.models.placement(role)) continue;
+      placed++;
+      const problem = await d.models.probe(role).catch((e: Error) => e.message);
+      if (problem) return { holds: false, said: `The local model still isn’t answering: ${problem}` };
+    }
+    return { holds: true, said: placed ? 'Nova’s own probe got an answer from the local model.' : 'No work is placed on a local model any more.' };
   });
 
   // A connection: stop and start it, so it tries now instead of after its longest pause.
@@ -97,18 +112,39 @@ export function wireRepairs(pb: Playbooks, d: RepairDeps): void {
     const v = d.connectors.view(subject);
     if (v.broken) return { ok: false, said: `${v.name} needs connecting again: the service no longer accepts Nova.` };
     const up = v.connected && v.live === 'listening';
-    return { ok: up, said: up ? `${v.name} is connected again.` : `${v.name} is still trying to reconnect.`, resolved: up };
+    return { ok: up, said: up ? `${v.name} is connected again.` : `${v.name} is still trying to reconnect.` };
   });
+  // Its check: the connection's own state, as the connection watch reads it (connectorWatch).
+  const listening = (subject: string | null) => {
+    if (!subject || !d.connectors.has(subject)) return { holds: false, said: 'That connection isn’t there any more.' };
+    const v = d.connectors.view(subject);
+    const up = v.connected && v.live === 'listening';
+    return { holds: up, said: up ? `${v.name} is connected and listening again.` : `${v.name} isn’t listening yet.` };
+  };
+  pb.check('connector-down', 'Nova’s connection watch sees it connected and listening', listening);
+  pb.check('name-lookup', 'Nova’s connection watch sees it connected and listening', listening);
 
   // The standby: on the standby, copy now; on the hub, see whether it caught up.
   pb.repair('resync', async () => {
     if (d.role.role() === 'hub') {
       const lag = d.role.lag();
       const behind = lag?.behind ?? false;
-      return { ok: !behind, said: behind ? 'The standby still hasn’t copied the newest changes; it copies again as soon as it reaches the hub.' : 'The standby has caught up.', resolved: !behind };
+      return { ok: !behind, said: behind ? 'The standby still hasn’t copied the newest changes; it copies again as soon as it reaches the hub.' : 'The standby has caught up.' };
     }
     const ok = await d.role.resync();
-    return { ok, said: ok ? 'Copied from the hub again; this standby is up to date.' : 'The hub still can’t be reached; this standby keeps trying.', resolved: ok };
+    return { ok, said: ok ? 'Copied from the hub again; this standby is up to date.' : 'The hub still can’t be reached; this standby keeps trying.' };
+  });
+  // Its check. On the hub: the standby's acknowledgements, as the lag watch reads them. On the
+  // standby: its own copying loop got through to the hub after the problem and after the last
+  // repair (the repair's own copy doesn't count).
+  pb.check('standby-behind', 'the standby is seen copying from the hub again', (_subject, p, after) => {
+    if (d.role.role() === 'hub') {
+      const lag = d.role.lag();
+      return lag.behind ? { holds: false, said: `The standby still has ${lag.rows} change${lag.rows === 1 ? '' : 's'} to copy.` } : { holds: true, said: 'The hub sees the standby caught up.' };
+    }
+    const okAt = d.role.status().replica?.sync?.last_ok_at ?? null;
+    const since = Math.max(Date.parse(p.at), after ? Date.parse(after) : 0);
+    return okAt && Date.parse(okAt) > since ? { holds: true, said: 'This standby’s own copying reached the hub again.' } : { holds: false, said: 'This standby hasn’t copied from the hub since.' };
   });
 
   // A computer in safe mode: its boot agent is asked, at its next heartbeat, to start the runtime
@@ -117,22 +153,30 @@ export function wireRepairs(pb: Playbooks, d: RepairDeps): void {
     if (!subject) return { ok: false, said: 'Nova doesn’t know which computer this was.' };
     const a = d.spokes.agent(subject);
     const name = d.devices.find(subject)?.name ?? 'that computer';
-    if (a && !a.safe_mode) return { ok: true, said: `The runtime on ${name} is running again.`, resolved: true };
+    if (a && !a.safe_mode) return { ok: true, said: `The runtime on ${name} is running again.` };
     const asked = d.spokes.restartRuntime(subject);
     return { ok: false, said: asked ? `Asked ${name}’s boot agent to start its runtime again; it does at its next heartbeat.` : `Waiting for ${name}’s boot agent to take the restart.` };
+  });
+  // Its check: that computer's own heartbeat, which says whether it is in safe mode.
+  pb.check('device-safe-mode', 'that computer’s own heartbeat says its runtime is running', (subject) => {
+    if (!subject) return { holds: false, said: 'Nova doesn’t know which computer this was.' };
+    const a = d.spokes.agent(subject);
+    const name = d.devices.find(subject)?.name ?? 'That computer';
+    if (!a) return { holds: false, said: `No heartbeat from ${name} yet.` };
+    return a.safe_mode ? { holds: false, said: `${name}’s heartbeat still says it is in safe mode.` } : { holds: true, said: `${name}’s heartbeat says its runtime is running again.` };
   });
 }
 
 // Connections that keep failing to reconnect become a problem on the second look in a row (one
 // failed reconnect is ordinary); when the service's name doesn't resolve, the problem says the
-// name lookup is what fails. A connection listening again closes its problem.
+// name lookup is what fails. A connection listening again closes its problem through the check
+// wireRepairs registers (the heartbeat's sweep), the one way such a problem closes by itself.
 export function connectorWatch(pb: Playbooks, connectors: Connectors, lookup: (host: string) => Promise<unknown> = (h) => dnsLookup(h)): () => Promise<void> {
   const seen = new Map<string, number>();
   return async () => {
     for (const v of connectors.list()) {
       if (v.connected && v.live === 'listening') {
         seen.delete(v.id);
-        for (const id of ['connector-down', 'name-lookup']) { const p = pb.openFor(id, v.id); if (p) pb.settle(p.id, `${v.name} is connected and listening again.`); }
         continue;
       }
       if (!v.connected || v.live !== 'reconnecting') { seen.delete(v.id); continue; }

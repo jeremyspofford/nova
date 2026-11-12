@@ -157,12 +157,18 @@ test('a backup folder that isn’t there is refused, never created; the task fai
     assert.ok(p.playbook!.steps.length >= 2);
     assert.equal(c.health().checks.backups.ok, false);
 
-    // Its repair: once the folder is back, the backup is made and the problem closes.
+    // Its repair: once the folder is back, the backup is made. It used to close the problem on its
+    // own word; now (owner’s order, 2026-11-11: a repair may not close its own problem; closure requires a verification independent of the repair action) it stays open until the check reads the new backup back
+    // from the folder, at the heartbeat's sweep.
     mkdirSync(w.target);
     const r = await c.resilience.playbooks.attempt(p.id, 'person');
     assert.equal(r.ok, true, r.said);
-    assert.equal(c.log.problems({ open: true }).some((x) => x.id === p.id), false);
+    assert.equal(r.checking, true);
+    assert.equal(c.log.problems({ open: true }).some((x) => x.id === p.id), true, 'repaired, checking: still open');
     assert.equal(readdirSync(w.target).filter((f) => f.startsWith('nova-backup-')).length, 1);
+    await c.resilience.playbooks.verify();
+    assert.equal(c.log.problems({ open: true }).some((x) => x.id === p.id), false, 'closed once the backup was read back');
+    assert.match(c.resilience.playbooks.view(p.id)!.repairs.at(-1)!.said, /read nova-backup-\d+ back from the backup folder/);
   } finally {
     await c.close();
   }
