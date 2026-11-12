@@ -468,8 +468,9 @@ body[data-empty] .scroller { flex: 1 1 auto; }
 body[data-empty] #thread { justify-content: flex-end; padding-bottom: var(--space-4); }
 body[data-empty] .dock { flex: 1 0 auto; }
 /* The main conversation, loading: its dock holds its place unseen until it is known to be docked or
-   centred (app.js renderThread), so it never moves on screen. Transparent, not display (no reflow)
-   and not visibility (the field must still take the arrival's focus). */
+   centred (app.js renderThread), so it never moves on screen. Transparent, not display (no reflow);
+   app.js makes it inert meanwhile (out of the tab order and the accessibility tree, V-1) and gives
+   the field the arrival's focus when it shows. */
 body[data-dock-wait] .dock { opacity: 0; }
 .chat-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-4); margin: 0; padding-bottom: 0; }
 .chat-hero { position: relative; display: grid; place-items: center; width: 100%; padding-block: var(--space-5); }

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { stop, until } from '../acceptance/support.ts';
-import { ROOT, blank, browser, device, finishSetup, ready, shortTargets, watchCsp } from './support.ts';
+import { ROOT, blank, browser, composerShown, device, finishSetup, ready, shortTargets, watchCsp } from './support.ts';
 
 test('Receipts: from Settings › Privacy, the real receipt of a cloud chat turn, filtered, opened, and what receipts cover', { timeout: 300_000 }, async (t) => {
   const b = await browser();
@@ -21,6 +21,7 @@ test('Receipts: from Settings › Privacy, the real receipt of a cloud chat turn
     const csp = await watchCsp(page);
     await page.goto(`${m.base}/chat`);
     await ready(page);
+    await composerShown(page); // V-1: the composer is inert until the main conversation is in
     await page.fill('#input', 'hello');
     await page.keyboard.press('Enter');
     const receipts = await until<any[]>(() => m.get('/api/v1/receipts?egress=remote'), (x) => Array.isArray(x) && x.length > 0);

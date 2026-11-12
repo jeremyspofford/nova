@@ -51,6 +51,7 @@ const state = {
   session: emptySession(),
   live: null,
   pending: null,        // a message on its way to the server
+  arrival: false,       // the arrival's focus, held for the composer while its dock waits inert
   reachable: true,
   stick: true,
   notice: '',
@@ -283,7 +284,8 @@ function route() {
     else {
       if (r.conversation === 'main' && location.pathname !== '/chat') history.replaceState(null, '', `/chat${location.hash}`);
       open(r.conversation);
-      if (!location.hash) el.input.focus({ preventScroll: true });
+      // An inert (waiting) dock can't take focus: it takes it when it shows (renderThread).
+      if (!location.hash) { el.input.focus({ preventScroll: true }); state.arrival = el.dock.inert; }
     }
   } else if (r.dest === 'memory') showMemory();
   else if (r.dest === 'skills') showSkills();
@@ -307,7 +309,7 @@ function setView(view) {
   topologyVisible(view === 'topology');
   for (const [v, key] of Object.entries(VIEWS)) el[key].hidden = v !== view;
   el.dock.hidden = view !== 'chat';
-  if (view !== 'chat') { document.body.removeAttribute('data-empty'); document.body.removeAttribute('data-dock-wait'); }
+  if (view !== 'chat') { document.body.removeAttribute('data-empty'); document.body.removeAttribute('data-dock-wait'); el.dock.inert = false; state.arrival = false; }
   showMenu();
   if (view !== 'chat') el.jump.hidden = true;
   if (was === 'settings' && view !== 'settings') { core.cancelPreview(); core.leaveBackups(); }
@@ -531,10 +533,18 @@ function renderThread() {
   const session = viewSession();
   // An empty chat centres its composer (components.css); the first turn docks it again. The dock's
   // geometry is final when it shows: only the main conversation can turn out empty after loading
-  // (any other began with a message), so while it loads its dock keeps its place unseen but
-  // focusable (components.css), then shows docked or centred, never moving on screen.
+  // (any other began with a message), so while it loads its dock keeps its place unseen
+  // (components.css), then shows docked or centred, never moving on screen. Unseen is unreachable
+  // too (V-1): inert, out of the tab order and the accessibility tree, until it shows; the arrival's
+  // focus (route) lands in it then.
   document.body.toggleAttribute('data-empty', blankChat());
-  document.body.toggleAttribute('data-dock-wait', waiting && state.id === 'main');
+  const dockWait = waiting && state.id === 'main';
+  const shows = el.dock.inert && !dockWait;
+  document.body.toggleAttribute('data-dock-wait', dockWait);
+  el.dock.inert = dockWait;
+  // Only if nothing else has taken focus meanwhile (a click, Tab).
+  if (shows && state.arrival && (!document.activeElement || document.activeElement === document.body)) el.input.focus({ preventScroll: true });
+  if (!dockWait) state.arrival = false;
   if (waiting) return;
   const wasNear = nearBottom();
   if (!session.turns.length) {
@@ -2053,18 +2063,27 @@ window.addEventListener('nova:providers', () => { if (state.view === 'settings')
 
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
-// The composer's privacy chip names the current privacy mode.
+// The composer's privacy chip names the current privacy mode, once the profile has answered
+// (partState, F-021): before that, or if it never does, it names none (V-1: core.privacy() reads
+// Local only for an unread profile, the strict default for what Nova may do, not a fact to show).
 const PRIVACY_CHIP = { 'local-only': 'Local only', 'local-preferred': 'Local first', 'cloud-allowed': 'Cloud allowed' };
 function renderVoice() {
-  const mode = PRIVACY_CHIP[core.privacy()] ?? 'Privacy';
+  const known = core.partKnown('profile');
+  const mode = (known && PRIVACY_CHIP[core.privacy()]) || 'Privacy';
   el.privacyChip.textContent = mode;
   el.privacyChip.setAttribute('aria-label', mode === 'Privacy' ? 'Privacy settings' : `Privacy: ${mode}. Change in Settings`);
-  const v = voiceState({ privacy: core.privacy(), supported: !!Recognition });
+  // Voice stays off until the mode is known, without a reason it can't yet give.
+  const v = known ? voiceState({ privacy: core.privacy(), supported: !!Recognition }) : { enabled: false, reason: '' };
   el.mic.innerHTML = ICONS.mic;
   el.mic.disabled = !v.enabled;
-  el.mic.title = v.enabled ? 'Talk to Nova' : v.reason;
-  el.voiceNote.hidden = v.enabled;
+  el.mic.title = v.enabled ? 'Talk to Nova' : v.reason || 'Talk to Nova';
+  // The note's line arrives with the profile and changes the dock's height: a conversation (or its
+  // waiting skeleton) read at its end stays at its end, as on any resize (M9 skeleton gate).
+  const end = state.view === 'chat' && nearBottom();
+  const before = el.dock.offsetHeight;
+  el.voiceNote.hidden = v.enabled || !v.reason;
   el.voiceNote.textContent = v.reason;
+  if (end && el.dock.offsetHeight !== before) scrollToEnd();
   if (!v.enabled && recognition) stopListening();
 }
 function stopListening() {
