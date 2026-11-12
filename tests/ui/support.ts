@@ -145,6 +145,10 @@ export async function device(b: Browser, { width = 1280, height = 820, id = `ui-
 }
 
 export const ready = (page: Page) => page.waitForSelector('html[data-ready]');
+// A conversation's composer is usable once it shows: while the main conversation's snapshot is on
+// its way the dock waits unseen and inert (V-1, app.js renderThread), and takes the arrival's focus
+// when it shows. Type into it after this, not straight after ready().
+export const composerShown = (page: Page) => page.waitForSelector('#dock:not([inert])');
 
 // Navigates once the page has no API read in flight. WebKit logs a read that a navigation cuts off
 // as an error ("… due to access control checks", same origin; m10i-topology.test.ts meets it too),

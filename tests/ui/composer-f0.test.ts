@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stop } from '../acceptance/support.ts';
-import { browser, webkitBrowser, device, ready, shotsDir, still } from './support.ts';
+import { browser, webkitBrowser, composerShown, device, ready, shotsDir, still } from './support.ts';
 import { reviewProfile } from './axe-support.ts';
 import { withMesh } from './fold-support.ts';
 
@@ -21,7 +21,9 @@ for (const [engine, launch] of [['chromium', browser], ['webkit', webkitBrowser]
     await d.page.clock.setFixedTime(new Date('2026-10-31T12:00:00.000Z'));
     await d.page.goto(`${m.base}/chat`);
     await ready(d.page);
-    // Opening a chat puts the caret in the composer (app.js route); the hidden-until-shown shell once swallowed it.
+    // Opening a chat puts the caret in the composer (app.js route) once it shows (V-1: inert while it
+    // waits); the hidden-until-shown shell once swallowed it.
+    await composerShown(d.page);
     assert.equal(await d.page.evaluate(() => document.activeElement?.id), 'input', 'the composer is focused on arrival');
     const box = d.page.locator('#composer textarea').first();
     await box.fill(Array.from({ length: 20 }, (_, i) => `Line ${i + 1}: a note for the weekly plan.`).join('\n'));

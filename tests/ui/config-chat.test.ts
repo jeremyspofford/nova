@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { stop, until } from '../acceptance/support.ts';
-import { ROOT, blank, browser, device, finishSetup, ready } from './support.ts';
+import { ROOT, blank, browser, composerShown, device, finishSetup, ready } from './support.ts';
 
 test('Config door 3: Nova proposes a settings change in chat, shown as a diff; it applies only on the OK', { timeout: 120_000 }, async (t) => {
   const b = await browser();
@@ -17,6 +17,7 @@ test('Config door 3: Nova proposes a settings change in chat, shown as a diff; i
     const { page, errors } = await device(b, { width: 1280, height: 900 });
     await page.goto(`${m.base}/chat`);
     await ready(page);
+    await composerShown(page);
     await page.fill('#input', 'set my timezone to Asia/Tokyo');
     await page.keyboard.press('Enter');
     const card = page.locator('.approval[data-tool]');
