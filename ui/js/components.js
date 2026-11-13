@@ -473,13 +473,13 @@ export function addDeviceSheet(p, { now = new Date() } = {}) {
 // Health: everything fine, or what isn't, in human terms; detail is on the Health page
 // (DESIGN-SYSTEM §6). The card never quotes a problem's own message, which can name a file, a path
 // or an error: it says how many and what they are about, and Health has the rest (UX review 1, F1).
-export const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices', browser: 'Browser work', backups: 'Backups', changes: 'Changes', capture: 'Capture', vault: 'Vault', connectors: 'Connections', ingest: 'Outside content', passkeys: 'Passkeys' };
+export const CHECK_NAMES = { database: 'Database', workers: 'Workers', ledger: 'Work Ledger', extensions: 'Extensions', design: 'Design system', triggers: 'Automations', problems: 'Problems', memory: 'Memory', receipts: 'Context receipts', mesh: 'Devices', browser: 'Browser work', backups: 'Backups', changes: 'Changes', capture: 'Capture', vault: 'Vault', connectors: 'Connections', ingest: 'Outside content', passkeys: 'Passkeys', seat: 'Claude sign-in' };
 // What a problem is about, by where it came from.
 const PROBLEM_AREAS = {
   sync: 'the standby’s copy of your files', mesh: 'your devices', connectors: 'a connection', providers: 'a model provider',
   backups: 'backups', changes: 'changes to Nova', capture: 'capture', ingest: 'outside content', resilience: 'keeping Nova running',
   reset: 'a reset', ledger: 'a task that failed', coding: 'a coding task', vault: 'the vault', triggers: 'automations', design: 'the design system',
-  models: 'local models', 'chat-run': 'a conversation', receipts: 'privacy', api: 'Nova itself',
+  models: 'local models', 'chat-run': 'a conversation', receipts: 'privacy', api: 'Nova itself', seat: 'Nova’s Claude sign-in',
 };
 const listWords = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
 export function problemsSummary(problems) {

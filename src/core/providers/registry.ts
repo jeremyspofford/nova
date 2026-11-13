@@ -22,7 +22,7 @@ import { MODEL_MISSING, openaiCompatible, roleOf } from './openai.ts';
 import { relay } from './relay.ts';
 import { CONTRACT_SYSTEM, agentPrompt, contractPrompt, parseContract, summarize } from './prompt.ts';
 import { applyFiles, fileRefs, notCopied, outOfScope, treeHash, unifiedDiff, type Change, type Scope, type TaskSpace, type TestAsk } from './taskspace.ts';
-import { CLASSES, EGRESS, IMPLEMENTATIONS, OLLAMA_CLOUD, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where, type WorkOutcome } from './types.ts';
+import { CLASSES, EGRESS, IMPLEMENTATIONS, OLLAMA_CLOUD, TRANSPORTS, num, secretName, str, type AdapterBlock, type ChatRequest, type Config, type Health, type Impl, type Implementation, type ProviderClass, type Usage, type Where, type WorkInput, type WorkOutcome } from './types.ts';
 import type { Db } from '../db.ts';
 import type { Ledger, LanedWorker, Task, TaskInput } from '../ledger.ts';
 import type { Log } from '../log.ts';
@@ -32,6 +32,7 @@ import type { Verifier } from '../verify.ts';
 import type { FireInput, TriggerRecord } from '../triggers.ts';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { Route } from '../api.ts';
+import { seatEnv } from '../claude-seat.ts';
 import { DEFAULT_TIERS, type CapabilityId, type Tiers } from '../approvals/index.ts';
 
 export type ProviderManifest = Manifest & { adapter: AdapterBlock };
@@ -140,6 +141,8 @@ export interface ProvidersOptions {
   fire?: ((input: FireInput) => Promise<TriggerRecord | null>) | undefined;
   // The local model manager (M6b), for a provider set to one of its roles.
   models?: ModelsLink | undefined;
+  // Nova's Claude seat (claude-seat.ts) hears of a claude CLI that failed to authenticate.
+  seatFailed?: ((detail: string) => void) | undefined;
   // Why the cloud budget keeps this brief from going to a provider off the devices now, or null.
   budget?: ((brief: Brief) => string | null) | undefined;
   now?: () => Date;
@@ -767,7 +770,7 @@ export class Providers extends EventEmitter {
     }
     let out: WorkOutcome;
     try {
-      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await impl.work({ provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log,
+      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await this.#work(impl, { provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), seatEnv: seatEnv(this.#o.home), log,
         privacy: mode, ...(impl.reportedWhere ? { receipt: (e: string) => { egress = e; this.#receipt(id, brief, mode, e, impl.model(config), items); } } : {}) });
     } catch (e) {
       if (signal.aborted) throw e;
@@ -786,6 +789,13 @@ export class Providers extends EventEmitter {
     return { ...out, provider_name: name, egress };
   }
 
+  // A provider's work, with a claude CLI that failed to authenticate told to Nova's seat.
+  async #work(impl: Impl, input: WorkInput): Promise<WorkOutcome> {
+    const out = await impl.work(input);
+    if (out.seat === 'needs-sign-in') { try { this.#o.seatFailed?.(out.summary); } catch { /* the seat records it or not; the work's outcome stands */ } }
+    return out;
+  }
+
   async #run(id: string, brief: Brief, signal: AbortSignal): Promise<Report> {
     const base = reporter(brief);
     const report: Reporter = (status, summary, more = {}, usage = {}) => base(status, summary, { ...more, usage });
@@ -802,7 +812,7 @@ export class Providers extends EventEmitter {
     // An automation works elsewhere: the brief goes out, a signed report comes back.
     if (a.class === 'automation') {
       try { this.#receipt(id, brief, mode, where.receipt, impl.model(config), [{ kind: 'file', ref: `brief:${brief.task_id}`, sha256: sha256(canonicalJson(brief)) }]); } catch (e) { return report('failed', (e as Error).message); }
-      const out = await impl.work({ provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd: null, system: '', prompt: '', signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log });
+      const out = await this.#work(impl, { provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd: null, system: '', prompt: '', signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), seatEnv: seatEnv(this.#o.home), log });
       return report(out.status, out.summary, { evidence: out.evidence ?? [], ...(out.blockers ? { blockers: out.blockers } : {}) }, out.usage);
     }
 
@@ -850,7 +860,7 @@ export class Providers extends EventEmitter {
     }
     let out: WorkOutcome;
     try {
-      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await impl.work({ provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd: space.root, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), log,
+      out = role ? await this.#roleWork(role, brief, mode, system, prompt, items, signal) : await this.#work(impl, { provider: id, brief, attempt: this.#o.ledger.get(brief.task_id).attempts, config, cwd: space.root, system, prompt, signal, secret: this.#secret, stateDir: join(this.state, 'tasks', brief.task_id), seatEnv: seatEnv(this.#o.home), log,
         privacy: mode, ...(impl.reportedWhere ? { receipt: (egress: string) => this.#receipt(id, brief, mode, egress, impl.model(config), items) } : {}) });
     } catch (e) {
       if (signal.aborted) throw e;

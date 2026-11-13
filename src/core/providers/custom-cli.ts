@@ -5,7 +5,8 @@
 // JSON files contract, so Nova applies the changes itself.
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { childEnv, runLines, tail, whichKnown, words } from './cli.ts';
+import { claudeEnv, runLines, tail, whichKnown, words } from './cli.ts';
+import { authFailure } from '../claude-seat.ts';
 import { num, str, type Config, type Impl, type WorkInput, type WorkOutcome } from './types.ts';
 
 // The program a command line runs, skipping VAR=value settings in front of it.
@@ -46,7 +47,7 @@ export const customCli: Impl = {
     let ran;
     try {
       ran = await runLines({
-        argv: [command.replaceAll('{system_file}', quoted)], shell: true, cwd: i.cwd!, input, env: childEnv(), signal: i.signal, timeoutMs: num(i.config.timeout_s, 1800) * 1000,
+        argv: [command.replaceAll('{system_file}', quoted)], shell: true, cwd: i.cwd!, input, env: claudeEnv(i), signal: i.signal, timeoutMs: num(i.config.timeout_s, 1800) * 1000,
         onLine: (line) => {
           let ev: Record<string, any> | null = null;
           if (line.trimStart().startsWith('{')) { try { ev = JSON.parse(line); } catch { ev = null; } }
@@ -64,9 +65,9 @@ export const customCli: Impl = {
     }
     const usage = { model: customCli.model(i.config) };
     if (ran.timedOut) return { status: 'failed', summary: 'The model command took too long and was stopped.', usage };
-    if (failure) return { status: 'failed', summary: `The model command reported a problem: ${failure}`, usage };
+    if (failure) return { status: 'failed', summary: `The model command reported a problem: ${failure}`, usage, ...(authFailure(failure) ? { seat: 'needs-sign-in' as const } : {}) };
     if (ran.code === 127) return { status: 'failed', summary: `Nova couldn’t find \`${programOf(command)}\`.`, usage };
-    if (ran.code !== 0 && !text.trim()) return { status: 'failed', summary: `The model command exited (${ran.code ?? ran.signal}) before replying.${ran.stderr.trim() ? ` It said: ${tail(ran.stderr, 3, 300)}` : ''}`, usage };
+    if (ran.code !== 0 && !text.trim()) return { status: 'failed', summary: `The model command exited (${ran.code ?? ran.signal}) before replying.${ran.stderr.trim() ? ` It said: ${tail(ran.stderr, 3, 300)}` : ''}`, usage, ...(authFailure(ran.stderr) ? { seat: 'needs-sign-in' as const } : {}) };
     return { status: 'done', summary: '', reply: text, usage };
   },
 };

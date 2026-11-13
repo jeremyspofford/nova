@@ -92,6 +92,7 @@ const SKIP_TOP: Record<string, string> = {
   checkpoints: 'checkpoints stay on this machine and are restore points, not backups',
   'factory-reset.json': 'a factory reset in progress acts on this home only',
   '.nova-home': 'Nova’s mark on this home, with the key that seals a reset, stays here',
+  seats: 'Nova’s model sign-ins stay in their own folder: a copied sign-in rotates the original away',
 };
 const SKIP_FILE: Record<string, string> = {
   'vault/key': 'the vault’s key never leaves this machine',

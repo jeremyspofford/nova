@@ -53,6 +53,9 @@ export interface WorkInput {
   secret: (value: unknown) => string | null;
   // Where this provider keeps its own state for the task (n8n callbacks).
   stateDir: string;
+  // CLAUDE_CONFIG_DIR for Nova's own Claude seat (claude-seat.ts). A provider that starts the claude
+  // CLI passes it; without it, claudeEnv() gives a signed-out folder, never the person's ~/.claude.
+  seatEnv?: Record<string, string>;
   // The task's privacy mode, never looser than the person's setting: a provider that learns only now
   // where its work would go (Relay) checks it against this before it sends anything.
   privacy?: PrivacyMode;
@@ -63,6 +66,8 @@ export interface WorkInput {
 
 export interface WorkOutcome {
   status: 'done' | 'failed' | 'blocked';
+  // The claude CLI failed to authenticate: Nova's seat needs a sign-in (the registry tells the seat).
+  seat?: 'needs-sign-in';
   summary: string;
   usage: Usage;
   // A chat provider's text, read against the JSON files contract.

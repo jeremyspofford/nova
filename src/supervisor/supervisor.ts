@@ -78,6 +78,14 @@ type Say = (line: string) => void;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const nowIso = () => new Date().toISOString();
 
+// The health checks that count against a release: failing ones, except those that wait on the
+// owner (needs_owner: Nova's Claude seat needing a sign-in). The new code didn't break those, and
+// going back to older code can't mend them: a rollback for an expired sign-in would only undo a
+// good release (and, for the seat, return to code that used the owner's own Claude sign-in).
+export function releaseFailures(checks: Record<string, { ok: boolean; detail?: string; needs_owner?: boolean }> | undefined): { name: string; detail: string }[] {
+  return Object.entries(checks ?? {}).filter(([, c]) => !c.ok && !c.needs_owner).map(([name, c]) => ({ name, detail: c.detail ?? 'not ok' }));
+}
+
 export class Supervisor {
   readonly o: SupervisorOptions;
   readonly t: Timings;
@@ -456,8 +464,8 @@ export class Supervisor {
   async #health(port: number): Promise<{ answered: boolean; ok: boolean; failing: { name: string; detail: string }[]; said: string }> {
     try {
       const r = await fetch(`http://127.0.0.1:${port}${this.console().health.http}`, { signal: AbortSignal.timeout(Math.min(5000, Math.max(1000, this.t.healthEveryMs))) });
-      const body = await r.json() as { ok?: boolean; checks?: Record<string, { ok: boolean; detail?: string }> };
-      const failing = Object.entries(body.checks ?? {}).filter(([, c]) => !c.ok).map(([name, c]) => ({ name, detail: c.detail ?? 'not ok' }));
+      const body = await r.json() as { ok?: boolean; checks?: Record<string, { ok: boolean; detail?: string; needs_owner?: boolean }> };
+      const failing = releaseFailures(body.checks);
       return { answered: true, ok: r.status === 200 && body.ok === true, failing, said: failing.length ? failing.map((f) => `${f.name}: ${f.detail}`).join('; ') : 'Healthy.' };
     } catch (e) {
       return { answered: false, ok: false, failing: [], said: `No answer from Nova: ${(e as Error).message}` };

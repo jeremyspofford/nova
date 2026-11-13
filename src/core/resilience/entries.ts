@@ -37,7 +37,7 @@ export const NOVA_ENTRIES: readonly string[] = [
   'nova.db', 'nova.db-wal', 'nova.db-shm', 'nova.db-journal',
   'AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md',
   'MEMORY.md', 'memory', 'sessions', 'schedules', 'skills', 'permissions.md', 'connectors',
-  'workspace', 'extensions', 'changes', 'vault', 'broker', 'mesh', 'capture',
+  'workspace', 'extensions', 'changes', 'vault', 'broker', 'mesh', 'capture', 'seats',
   'logs', 'workers', 'kept', 'exports', 'backups', 'checkpoints', 'nova.pid',
   '.git', '.gitignore',
   'factory-reset.json', 'reset-report.json',

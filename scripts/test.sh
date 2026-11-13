@@ -7,4 +7,8 @@
 set -eu
 dir=$(mktemp -d "${TMPDIR:-/tmp}/nova-test-XXXXXX")
 trap 'rm -rf "$dir"' EXIT INT TERM
+# Every Nova the run starts checks its Claude seat (src/core/claude-seat.ts) with the stand-in,
+# signed in, never the real `claude`: a test that is about the seat names its own program.
+NOVA_SEAT_PROGRAM="${NOVA_SEAT_PROGRAM:-$(cd "$(dirname "$0")" && pwd)/stand-ins/fake-claude-seat-signed-in.js}"
+export NOVA_SEAT_PROGRAM
 TMPDIR="$dir" sh "$(dirname "$0")/tripwire.sh" node --test "$@"

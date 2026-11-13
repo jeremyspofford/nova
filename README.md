@@ -178,6 +178,8 @@ Optional `nova.config.json` at the repo root (environment variables win). It is 
 | `agent_cmd` | `NOVA_AGENT_CMD` | `claude -p …` (see `src/config.js`) |
 | `agent_egress` | `NOVA_AGENT_EGRESS` | none, which counts as `remote`: where the chat command sends what it is given (`none`, `local` or `remote`) |
 | `timezone` | `NOVA_TZ` | the system timezone |
+| `seat_probe_hours` | `NOVA_SEAT_PROBE_HOURS` | `6`: how often Nova checks its own Claude sign-in (more than 0, at most 168) |
+|  | `NOVA_SEAT_PROGRAM` | none: a stand-in `claude` for the seat's checks and sign-in (tests and demos) |
 |  | `NOVA_IMAP_URL` | `imaps://imap.gmail.com:993` (tests point it at a stand-in) |
 | `mesh_url` | `NOVA_MESH_URL` | none: no other device can reach Nova |
 | `mesh_public_url` | `NOVA_MESH_PUBLIC_URL` | `NOVA_MESH_URL` (required when it listens on every address) |
@@ -202,6 +204,16 @@ that works. `agent_egress` is where that command sends what it is given: `none`
 (this computer), `local` (your own devices) or `remote` (a cloud service). Nova
 can't see where a command connects, so it takes your word for it; a command
 with no `agent_egress` counts as `remote`, and Local-only never starts it.
+
+When the command is `claude`, Nova runs it with its own sign-in, kept in
+`seats/claude-cli` in Nova's home (`CLAUDE_CONFIG_DIR`), never your terminal's
+`~/.claude`; Claude Code providers use the same folder. Nova never copies a
+sign-in from anywhere, so the first time, Health asks you to sign in once: Sign
+in again shows Claude's sign-in page as a link for any device and takes the code
+back. Nova checks the sign-in every `seat_probe_hours` (a one-turn call on the
+smallest model, which also keeps it fresh) and raises one problem when it stops
+working; the problem closes once Nova's own check call works again. The folder
+is kept out of the home's git history, backups and checkpoints.
 
 ## Keep it running
 

@@ -57,6 +57,9 @@ export function releaseRepo(dir: string) {
 export interface Supervised { proc: ChildProcess; out: string[]; dir: string; home: string; state: () => any; port: () => number | null; base: () => string; stop: () => Promise<void> }
 
 // Starts `node src/supervisor/main.ts run` for a fresh home, and waits until Nova answers.
+// The Claude seat checks with the stand-in the test run names (scripts/test.sh), never the real CLI.
+const seatProgram = (): Record<string, string> => (process.env.NOVA_SEAT_PROGRAM ? { NOVA_SEAT_PROGRAM: process.env.NOVA_SEAT_PROGRAM } : {});
+
 export async function supervise(o: { dir: string; repo: string; env?: Record<string, string>; timings?: Record<string, number>; wait?: boolean }): Promise<Supervised> {
   const home = join(o.dir, 'home');
   const state = join(o.dir, 'sup');
@@ -64,7 +67,7 @@ export async function supervise(o: { dir: string; repo: string; env?: Record<str
   const timings = { backoffMs: 200, maxBackoffMs: 1000, crashes: 3, windowMs: 20_000, healthEveryMs: 400, healthFailures: 3, readyMs: 30_000, canaryMs: 3000, probeEveryMs: 400, testsMs: 120_000, ...o.timings };
   const proc = spawn(process.execPath, ['src/supervisor/main.ts', 'run', '--home', home, '--dir', state, '--repo', o.repo, '--tests', 'node --test tests/release.test.js'], {
     cwd: ROOT,
-    env: { PATH: process.env.PATH ?? '', HOME: join(o.dir, 'user'), TZ: 'UTC', NOVA_PORT: '0', NOVA_VAULT_KEY: 'file', NOVA_AGENT_EGRESS: 'none', NOVA_SUPERVISOR_TIMINGS: JSON.stringify(timings), ...o.env },
+    env: { PATH: process.env.PATH ?? '', HOME: join(o.dir, 'user'), TZ: 'UTC', NOVA_PORT: '0', NOVA_VAULT_KEY: 'file', NOVA_AGENT_EGRESS: 'none', NOVA_SUPERVISOR_TIMINGS: JSON.stringify(timings), ...seatProgram(), ...o.env },
   });
   proc.stdout!.on('data', (d) => out.push(String(d)));
   proc.stderr!.on('data', (d) => out.push(String(d)));

@@ -3,7 +3,8 @@
 // and reads its event stream: `system` (init: the model), `assistant` (text and tool use),
 // `user` (tool results) and the final `result` (success or an error subtype, cost, usage).
 // Its own claim of success is only a claim: Nova checks the work afterwards.
-import { childEnv, runLines, tail, whichKnown, words } from './cli.ts';
+import { claudeEnv, runLines, tail, whichKnown, words } from './cli.ts';
+import { authFailure } from '../claude-seat.ts';
 import { summarize } from './prompt.ts';
 import { num, str, type Config, type Impl, type WorkInput, type WorkOutcome } from './types.ts';
 
@@ -50,7 +51,7 @@ export const claudeCode: Impl = {
     let ran;
     try {
       ran = await runLines({
-        argv, cwd: i.cwd!, input: i.prompt, env: childEnv(), signal: i.signal, timeoutMs: num(c.timeout_s, 1800) * 1000,
+        argv, cwd: i.cwd!, input: i.prompt, env: claudeEnv(i), signal: i.signal, timeoutMs: num(c.timeout_s, 1800) * 1000,
         onLine: (line) => {
           let ev: Record<string, any>;
           try { ev = JSON.parse(line); } catch { if (line.trim()) i.log(line); return; }
@@ -78,7 +79,7 @@ export const claudeCode: Impl = {
     const usage = { model: model || 'claude-code', ...(r?.cost !== undefined ? { cost_usd: r.cost } : {}), ...(r?.tin !== undefined ? { tokens_in: r.tin } : {}), ...(r?.tout !== undefined ? { tokens_out: r.tout } : {}) };
     if (ran.timedOut) return { status: 'failed', summary: `Claude Code took longer than ${num(c.timeout_s, 1800)} s and was stopped.`, usage };
     if (r?.ok) return { status: 'done', summary: summarize(r.text || lastText, 'Claude Code finished.'), usage };
-    if (r) return { status: 'failed', summary: `Claude Code stopped with an error: ${summarize(r.text, 'no detail')}`, usage };
-    return { status: 'failed', summary: `Claude Code ended (exit ${ran.code ?? ran.signal}) without a result.${ran.stderr.trim() ? ` It said: ${tail(ran.stderr, 3, 300)}` : ''}`, usage };
+    if (r) return { status: 'failed', summary: authFailure(r.text) ? `My Claude sign-in expired, so Claude Code couldn’t start. Sign in again from Health. (${summarize(r.text, 'no detail')})` : `Claude Code stopped with an error: ${summarize(r.text, 'no detail')}`, usage, ...(authFailure(r.text) ? { seat: 'needs-sign-in' as const } : {}) };
+    return { status: 'failed', summary: `Claude Code ended (exit ${ran.code ?? ran.signal}) without a result.${ran.stderr.trim() ? ` It said: ${tail(ran.stderr, 3, 300)}` : ''}`, usage, ...(authFailure(ran.stderr) ? { seat: 'needs-sign-in' as const } : {}) };
   },
 };

@@ -66,7 +66,10 @@ const UNTRACKED = ['MEMORY.md', 'memory/*.md', '!memory/README.md', 'memory/.ren
   'checkpoints/', '.nova-home', '.nova-home.tmp', 'factory-reset.json*', 'reset-report.json',
   // What capture keeps (originals a device sent, under capture/raw/) is the person's screen and
   // words: a copy in history would outlive forgetting it and retention (F-013).
-  'capture/'];
+  'capture/',
+  // Nova's own model sign-ins (src/core/claude-seat.ts): a copy in history would be a second holder
+  // of a grant that rotates, and outlive signing out.
+  'seats/'];
 
 function ignorePrivate(home) {
   const path = join(home, '.gitignore');

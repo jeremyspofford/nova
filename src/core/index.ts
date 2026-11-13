@@ -80,6 +80,7 @@ import { Resilience } from './resilience/index.ts';
 import { FactoryReset } from './resilience/reset.ts';
 import { ensureMark } from './resilience/home-mark.ts';
 import { connectorWatch, wireRepairs } from './resilience/repairs.ts';
+import { ClaudeSeat, isClaudeProgram, programOf, SEAT_PLAYBOOK } from './claude-seat.ts';
 import type { SupervisorLink } from './resilience/link.ts';
 import { Changes } from './changes/pipeline.ts';
 import { Checkpoints, dropPartials, finishStaged, stagedPending, takeCheckpoint } from './resilience/checkpoints.ts';
@@ -177,6 +178,7 @@ export { NOVA_ENTRIES, isNovaEntry, foreignEntries } from './resilience/entries.
 // Every process Nova starts, so none outlives an in-place restart (Era 2's commands register too).
 export { trackChild } from './children.ts';
 export { inheritedChildEnv } from './child-env.ts';
+export { authFailure, isClaudeProgram } from './claude-seat.ts';
 // Services (M10e): the definition, the driver interface, the Service Manager.
 export * from './services/index.ts';
 // Onboarding (M10f): device detection, the backend words, discovery and import sources.
@@ -244,6 +246,9 @@ export interface CoreOptions {
   homeAssistant?: HomeAssistantOptions;
   // The model command Era 2 chats with (agent_cmd, agent_egress): the custom-cli provider (M5a).
   agent?: { command: string; egress: Egress };
+  // Nova's own Claude CLI seat (claude-seat.ts): how often the keepalive probe runs (L0 default 6 h,
+  // seat_probe_hours / NOVA_SEAT_PROBE_HOURS over it), and the program it starts (tests: a stand-in).
+  seat?: { probeHours?: number; program?: string };
   // A secret by name (secret://NAME), for providers that need one; the vault (M5b) answers it.
   secrets?: (name: string) => string | null;
   // Capture (M6a): how often the adapters pull (NOVA_CAPTURE_POLL_MS, else 10 s), and the fetch
@@ -444,7 +449,10 @@ export function createCore(o: CoreOptions) {
   let ds: ReturnType<typeof createDecisionService> | null = null;
   // Made once the ledger's other parts exist (below); capture asks it whether retention may run.
   let resilience: Resilience | null = null;
+  // The seat is made once the playbooks are (below); providers report a sign-in failure to it.
+  const seatRef: { current: ClaudeSeat | null } = { current: null };
   const providers = new Providers({
+    seatFailed: (detail) => { seatRef.current?.failed(detail); },
     db, log, home: o.home, workspace, extensions, ledger, verifier, receipts, profile, now, tiers: approvals,
     custom: o.agent, secret: providerSecret, meshHost: (h) => meshHosts().has(h),
     fire: (input) => triggers.fire(input),
@@ -935,6 +943,18 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
   });
   wireRepairs(keep.playbooks, { ledger, providers, models, connectors, role, spokes, devices });
   keep.watch(connectorWatch(keep.playbooks, connectors, o.resilience?.lookup));
+  // Nova's own Claude CLI seat: used when agent_cmd is claude, or a Claude Code provider is on.
+  const seatProgram = () => o.seat?.program ?? (isClaudeProgram(programOf(o.agent?.command ?? '')) ? programOf(o.agent!.command) : 'claude');
+  const claudeProviderOn = () => { try { return providers.list().some((p) => p.enabled && p.implementation === 'claude-code'); } catch { return false; } };
+  const seat = new ClaudeSeat({
+    db, log, home: o.home, playbooks: keep.playbooks, ledger, verifier, now,
+    ...(o.seat?.probeHours !== undefined ? { probeHours: o.seat.probeHours } : {}),
+    program: seatProgram,
+    inUse: () => (!providers.chat() && isClaudeProgram(programOf(o.agent?.command ?? ''))) || claudeProviderOn(),
+    // Another seat serves chat when the chat model is a provider other than agent_cmd.
+    alternative: () => !!providers.chat(),
+  });
+  seatRef.current = seat;
 
   // Capture feeds event rules too, as the connector "capture" (topics: capture/routes.ts).
   const connectorCheck = triggers.connectorCheck;
@@ -1136,6 +1156,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
       ingest: ingest.health(),
       computer: computer.health(),
       passkeys: passkeysHealth(),
+      seat: seat.health(),
     };
     return { ok: Object.values(checks).every((c) => c.ok), version: o.version, uptime_s: Math.round((Date.now() - started) / 1000), setup: { done: setup.view().done }, checks };
   }
@@ -1364,7 +1385,15 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     { method: 'POST', path: '/messages/{id}/approve', summary: 'Send a message Nova held because it wasn’t sure; only you can release it.', handle: ({ params }) => triggers.approveMessage(params.id!) },
     { method: 'POST', path: '/messages/{id}/read', summary: 'Mark a message as read.', handle: ({ params }) => triggers.read(params.id!) },
     { method: 'GET', path: '/problems', summary: 'Things that went wrong and matter to the person. ?open=1 for unresolved only.', handle: ({ query }) => log.problems({ open: query.get('open') === '1' }) },
-    { method: 'POST', path: '/problems/{id}/resolve', summary: 'Mark a problem as dealt with.', handle: ({ params }) => { log.resolve(Number(params.id)); return { ok: true }; } },
+    {
+      method: 'POST', path: '/problems/{id}/resolve', summary: 'Mark a problem as dealt with. Not a problem only its check may close (a sign-in that doesn’t work yet).',
+      handle: ({ params }) => {
+        const pb = keep.playbooks.view(Number(params.id));
+        if (pb?.closes === 'check') throw new CoreError('conflict', pb.id === SEAT_PLAYBOOK ? 'This closes by itself once Nova’s own check call to Claude succeeds. Sign in again to fix it.' : `This closes by itself once ${pb.check ?? 'its check holds'}.`);
+        log.resolve(Number(params.id));
+        return { ok: true };
+      },
+    },
     {
       method: 'GET', path: '/memory', summary: 'Everything Nova remembers, newest first, corrected and expired records included and marked. Filter with ?kind=&scope=&state=.',
       handle: ({ query }) => memory.list({
@@ -1691,6 +1720,8 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     ...keep.routes((w) => { if (w.principal.kind !== 'console') throw new CoreError('forbidden', 'Releases are deployed and rolled back from the hub’s own screen only.'); }),
     // ---- passkeys for tier 3 on the hub's own screen (Insertion #3 T2) ----
     ...passkeys.routes(),
+    // ---- model seats: health, and signing Nova's own Claude seat in again (claude-seat.ts) ----
+    ...seat.routes(),
     // ---- configuration in and out as a file (config onboarding, door 1) ----
     ...configRoutes({ profile, timezone: () => o.detectedTimezone ?? 'UTC', log: (said, keys) => log.info('config', said, { keys }) }),
     // ---- checkpoints (M7 amendment §1) ----
@@ -1744,6 +1775,8 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     ticking = triggers.tick().catch((e) => log.problem('triggers', 'The heartbeat couldn’t check the schedules.', { detail: (e as Error)?.stack ?? String(e) }));
     // The clock watch, and Nova's own retries of repairs that haven't worked yet.
     void keep.sweep().catch((e) => log.warn('resilience', 'The repair sweep stumbled.', { error: (e as Error).message }));
+    // The Claude seat's keepalive: a probe when its interval has passed (claude-seat.ts).
+    void seat.tick().then((c) => (c ? keep.playbooks.verify() : undefined)).catch((e) => log.warn('seat', 'The seat check stumbled.', { error: (e as Error).message }));
     // Every infrastructure project against its budget (M10d).
     try { infra.sweep(); } catch (e) { log.warn('infra', 'The budget sweep stumbled.', { error: (e as Error).message }); }
     // The dead-man's switch, on the clock as well as its timers (M10d).
@@ -1844,7 +1877,7 @@ ${String(input.goal ?? '')}`, source: { kind: 'connector', origin: `device:${d.i
     ingest, vault, broker: o.broker ?? null, connectors, services, capture, models, changes, caps, passkeys,
     // The Decision Service (DS1): its view of the seats, a refresh, how a template stands, and
     // asking for a template. Never a seat: nothing reaches a decision model except through it.
-    decisionService: { view: decisionService.view, refresh: decisionService.refresh, standing: decisionService.standing, ask: decisionService.service.ask.bind(decisionService.service) }, foundry, resilience: keep, checkpoints, restarter, reset,
+    decisionService: { view: decisionService.view, refresh: decisionService.refresh, standing: decisionService.standing, ask: decisionService.service.ask.bind(decisionService.service) }, foundry, resilience: keep, seat, checkpoints, restarter, reset,
     // Restarts this Nova in place (resilience/restart.ts): what a restore, or a factory reset, calls
     // once its marker is staged.
     restartInPlace: (why: string) => restarter.restartInPlace(why),

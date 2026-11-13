@@ -168,6 +168,8 @@ export class Runner extends EventEmitter {
     // ledger task (the chat-run worker says which, in runTasks) is metered and capped; a person's
     // own conversation is metered only. Without it, nothing here changes.
     this.caps = null;
+    // Nova's own Claude seat (core claude-seat.ts), set by the server: env() and failed(detail).
+    this.seat = null;
     this.runTasks = new Map(); // sessionId → the ledger task its run is doing
     this.memoryScreens = new Map(); // `${memory id}:${sha256 of its words}` → a capture memory's screen (screenMemory)
   }
@@ -297,6 +299,7 @@ export class Runner extends EventEmitter {
     this.emit('live', sessionId, { ...run.live });
     run.done = this.loop(sessionId, run)
       .catch((e) => {
+        if (e instanceof AgentError && e.seat === 'needs-sign-in') { try { this.seat?.failed(e.detail); } catch { /* the error is still recorded below */ } }
         this.record(sessionId, { type: 'error', turn, attempt, message: e instanceof AgentError ? e.message : 'Something went wrong inside Nova.', detail: e.detail ?? e.message, ...(e instanceof AgentError && e.next ? { next: e.next } : {}) });
       })
       .finally(() => {
@@ -449,6 +452,7 @@ export class Runner extends EventEmitter {
       const { text, aborted, usage } = await (chat ? (o) => chat.call(o) : this.agent)({
         ...(chat?.ownReceipt ? { receipt: draft, privacy: mode } : {}),
         cmd: this.config.agentCmd,
+        ...(chat ? {} : { seatEnv: this.seat?.env() ?? null }),
         system,
         prompt,
         signal,
