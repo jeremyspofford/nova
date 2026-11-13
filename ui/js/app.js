@@ -2286,6 +2286,8 @@ const CORE_ACTIONS = {
   'promotion-cancel': () => core.promotionAction('cancel'),
   'promotion-take-back': () => core.promotionAction('take-back'),
   'backup-now': resilienceAction, 'drill-now': resilienceAction, 'repair-problem': resilienceAction,
+  // Sign Nova's own Claude seat in again (core claude-seat.ts): a sheet with the page and the code.
+  'seat-sign-in': () => core.seatSignIn(),
   // A part that couldn't be loaded (F-021, F-023): that part alone, read again and drawn in place.
   // One part failing again says nothing about whether Nova answers, so reachability is left alone.
   'retry-part': (b) => (['tasks', 'problems', 'health', 'rules', 'memory', 'devices'].includes(b.dataset.part) ? core.load([b.dataset.part]).then(() => renderCore()) : null),

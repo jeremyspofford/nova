@@ -49,6 +49,9 @@ export function loadConfig(env = process.env, root = ROOT) {
       memoryGate: flag(env.NOVA_FEATURE_MEMORY_GATE ?? file.features?.memory_gate),
     },
     maxSteps: Number(file.max_tool_steps ?? 8),
+    // How often Nova's keepalive probe checks its own Claude seat (src/core/claude-seat.ts): L0
+    // default 6 hours, seat_probe_hours in nova.config.json over it, NOVA_SEAT_PROBE_HOURS over both.
+    seatProbeHours: probeHours(env.NOVA_SEAT_PROBE_HOURS ?? file.seat_probe_hours),
     execTimeoutMs: Number(file.exec_timeout_ms ?? 120_000),
     // Stand-ins for Google and the search engine, for tests and screenshots.
     googleBase: env.NOVA_GOOGLE_BASE ?? '',
@@ -122,6 +125,14 @@ export function meshConfig(env, file = {}) {
     try { address = new URL(own).origin; } catch { throw new ConfigError(`NOVA_MESH_ADDRESS isn't an address: ${own}`); }
   }
   return { bindHost, port: Number(url.port), transport, tls, publicUrl: publicUrl.origin, ...(address && address !== publicUrl.origin ? { address } : {}) };
+}
+
+// Hours between seat probes: a number over 0, at most a week (168). Refused in plain words otherwise.
+export function probeHours(v) {
+  if (v === undefined || v === null || v === '') return 6;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0 || n > 168) throw new ConfigError(`seat_probe_hours (NOVA_SEAT_PROBE_HOURS) is how many hours apart Nova checks its Claude sign-in: a number over 0 and at most 168, not ${JSON.stringify(v)}.`);
+  return n;
 }
 
 function instanceOf(v, dev) {

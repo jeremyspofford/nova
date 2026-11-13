@@ -99,6 +99,9 @@ export function createNova(config = loadConfig(), deps = {}) {
     // the vault (PUT /api/v1/vault/NAME). NOVA_SECRET_<NAME> in the environment is a fallback for
     // development and tests only: the vault wins, and such a value is redacted like a vault one.
     agent: { command: config.agentCmd, egress: config.agentEgress },
+    // Nova's own Claude seat: its keepalive interval. NOVA_SEAT_PROGRAM (or deps.seatProgram) is a
+    // stand-in claude for the seat's checks and sign-in (tests, demos: scripts/stand-ins/fake-claude-seat.js).
+    seat: { probeHours: config.seatProbeHours, ...((deps.seatProgram ?? process.env.NOVA_SEAT_PROGRAM) ? { program: deps.seatProgram ?? process.env.NOVA_SEAT_PROGRAM } : {}) },
     secrets: deps.secrets ?? ((name) => process.env[`NOVA_SECRET_${name}`] ?? null),
     // deps.models: tests only (a stand-in Ollama and fixed hardware without touching the environment).
     models: { ...modelOptions(process.env), ...(deps.models ?? {}) },
@@ -161,6 +164,8 @@ export function createNova(config = loadConfig(), deps = {}) {
     return { words: `There is no local chat model here yet. Settings › Models recommends one for this computer and downloads it with your OK; then choose it for chat in Settings › Providers. ${cloud}`, label: 'Set up a local model', href: '/settings#models' };
   };
   runner.caps = core.caps;
+  // Nova's own Claude seat: the folder the model command runs with, and where a failed sign-in goes.
+  runner.seat = core.seat;
   runner.ledger = core.ledger;
   // Coding through chat (M10c): the chat agent's code_change and code_status tools start and read the
   // core's coding runs.

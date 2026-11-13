@@ -506,7 +506,9 @@ export function renderHealth(el) {
   // One column at every width: the problem's actions sit in its own card, under the steps they
   // finish, never in a column of their own beside it (owner, 2026-11-08, the Duo cover screen).
   const problem = (p, open) => {
-    const resolve = open ? `<button type="button" class="btn small" data-action="resolve-problem" data-problem="${esc(String(p.id))}">Mark as dealt with</button>` : '';
+    // A problem only its check may close (a sign-in not working yet) has no "Mark as dealt with".
+    const closesByCheck = store.resilience?.playbooks?.[p.id]?.closes === 'check';
+    const resolve = open && !closesByCheck ? `<button type="button" class="btn small" data-action="resolve-problem" data-problem="${esc(String(p.id))}">Mark as dealt with</button>` : '';
     const pb = open ? playbookBlock(p, resolve) : '';
     return `<li class="settings-row problem-row" id="pr-${esc(String(p.id))}">
   <div class="settings-text"><p class="settings-label">${esc(p.message)}</p><p class="settings-note">${open ? `${status(p.stops ? 'failed' : 'needs-you')} ` : ''}${esc(p.source)} · ${esc(ago(p.at))}${p.task_id ? ` · <a class="link" href="/tasks" data-action="open-task" data-task="${esc(p.task_id)}">the task</a>` : ''}</p>
@@ -568,7 +570,8 @@ function playbookBlock(p, resolve = '') {
   // 2026-11-11): “Repaired, checking” until then, and said plainly when the check saw it didn’t hold.
   const checking = (r) => r.verified === null ? ` Repaired, checking: this closes when ${pb.check ?? 'Nova checks it again'}.` : r.verified === false ? ` It didn’t hold: ${r.checked ?? 'the check after it still saw the problem.'}` : '';
   const did = playbookEvents(pb.repairs).map((r) => `<li>${esc(r.said)}${esc(checking(r))} <span class="playbook-when">${r.count > 1 ? `${r.count} times, last ` : ''}<time datetime="${esc(r.at)}">${esc(ago(r.at))}</time></span></li>`).join('');
-  const repair = pb.repair ? `<button type="button" class="btn small" data-action="repair-problem" data-problem="${esc(String(p.id))}">Try the repair now</button>` : '';
+  const repair = pb.action ? `<button type="button" class="btn small primary" data-action="${esc(pb.action.kind)}" data-problem="${esc(String(p.id))}">${esc(pb.action.label)}</button>`
+    : pb.repair ? `<button type="button" class="btn small" data-action="repair-problem" data-problem="${esc(String(p.id))}">Try the repair now</button>` : '';
   return `<div class="playbook" data-playbook="${esc(pb.id)}">
   ${did ? `<p class="settings-note"><b>What Nova did</b></p><ul class="steps">${did}</ul>` : pb.automatic ? `<p class="settings-note">${esc(pb.automatic)}</p>` : ''}
   <p class="settings-note"><b>What you can do</b></p><ol class="steps">${pb.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
@@ -619,6 +622,51 @@ export async function resilienceAction(action, id) {
     if (action === 'drill-now') { await api('POST', '/backups/drill'); toast('Running the restore drill. It shows in Tasks.'); }
     if (action === 'repair-problem') { const r = await api('POST', `/problems/${encodeURIComponent(id)}/repair`); toast(r.checking ? `${r.said} Repaired, checking: it closes once Nova’s own check sees it.` : r.said); }
   } catch (e) { toast(e.message); }
+}
+
+// ---- Sign in again: Nova's own Claude seat (core claude-seat.ts) ----------------------------------
+// Owner-class: the hub's screen or a device that may approve starts it. Nova shows Claude's sign-in
+// page as a link to open on any device, and takes the code back here; it closes the problem only
+// when its own check call to Claude then succeeds, so this sheet waits for that, not for the login.
+let seatPoll = null;
+export async function seatSignIn() {
+  let v;
+  try { v = await api('POST', '/seats/claude-cli/sign-in'); } catch (e) { toast(e.message); return; }
+  showSeatSignIn(v);
+}
+
+function showSeatSignIn(v) {
+  openSheet(seatSignInSheet(v), { label: 'Sign Nova in to Claude again', onClose: () => { clearTimeout(seatPoll); seatPoll = null; } });
+  const form = document.querySelector('#sheet form[data-seat-code]');
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const code = form.elements.code.value;
+    form.elements.code.value = '';
+    try { showSeatSignIn(await api('POST', '/seats/claude-cli/sign-in/code', { code })); } catch (err) { toast(err.message); }
+  });
+  clearTimeout(seatPoll);
+  if (['starting', 'checking'].includes(v.state)) {
+    seatPoll = setTimeout(async () => { // wait: poll: has Nova's check call to Claude answered?
+      if (!document.querySelector('#sheet [data-seat-sign-in]')) return;
+      try { showSeatSignIn(await api('GET', '/seats/claude-cli/sign-in')); } catch (err) { toast(err.message); }
+    }, 1500);
+  }
+}
+
+function seatSignInSheet(v) {
+  const said = `<p class="settings-note" role="status">${esc(v.said)}</p>`;
+  const body = v.state === 'waiting' && v.url
+    ? `<p>Open Claude’s sign-in page on any device, this one or your phone, and approve. It then shows a code: paste it here.</p>
+<p><a class="btn primary" href="${esc(v.url)}" target="_blank" rel="noopener noreferrer">Open Claude’s sign-in page</a></p>
+<form class="field" data-seat-code autocomplete="off"><label for="seat-code">The code from the sign-in page</label>
+<input id="seat-code" name="code" type="text" required autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text">
+<p class="row-actions"><button class="btn" type="submit">Finish signing in</button></p></form>${v.said && !/^Open the sign-in page/.test(v.said) ? said : ''}`
+    : v.state === 'failed' ? `${said}<p class="row-actions"><button type="button" class="btn primary" data-action="seat-sign-in">Start again</button></p>`
+      : v.state === 'done' ? `${said}<p class="row-actions"><button type="button" class="btn" data-action="close-sheet">Done</button></p>`
+        : said;
+  return `<div data-seat-sign-in data-state="${esc(v.state)}"><h2 class="sheet-title">Sign Nova in to Claude again</h2>
+<p class="settings-note">This is Nova’s own sign-in, kept in its home folder. Signing in to Claude Code in a terminal doesn’t sign Nova in, and Nova never copies a sign-in from anywhere.</p>
+${body}</div>`;
 }
 
 const uptime = (s) => (s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`);

@@ -24,10 +24,27 @@ export interface PlaybookDef {
   repair?: string;
   automatic?: string;
   // The problem stops Nova (DESIGN-SYSTEM §1): the orb is red while it is open. Otherwise amber.
+  // A detector that knows better for one problem (open's `stops`) says so when it opens it.
   stops?: true;
+  // The one action the person takes, named, when it isn't a repair Nova can run: the console
+  // draws a button with this label for `kind` (ui/js/surfaces.js).
+  action?: { label: string; kind: string };
+  // 'check': only the independent check closes it; "Mark as dealt with" is refused (a sign-in that
+  // isn't working again is not dealt with, whatever anyone says).
+  closes?: 'check';
 }
 
 export const PLAYBOOKS: Readonly<Record<string, PlaybookDef>> = {
+  // ---- model seats (src/core/claude-seat.ts) ----
+  'seat-sign-in': {
+    id: 'seat-sign-in', title: 'My Claude sign-in expired',
+    action: { label: 'Sign in again', kind: 'seat-sign-in' }, closes: 'check',
+    steps: [
+      'Choose Sign in again. Nova shows a link to Claude’s sign-in page: open it on any device, approve, and paste the code it shows back here.',
+      'This is Nova’s own sign-in, kept in its home folder (seats/claude-cli). Signing in to Claude Code in a terminal doesn’t sign Nova in, and Nova never copies a sign-in from anywhere. If you signed in somewhere else to get things working again, this is one more sign-in, and the last one in the wrong place.',
+      'It closes by itself once Nova’s own check call to Claude succeeds after you sign in.',
+    ],
+  },
   // ---- the hub's own process (the supervisor, src/supervisor) ----
   'server-crashed': {
     id: 'server-crashed', title: 'Nova stopped unexpectedly', stops: true,
@@ -239,7 +256,7 @@ export class Playbooks extends EventEmitter {
 
   // Opens a problem with its playbook. One stays open per playbook and subject: the same thing
   // going wrong again adds nothing new (the open one already says it).
-  open(source: string, said: string, playbook: string, o: { detail?: string; taskId?: string; subject?: string | null; repairs?: { name: string; ok: boolean; said: string }[] } = {}): Problem {
+  open(source: string, said: string, playbook: string, o: { detail?: string; taskId?: string; subject?: string | null; repairs?: { name: string; ok: boolean; said: string }[]; stops?: boolean } = {}): Problem {
     if (!PLAYBOOKS[playbook]) throw new Error(`No playbook ${playbook}.`);
     const open = this.openFor(playbook, o.subject ?? null);
     if (open) return open;
@@ -251,7 +268,7 @@ export class Playbooks extends EventEmitter {
       // The problem and its playbook are one write. A server killed between the two (the
       // supervisor's chaos pass did it) left a problem with no playbook: the next one of its kind
       // couldn't find it and opened a second, and nothing would ever close the first.
-      return this.#db.tx(() => this.#log.problem(source, said, { ...(o.detail ? { detail: o.detail } : {}), ...(o.taskId ? { taskId: o.taskId } : {}), ...(PLAYBOOKS[playbook]!.stops ? { stops: true } : {}) }));
+      return this.#db.tx(() => this.#log.problem(source, said, { ...(o.detail ? { detail: o.detail } : {}), ...(o.taskId ? { taskId: o.taskId } : {}), ...((o.stops ?? PLAYBOOKS[playbook]!.stops) ? { stops: true } : {}) }));
     } finally {
       this.#log.off('problem', tag);
     }

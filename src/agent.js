@@ -2,24 +2,29 @@
 // stdin, text streamed back. Understands plain text output and Claude Code's
 // stream-json; anything else that prints text works too.
 import { spawn } from 'node:child_process';
-import { inheritedChildEnv, trackChild } from './core/index.ts';
+import { authFailure, inheritedChildEnv, isClaudeProgram, trackChild } from './core/index.ts';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // `next`: a step the person can take from here, inside Nova ({ label, href }), shown with the error.
+// `seat`: 'needs-sign-in' when the model command failed to authenticate (Nova's seat hears of it).
 export class AgentError extends Error {
-  constructor(message, detail = '', next = null) { super(message); this.detail = detail; this.next = next; }
+  constructor(message, detail = '', next = null, seat = null) { super(message); this.detail = detail; this.next = next; this.seat = seat; }
 }
 
 // Nova's files are the agent's only memory. Ambient credentials, settings and host-session
 // memory never reach it; use the same finite inherited policy as tools and provider CLIs.
-export function agentEnv(env = process.env) {
-  return inheritedChildEnv(env);
+// CLAUDE_CONFIG_DIR is always Nova's own seat folder (src/core/claude-seat.ts), never the person's
+// interactive ~/.claude: `seat` from the runner, or else a signed-out folder of this call's own.
+export function agentEnv(env = process.env, seatDir = null) {
+  return { ...inheritedChildEnv(env), ...(seatDir ? { CLAUDE_CONFIG_DIR: seatDir } : {}) };
 }
 
-export function runAgent({ cmd, system, prompt, signal, onText = () => {} }) {
+/** @param {{ cmd: string, system: string, prompt: string, signal?: AbortSignal, onText?: (t: string) => void, seatEnv?: Record<string, string> | null }} o */
+export function runAgent({ cmd, system, prompt, signal, onText = () => {}, seatEnv = null }) {
   const dir = mkdtempSync(join(tmpdir(), 'nova-'));
+  const seatDir = seatEnv?.CLAUDE_CONFIG_DIR ?? join(dir, 'no-seat');
   const systemFile = join(dir, 'system.md');
   let input = prompt;
   if (cmd.includes('{system_file}')) writeFileSync(systemFile, system);
@@ -27,7 +32,7 @@ export function runAgent({ cmd, system, prompt, signal, onText = () => {} }) {
   const command = cmd.replaceAll('{system_file}', `'${systemFile}'`);
 
   return new Promise((resolve, reject) => {
-    const child = trackChild(spawn('/bin/sh', ['-c', command], { cwd: dir, env: agentEnv(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] }), { group: true });
+    const child = trackChild(spawn('/bin/sh', ['-c', command], { cwd: dir, env: agentEnv(process.env, seatDir), detached: true, stdio: ['pipe', 'pipe', 'pipe'] }), { group: true });
     let mode = null; // 'json' | 'text'
     let buf = '';
     let text = '';
@@ -91,6 +96,11 @@ export function runAgent({ cmd, system, prompt, signal, onText = () => {} }) {
       if (finished) return resolve({ text, aborted: false });
       if (aborted) return resolve({ text, aborted: true });
       const program = cmd.trim().split(/\s+/).find((w) => !/^\w+=/.test(w)) ?? cmd.trim();
+      // A sign-in that's gone is named, with the way to fix it, never an opaque failure.
+      if (authFailure(failure) || (!text && authFailure(stderr))) {
+        const said = isClaudeProgram(program) ? 'My Claude sign-in expired, so I can’t answer until you sign in again.' : `\`${program}\` isn’t signed in any more, so I can’t answer until it is.`;
+        return reject(new AgentError(said, (failure || stderr).trim(), { label: 'Sign in again', href: '/health' }, 'needs-sign-in'));
+      }
       if (code === 127) return reject(new AgentError(`Nova couldn't find \`${program}\`. Check that it's installed and on your PATH, or set agent_cmd in nova.config.json.`, stderr.trim()));
       if (failure) return reject(new AgentError('The model ran into a problem and stopped.', failure));
       if (code !== 0 && !text) return reject(new AgentError(`\`${program}\` exited before replying.`, stderr.trim() || `exit code ${code}`));

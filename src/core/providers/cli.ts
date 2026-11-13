@@ -82,6 +82,13 @@ export function childEnv(extra: Record<string, string> = {}, env: NodeJS.Process
   return { ...inheritedChildEnv(env), ...extra };
 }
 
+// The environment for a provider that may start the claude CLI: Nova's seat folder (WorkInput.seatEnv),
+// or, when none was given, a signed-out folder of the task's own, so the CLI never falls back to the
+// person's interactive ~/.claude.
+export function claudeEnv(i: { seatEnv?: Record<string, string> | undefined; stateDir: string }): Record<string, string> {
+  return childEnv(i.seatEnv?.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: i.seatEnv.CLAUDE_CONFIG_DIR } : { CLAUDE_CONFIG_DIR: join(i.stateDir, 'no-seat') });
+}
+
 export interface Ran { code: number | null; signal: string | null; stderr: string; aborted: boolean; timedOut: boolean; ms: number }
 
 // Starts `argv` in `cwd` in a process group of its own, writes `input` to its stdin, and hands each stdout line to `onLine`.

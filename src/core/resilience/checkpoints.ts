@@ -86,6 +86,8 @@ export class CheckpointError extends CoreError {
 // Top-level names in the home that are never in a checkpoint, and why (shown in every manifest).
 const SKIP_TOP: Record<string, string> = {
   checkpoints: 'checkpoints are never inside each other',
+  // A restore keeps the sign-in Nova has now (STAYS): an old copy would be a rotated-away grant.
+  seats: 'Nova’s model sign-ins stay in their own folder, never copied',
   broker: 'the Credential Broker keeps its own store; a restore never brings back a deleted credential',
   // F-014: deleting a secret rotates the vault's key; a checkpoint holding the old key and secrets
   // would bring both back. Restore keeps the vault as it is now (restore.ts), as the backups do.

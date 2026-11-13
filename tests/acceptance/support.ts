@@ -103,7 +103,16 @@ export function exited(proc: ChildProcess, ms: number): Promise<boolean> {
   });
 }
 
-export async function start(env: Record<string, string>): Promise<Running> {
+// Nova's Claude seat (src/core/claude-seat.ts) is checked by the hub's heartbeat whenever agent_cmd is
+// claude, which it is by default. A test server never starts the real CLI for that: its seat checks go
+// to the stand-in, signed in, unless the test names a program of its own (NOVA_SEAT_PROGRAM).
+const SEAT_STAND_IN = join(ROOT, 'scripts/stand-ins/fake-claude-seat-signed-in.js');
+function standInSeat(env: Record<string, string>): Record<string, string> {
+  return env.NOVA_SEAT_PROGRAM ? env : { ...env, NOVA_SEAT_PROGRAM: SEAT_STAND_IN };
+}
+
+export async function start(given: Record<string, string>): Promise<Running> {
+  const env = standInSeat(given);
   const proc = spawn(process.execPath, ['--import', join(ROOT, 'tests/acceptance/egress-guard.ts'), 'src/server.js'], { cwd: ROOT, env: { ...env, PATH: env.PATH ?? process.env.PATH ?? '' } });
   const r: Running = { ...output(proc), port: 0, mesh: null };
   const { out } = r;
